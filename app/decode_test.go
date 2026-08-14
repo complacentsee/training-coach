@@ -370,7 +370,7 @@ func TestActivityMetricsAPI(t *testing.T) {
 		t.Error("grade_input against an athlete who declares no gradeCap")
 	}
 	f20, _ := out["first_20min"].(map[string]any)
-	if f20 == nil || f20["cap"] != 140.0 || f20["avg"] != 125.5 {
+	if f20 == nil || f20["cap_bpm"] != 140.0 || f20["avg_bpm"] != 125.5 {
 		t.Errorf("first_20min = %v", out["first_20min"])
 	}
 
@@ -827,7 +827,7 @@ func TestGradeInputServedWithAnchors(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.GradeInput["under_grade_cap_share"] != 1.0 || out.GradeInput["grade_cap"] != 157.0 {
+	if out.GradeInput["under_grade_cap_share"] != 1.0 || out.GradeInput["grade_cap_bpm"] != 157.0 {
 		t.Errorf("run grade_input = %v", out.GradeInput)
 	}
 	if out.First20 == nil {
@@ -853,7 +853,7 @@ func TestGradeInputServedWithAnchors(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.GradeInput["in_band_share_after_warmup"] != 1.0 || out.GradeInput["secs_over_cap"] != 0.0 {
+	if out.GradeInput["in_band_share_after_warmup"] != 1.0 || out.GradeInput["secs_over_hr_cap"] != 0.0 {
 		t.Errorf("bike grade_input = %v", out.GradeInput)
 	}
 	if out.Power["avg"] != 150.0 || out.Power["pct_ftp"] != 0.75 {
