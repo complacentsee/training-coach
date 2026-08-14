@@ -1,0 +1,15 @@
+# Reachable on the LAN at 0.0.0.0:9999 and via the existing cloudflared
+# tunnel. Point a tunnel ingress rule at http://<host>:9999 (or at the
+# container over a shared docker network) and put an Access policy on the
+# hostname.
+services:
+  web:
+    image: running-coach:latest
+    container_name: running-coach
+    restart: unless-stopped
+    environment:
+      TZ: America/Chicago
+    ports:
+      - "0.0.0.0:9999:8080"
+    volumes:
+      - ./data:/data

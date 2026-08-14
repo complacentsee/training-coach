@@ -1,0 +1,337 @@
+:root{
+  --ground:#F2F2EF; --surface:#FCFCFB; --sunk:#E9E9E4; --rule:#D8D8D1;
+  --ink:#16181C; --ink-2:#4A4E57; --ink-3:#7C818B;
+  --accent:#3D4B96; --accent-soft:#E7E9F5;
+  --easy:#00819B; --easy-soft:#DDEEF2; --hard:#C9432B; --hard-soft:#F7E4E0;
+  --go:#1F7D5C; --caution:#CE9A00; --stop:#A81F4D;
+  --display:"Avenir Next Condensed","Helvetica Neue Condensed","Roboto Condensed",sans-serif;
+  --body:"Iowan Old Style",Charter,Georgia,serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --ground:#0C1013; --surface:#12171B; --sunk:#1A2026; --rule:#2A3239;
+  --ink:#E8EAEC; --ink-2:#A8AFB8; --ink-3:#757E88;
+  --accent:#7C89D8; --accent-soft:#1B2140;
+  --easy:#1893AE; --easy-soft:#0F2A31; --hard:#DE5B40; --hard-soft:#2E1712;
+  --go:#3BAA82; --caution:#B58E22; --stop:#DE5C76;
+}}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--ground);color:var(--ink);font:17px/1.55 var(--body);
+  -webkit-text-size-adjust:100%;overflow-wrap:break-word;
+  -webkit-tap-highlight-color:transparent}
+img,svg{max-width:100%}
+main{max-width:46rem;margin:0 auto;
+  padding:1.2rem max(1rem,env(safe-area-inset-right)) calc(4rem + env(safe-area-inset-bottom)) max(1rem,env(safe-area-inset-left))}
+a{color:var(--accent)}
+h1,h2{margin:0}
+
+.top{position:sticky;top:0;z-index:10;display:flex;align-items:baseline;gap:.6rem 1.2rem;
+  flex-wrap:wrap;background:var(--surface);border-bottom:1px solid var(--rule);
+  padding:calc(.7rem + env(safe-area-inset-top)) max(1rem,env(safe-area-inset-right)) .7rem max(1rem,env(safe-area-inset-left))}
+.brand{font-family:var(--display);font-size:.95rem;letter-spacing:.06em;text-transform:uppercase;
+  text-decoration:none;color:var(--ink)}
+.top nav{display:flex;gap:1rem;margin-left:auto}
+.top nav a{font-family:var(--mono);font-size:.74rem;letter-spacing:.06em;text-transform:uppercase;
+  text-decoration:none;color:var(--ink-3);padding-bottom:2px}
+.top nav a.on{color:var(--ink);border-bottom:2px solid var(--accent)}
+
+.hero{padding:1.4rem 0 .4rem}
+.eyebrow{font-family:var(--mono);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}
+h1,.page{font-family:var(--display);font-size:clamp(1.9rem,6vw,2.7rem);line-height:1;
+  text-transform:uppercase;letter-spacing:.01em;margin:.3rem 0 .2rem}
+.sub,.page-sub{color:var(--ink-3);font-size:.95rem;margin:0 0 1rem}
+
+.card{background:var(--surface);border:1px solid var(--rule);border-left:4px solid var(--rule);
+  border-radius:4px;padding:.9rem 1.05rem 1.05rem;margin:0 0 .9rem}
+.card h2{font-family:var(--display);font-size:1.25rem;text-transform:uppercase;letter-spacing:.02em;line-height:1.15}
+.card h2.sec{font-size:.72rem;font-family:var(--mono);letter-spacing:.12em;color:var(--ink-3);margin-bottom:.6rem}
+.card-hd{display:flex;align-items:center;gap:.6rem;margin-bottom:.25rem}
+.amount{font-family:var(--mono);font-weight:700;font-size:.95rem}
+.dayname{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.tag{font-family:var(--mono);font-size:.6rem;font-weight:700;letter-spacing:.1em;
+  background:var(--caution);color:var(--ground);padding:.1rem .35rem;border-radius:2px}
+
+.k-easy,.k-long,.k-recovery{border-left-color:var(--easy)}
+.k-easy .amount,.k-long .amount,.k-recovery .amount{color:var(--easy)}
+.k-quality{border-left-color:var(--hard)}
+.k-quality .amount{color:var(--hard)}
+.k-bike-easy,.k-bike-hard{border-left-color:var(--ink-3);border-left-style:dashed}
+.k-rest{border-left-color:var(--rule)}
+
+/* The full prescription under the session headline: warm-up, main set,
+   recoveries, cool-down. Sits between the label and the targets, so the
+   reading order is what · exactly what · how to run it. */
+.detail{font-size:.92rem;color:var(--ink-2);margin:.4rem 0 0;line-height:1.45}
+.detail strong{color:var(--ink);font-weight:650}
+
+.targets{margin:.5rem 0 0;padding-left:1.05rem}
+.targets li{font-size:.9rem;color:var(--ink-2);margin-bottom:.2rem}
+
+.tasks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.55rem}
+.tasks input{width:1.35rem;height:1.35rem;margin:.15rem 0 0;accent-color:var(--accent);flex:none}
+.tasks label{cursor:pointer}
+/* the guide button lives in the same inline flow as the text, so it lands at
+   the end of the last wrapped line rather than in its own right-hand column */
+.tbody{flex:1;min-width:0}
+.tasks input:checked+.tbody label{color:var(--ink-3);text-decoration:line-through}
+.phase-note{font-size:.85rem;color:var(--ink-3);margin:.8rem 0 0}
+
+/* Flex rather than a grid with a fixed column count: an issue declares its own
+   scale, so the number of dots is data. Equal flex basis gives the same result
+   for any length without the template having to write CSS. */
+.scale{display:flex;gap:.25rem;margin:.2rem 0 .6rem}
+.scale .dot{flex:1 1 0}
+.issue-phase{font-size:.85rem;color:var(--ink-2);margin:0 0 .5rem}
+.issue-ask{font-size:.85rem;color:var(--ink-3);margin:.1rem 0 .1rem}
+/* Always in the DOM so a tap has something to fill; invisible until it does. */
+.issue-action{font-size:.88rem;margin:.35rem 0 .1rem;font-weight:600}
+.issue-action:empty{display:none}
+.tone-go{color:var(--go)}
+.tone-caution{color:var(--caution)}
+.tone-stop{color:var(--stop)}
+.dot{aspect-ratio:1;min-width:0;padding:0;border-radius:50%;border:1.5px solid var(--rule);
+  background:var(--surface);color:var(--ink-2);font:600 .78rem/1 var(--mono);cursor:pointer}
+.dot:hover{border-color:var(--ink-3)}
+.dot.bgo.sel{background:var(--go);border-color:var(--go);color:var(--ground)}
+.dot.bcaution.sel{background:var(--caution);border-color:var(--caution);color:var(--ground)}
+.dot.bstop.sel{background:var(--stop);border-color:var(--stop);color:var(--ground)}
+input[type=text],textarea{width:100%;font:inherit;font-size:16px;padding:.5rem .6rem;
+  background:var(--ground);color:var(--ink);border:1px solid var(--rule);border-radius:3px}
+textarea{resize:vertical}
+button[type=submit]{margin-top:.5rem;font:700 .7rem/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  padding:.5rem .9rem;border:1px solid var(--accent);background:var(--accent);color:var(--surface);
+  border-radius:3px;cursor:pointer}
+.hint,.last{font-size:.85rem;color:var(--ink-3);margin:.5rem 0 0}
+.last{margin:0 0 .6rem}
+.next{border-left-color:var(--caution)}
+
+/* The calendar is a 16x7 grid, not prose, so it is the one thing on the site
+   that should use the window rather than the reading column. .bleed widens past
+   main and re-centres on it; below that width it computes to main's own width
+   and does nothing, so phones need no separate rule.
+
+   min-width was 46rem to match main's max-width, which was 2rem too far: with
+   border-box, main's padding comes out of that 46rem, so the table was wider
+   than its container by exactly the padding at every viewport size. 100% grows
+   with the container instead, and the cells' own min-widths set the floor. */
+.bleed{width:min(64rem, 100vw - 2rem);margin-left:50%;transform:translateX(-50%)}
+.calwrap{overflow-x:auto}
+table.cal{border-collapse:separate;border-spacing:3px;min-width:100%}
+table.cal th{font:700 .62rem/1.3 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);text-align:left}
+th.wk{min-width:5.6rem}
+th.wk a{font-family:var(--display);font-size:.85rem;letter-spacing:.03em;text-decoration:none;color:var(--ink);display:block}
+th.wk span{display:block;font-weight:400;font-size:.6rem;color:var(--ink-3)}
+table.cal td{background:var(--sunk);border-radius:3px;padding:.3rem .4rem;vertical-align:top;
+  border:1px solid transparent;min-width:5.2rem}
+td.now{outline:2px solid var(--accent);outline-offset:1px}
+td .amt{display:block;font:600 .74rem/1.1 var(--mono)}
+td .lbl{display:block;font-size:.62rem;color:var(--ink-3);line-height:1.25;margin-top:.15rem;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+td.k-easy,td.k-long,td.k-recovery{background:var(--easy-soft)}
+td.k-easy .amt,td.k-long .amt,td.k-recovery .amt{color:var(--easy)}
+td.k-quality{background:var(--hard-soft)}
+td.k-quality .amt{color:var(--hard)}
+td.k-bike-easy,td.k-bike-hard{background:transparent;border:1px dashed var(--rule)}
+td.k-rest .amt{color:var(--ink-3)}
+
+.pager{display:flex;justify-content:space-between;margin-top:1.2rem;font-family:var(--mono);font-size:.78rem}
+.toast{position:fixed;left:50%;bottom:1.2rem;transform:translateX(-50%);z-index:50;
+  background:var(--ink);color:var(--ground);font:.78rem/1 var(--mono);padding:.6rem .9rem;
+  border-radius:3px;opacity:0;transition:opacity .15s;pointer-events:none}
+.toast.on{opacity:1}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+/* ── guides ────────────────────────────────────────────── */
+.gbtn{position:relative;display:inline-flex;align-items:center;justify-content:center;
+  width:1.3rem;height:1.3rem;margin-left:.35rem;border-radius:50%;
+  border:1.5px solid var(--ink-3);background:transparent;color:var(--ink-3);
+  font:700 .72rem/1 var(--mono);cursor:pointer;padding:0;
+  vertical-align:middle;top:-.14em}
+/* invisible 44px tap target without disturbing layout */
+.gbtn::after{content:"";position:absolute;inset:-.6rem}
+.gbtn:hover,.gbtn:focus-visible{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+/* the .fit download pill: the gbtn's language, pill-shaped for a word */
+.fitbtn{position:relative;display:inline-flex;align-items:center;justify-content:center;
+  height:1.3rem;margin-left:.35rem;padding:0 .5rem;border-radius:.65rem;
+  border:1.5px solid var(--ink-3);background:transparent;color:var(--ink-3);
+  font:700 .62rem/1 var(--mono);letter-spacing:.06em;text-decoration:none;
+  vertical-align:middle;top:-.14em}
+.fitbtn::after{content:"";position:absolute;inset:-.6rem}
+.fitbtn:hover,.fitbtn:focus-visible{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+/* inside a calendar cell: smaller, on its own line, and a tighter tap halo so
+   a near-miss still opens the day's popup rather than downloading */
+td .fitbtn{height:1.05rem;padding:0 .35rem;margin:.25rem 0 0;font-size:.55rem;top:0}
+td .fitbtn::after{inset:-.3rem}
+.fitall{font:.72rem/1.5 var(--mono);color:var(--ink-3);margin:.4rem 0 0}
+.fitall .fitbtn{margin-left:0;margin-right:.35rem}
+
+/* ── the Send to watch page ────────────────────────────── */
+.wstatus{font:.8rem/1.5 var(--mono);padding:.5rem .7rem;border-radius:3px;
+  background:var(--sunk);margin:0 0 .6rem}
+.wstatus.err{color:var(--hard)}
+.wbtns{display:flex;gap:.6rem;margin:0 0 1rem}
+.wbtn{font:700 .78rem/1 var(--mono);letter-spacing:.04em;padding:.55rem .9rem;
+  border-radius:3px;border:1.5px solid var(--ink-3);background:transparent;
+  color:var(--ink);cursor:pointer}
+.wbtn:not(:disabled):hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.wbtn:disabled{opacity:.45;cursor:default}
+.wtabs{display:flex;gap:1.2rem;margin:1rem 0 .8rem;border-bottom:1px solid var(--rule)}
+.wtab{font:700 .74rem var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-3);background:none;border:none;border-bottom:2px solid transparent;
+  padding:.3rem 0 .35rem;cursor:pointer}
+.wtab.on{color:var(--ink);border-bottom-color:var(--accent)}
+.wsaved{margin-top:.8rem}
+.wsaved summary{font:700 .62rem var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);cursor:pointer}
+table.wlist{width:100%;border-collapse:collapse;font-size:.8rem}
+table.wlist th{font:700 .62rem/1.3 var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3);text-align:left;padding:.25rem .4rem}
+table.wlist td{padding:.3rem .4rem;border-top:1px solid var(--rule);vertical-align:top}
+.wday,.wslug{font-family:var(--mono);font-size:.72rem;color:var(--ink-3);white-space:nowrap}
+.wstate{font:.7rem/1.3 var(--mono)}
+.wstate.busy{color:var(--ink-3)}
+.wstate.sent{color:var(--easy)}
+.wstate.fail{color:var(--hard)}
+.wtracebox{margin-top:1rem}
+.wtracebox summary{font:.72rem/1.5 var(--mono);color:var(--ink-3);cursor:pointer}
+.wtracebox pre{font:.62rem/1.5 var(--mono);background:var(--sunk);border-radius:3px;
+  padding:.6rem;overflow-x:auto;max-height:22rem;overflow-y:auto;user-select:all}
+li.task{display:flex;align-items:flex-start;gap:.6rem}
+td[data-guide]{cursor:pointer}
+td[data-guide]:hover{outline:1px solid var(--accent)}
+
+.modal{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.55);
+  display:flex;align-items:flex-end;justify-content:center;padding:0}
+@media(min-width:640px){.modal{align-items:center;padding:2rem 1rem}}
+.modal[hidden]{display:none}
+.modal-box{position:relative;background:var(--surface);color:var(--ink);
+  border:1px solid var(--rule);border-radius:6px 6px 0 0;
+  width:100%;max-width:34rem;max-height:86vh;overflow-y:auto;
+  overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+  padding:1.1rem 1.2rem calc(1.4rem + env(safe-area-inset-bottom))}
+@media(min-width:640px){.modal-box{border-radius:6px}}
+.modal-x{position:absolute;top:.5rem;right:.6rem;width:2rem;height:2rem;border:none;
+  background:transparent;color:var(--ink-3);font-size:1.5rem;line-height:1;cursor:pointer}
+.modal-x:hover{color:var(--ink)}
+.modal h3{font-family:var(--display);font-size:1.4rem;text-transform:uppercase;
+  letter-spacing:.02em;margin:0 2rem .8rem 0;line-height:1.1}
+.g-sec{margin-bottom:.7rem}
+.g-lab{font-family:var(--mono);font-size:.62rem;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:700;display:block;margin-bottom:.15rem}
+.g-sec p{margin:0;font-size:.92rem;line-height:1.5}
+.g-why{font-size:.87rem;color:var(--ink-3);font-style:italic;
+  border-top:1px solid var(--rule);padding-top:.6rem;margin:.9rem 0 0}
+.g-links{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-top:.9rem}
+.g-links a{font:700 .65rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  text-decoration:none;border:1px solid var(--accent);color:var(--accent);
+  padding:.32rem .6rem;border-radius:3px}
+.g-links a.rd{border-color:var(--ink-3);color:var(--ink-2)}
+.g-links a:hover{background:var(--accent);color:var(--surface);border-color:var(--accent)}
+.g-src{font:.62rem/1.3 var(--mono);color:var(--ink-3)}
+
+/* ── grades ────────────────────────────────────────────── */
+td{position:relative}
+.g{font:700 .55rem/1 var(--mono);letter-spacing:.02em}
+td .g{position:absolute;top:.2rem;right:.26rem;width:.95rem;height:.95rem;
+  display:flex;align-items:center;justify-content:center;border-radius:2px;
+  background:var(--sunk);border:1px solid currentColor;opacity:.9}
+th.wk .g{margin-left:.1rem}
+.ga,.gb{color:var(--easy)}
+.gc{color:var(--ink-2)}
+.gd{color:var(--caution)}
+.gf{color:var(--stop)}
+td.graded{box-shadow:inset 2.5px 0 0 currentColor}
+.legend{font-size:.8rem;color:var(--ink-3);margin-top:.9rem}
+.g-steps .gbtn{width:1.15rem;height:1.15rem;font-size:.62rem;margin-left:.3rem}
+.g-back{display:inline-block;margin:0 0 .7rem;padding:.28rem .6rem;border-radius:3px;
+  border:1px solid var(--rule);background:transparent;color:var(--ink-2);
+  font:700 .64rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+.g-back:hover{border-color:var(--accent);color:var(--accent)}
+.up{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.55rem}
+.up li{display:flex;flex-direction:column;gap:.1rem}
+.up .when{font:700 .62rem/1.2 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3)}
+.up .what{font-size:.95rem}
+.up .bench{font:700 .58rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  background:var(--caution);color:var(--ground);padding:.12rem .3rem;border-radius:2px;
+  vertical-align:.08em;margin-right:.2rem}
+.last.logged{color:var(--ink)}
+.last .sub{color:var(--ink-3);font-size:.8rem}
+.dot[aria-pressed="true"]{font-weight:700}
+.g-steps{list-style:none;margin:.3rem 0 .9rem;padding:0;display:flex;flex-direction:column;gap:.5rem}
+.g-step{display:flex;align-items:flex-start;gap:.55rem}
+.g-step input{width:1.35rem;height:1.35rem;margin:.15rem 0 0;accent-color:var(--accent);flex:none}
+.g-step label,.tasks label{display:inline-block;min-height:1.6rem}
+.g-step > div{flex:1;min-width:0;font-size:.92rem;line-height:1.45}
+.g-step input:checked + div label{color:var(--ink-3);text-decoration:line-through}
+.g-step label{cursor:pointer}
+.prog{font:700 .62rem/1 var(--mono);color:var(--ink-3);margin-left:.4rem;
+  vertical-align:middle;letter-spacing:.03em}
+
+/* standalone (home-screen) mode only */
+@media (display-mode: standalone){
+  .top{position:sticky}
+  a{-webkit-touch-callout:none}
+}
+
+/* ── workouts index ────────────────────────────────────── */
+.wk-group{margin:0 0 1.6rem}
+.wk-group > .sec{font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:700;margin:0 0 .3rem}
+.wk-note{font-size:.85rem;color:var(--ink-3);margin:0 0 .6rem;max-width:none}
+.wk-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.wk-list li{display:flex;align-items:baseline;gap:.7rem;cursor:pointer;
+  background:var(--surface);border:1px solid var(--rule);border-radius:4px;
+  padding:.55rem .75rem}
+.wk-list li:hover,.wk-list li:focus-visible{border-color:var(--accent);outline:none}
+.wk-main{flex:1;min-width:0}
+.wk-name{display:block;font-size:.95rem;font-weight:600}
+.wk-detail{display:block;font-size:.82rem;color:var(--ink-3);line-height:1.4;margin-top:.1rem}
+.wk-when{flex:none;font:.64rem/1.35 var(--mono);color:var(--ink-3);text-align:right;
+  max-width:8.5rem;letter-spacing:.01em}
+@media (max-width:430px){
+  .wk-list li{flex-direction:column;align-items:flex-start;gap:.2rem}
+  .wk-when{text-align:left;max-width:none}
+}
+
+/* ── archived blocks ─────────────────────────────────────────────────────
+   The archive banner has to be unmissable: a past block's calendar is
+   otherwise pixel-identical to the live one, same grades and all. */
+.archived{background:var(--accent-soft);border:1px solid var(--accent);border-radius:4px;
+  padding:.55rem .8rem;margin:0 0 1rem;font-size:.85rem;line-height:1.45;color:var(--ink-2)}
+.archived b{font-family:var(--mono);font-size:.62rem;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--accent)}
+.archived a{margin-left:.35rem;white-space:nowrap}
+
+.blocks{list-style:none;padding:0;margin:0}
+.block{background:var(--surface);border:1px solid var(--rule);border-left:4px solid var(--rule);
+  border-radius:4px;padding:.9rem 1.05rem 1rem;margin:0 0 .9rem}
+.block.current{border-left-color:var(--easy)}
+.block-hd{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+.block-hd h2{font-family:var(--display);font-size:1.25rem;text-transform:uppercase;
+  letter-spacing:.02em;line-height:1.15;margin:0}
+.block-hd h2 a{color:inherit;text-decoration:none}
+.block-hd h2 a:hover{text-decoration:underline}
+.chip{font-family:var(--mono);font-size:.6rem;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;padding:.1rem .4rem;border-radius:2px;
+  background:var(--sunk);color:var(--ink-3)}
+.chip.current{background:var(--easy);color:var(--ground)}
+.block-sub{font-size:.9rem;color:var(--ink-2);margin:.3rem 0 .15rem}
+.block-stats{font-family:var(--mono);font-size:.72rem;letter-spacing:.04em;
+  color:var(--ink-3);margin:.25rem 0 .55rem}
+.block-grades{margin-left:.2rem}
+.block-grades b{margin-left:.35rem}
+.block-links{display:flex;gap:.9rem;margin:0;font-size:.85rem}
+
+/* ── per-set pills ───────────────────────────────────────────────────────
+   One box per set, so a session cut short after two of three records what
+   actually happened. Sized to the same 44px-ish tap target as the calf
+   scale, since these get used mid-session with tired hands. */
+.g-sets{display:flex;flex-wrap:wrap;gap:.3rem;margin:.35rem 0 .1rem}
+.setdot{min-width:2rem;height:1.75rem;padding:0 .4rem;border-radius:3px;
+  border:1.5px solid var(--rule);background:var(--surface);color:var(--ink-3);
+  font:700 .72rem/1 var(--mono);cursor:pointer}
+.setdot:hover{border-color:var(--ink-3);color:var(--ink-2)}
+.setdot.on{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+.setdot:disabled{opacity:.5;cursor:default}

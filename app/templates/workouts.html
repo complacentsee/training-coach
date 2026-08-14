@@ -1,0 +1,25 @@
+{{define "workouts.html"}}{{template "head" .}}
+{{template "archive" .Archive}}
+<h1 class="page">Workouts</h1>
+<p class="page-sub">Every session, test and movement the plan prescribes — {{.Count}} in all. Tap any row for how to do it.</p>
+
+{{range .Groups}}
+{{if .Rows}}
+<section class="wk-group">
+  <h2 class="sec">{{.Title}}</h2>
+  {{if .Note}}<p class="wk-note">{{.Note}}</p>{{end}}
+  <ul class="wk-list">
+    {{range .Rows}}
+    <li data-guide="{{.Guide}}" tabindex="0" role="button">
+      <div class="wk-main">
+        <span class="wk-name">{{.Name}}</span>
+        {{if .Detail}}<span class="wk-detail">{{emph .Detail}}</span>{{end}}
+      </div>
+      {{if .When}}<span class="wk-when">{{.When}}</span>{{end}}
+    </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+{{end}}
+{{template "foot" .}}{{end}}

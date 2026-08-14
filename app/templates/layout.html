@@ -1,0 +1,60 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<!-- Home-screen webapp. iOS still wants the apple-* tags alongside the
+     manifest; viewport-fit=cover plus env(safe-area-inset-*) in the CSS is
+     what stops content hiding behind the notch and home indicator. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="{{app.Short}}">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="{{asset "icons/icon-180.png"}}">
+<link rel="icon" href="{{asset "icons/icon-192.png"}}">
+<meta name="theme-color" content="{{app.Theme.Light}}" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="{{app.Theme.Dark}}" media="(prefers-color-scheme: dark)">
+<title>{{.Title}} · {{app.Name}}</title>
+<link rel="stylesheet" href="{{asset "style.css"}}">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">{{brand}}</a>
+  <nav>
+    <a href="/" {{if eq .Nav "today"}}class="on"{{end}}>Today</a>
+    <a href="/calendar" {{if eq .Nav "calendar"}}class="on"{{end}}>Calendar</a>
+    <a href="/workouts" {{if eq .Nav "workouts"}}class="on"{{end}}>Workouts</a>
+    {{if watchable}}<a href="/watch" {{if eq .Nav "watch"}}class="on"{{end}}>Watch</a>{{end}}
+    {{if multiBlock}}<a href="/blocks" {{if eq .Nav "blocks"}}class="on"{{end}}>Blocks</a>{{end}}
+  </nav>
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+<div id="modal" class="modal" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <button class="modal-x" aria-label="Close">×</button>
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+  </div>
+</div>
+<script src="{{asset "app.js"}}" defer></script>
+</body>
+</html>
+{{end}}
+
+{{define "archive"}}{{with .}}
+<div class="archived" role="status">
+  <b>Archived block</b> — {{.Name}}, {{.Span}}. This is not your current plan.
+  <a href="/">Back to today</a>
+</div>
+{{end}}{{end}}
+
+{{define "guidebtn"}}{{if .}}<button class="gbtn" data-guide="{{.}}" aria-label="How to do this">?</button>{{end}}{{end}}
+
+{{define "targets"}}
+{{if .}}<ul class="targets">{{range .}}<li>{{emph .}}</li>{{end}}</ul>{{end}}
+{{end}}

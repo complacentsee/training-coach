@@ -1,0 +1,4 @@
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/muktihari/fit v0.28.3 h1:lTGbRDXk6T2TodtK9YiCJYbNHxVRu+r48Bfdn2pW/8I=
+github.com/muktihari/fit v0.28.3/go.mod h1:Nlz7BvsAbVK4TKXdO5zAxiKS7m1tnG/s7EYD4lJ8iLI=

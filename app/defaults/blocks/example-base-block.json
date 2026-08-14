@@ -1,0 +1,240 @@
+{
+ "schema": "block/1",
+ "id": "example-base-block",
+ "name": "Example base block",
+ "start": "2026-01-05",
+ "goal": {
+  "event": "10K",
+  "date": "2026-01-18",
+  "target": "45:00"
+ },
+ "intro": "A two-week example. Replace it by putting your own block in the data volume — the moment blocks/ has a file, this one disappears.",
+ "mesocycles": [
+  {
+   "name": "Base",
+   "weeks": "1-2"
+  }
+ ],
+ "phases": [
+  {
+   "name": "Phase A · tolerance",
+   "weeks": "1",
+   "detail": "Introduce the movement, no load.",
+   "issue": "achilles"
+  },
+  {
+   "name": "Phase B · loading",
+   "weeks": "2+",
+   "detail": "Add load once the position holds.",
+   "issue": "achilles"
+  }
+ ],
+ "vars": {
+  "easyBand": [
+   {
+    "weeks": "1",
+    "value": "{{paceRange \"6:00/km\" \"6:45/km\"}}"
+   },
+   {
+    "weeks": "2+",
+    "value": "{{paceRange \"5:45/km\" \"6:30/km\"}}"
+   }
+  ]
+ },
+ "targets": {
+  "kinds": {
+   "easy": [
+    "HR cap {{.Athlete.HR.easyCap}} · first 20 min ≤ {{.Athlete.HR.firstMin}}",
+    "Pace is an output: {{var \"easyBand\"}}"
+   ],
+   "long": [
+    "HR cap {{.Athlete.HR.easyCap}}.",
+    "Pace is an output: {{var \"easyBand\"}}"
+   ],
+   "quality": [
+    "The week's one hard run.",
+    "Full warm-up and cool-down."
+   ]
+  }
+ },
+ "checklist": [
+  {
+   "key": "session",
+   "label": "{{.Session.Label}}",
+   "guide": "{{sessionGuide}}",
+   "when": "{{and .InBlock (not .Resting)}}"
+  },
+  {
+   "key": "daily",
+   "label": "Daily mobility",
+   "guide": "task-daily"
+  }
+ ],
+ "grading": {
+  "note": "Runs are graded on the share of their minutes under HR {{.Athlete.HR.easyCap}} —",
+  "bands": [
+   {
+    "grade": "A",
+    "range": "≥80%"
+   },
+   {
+    "grade": "B",
+    "range": "60–79%"
+   },
+   {
+    "grade": "C",
+    "range": "40–59%"
+   },
+   {
+    "grade": "D",
+    "range": "20–39%"
+   },
+   {
+    "grade": "F",
+    "range": "under 20%"
+   }
+  ],
+  "footer": "Hover a graded cell for the reasoning."
+ },
+ "weeks": [
+  {
+   "n": 1,
+   "days": [
+    {
+     "kind": "rest",
+     "label": "Rest"
+    },
+    {
+     "kind": "quality",
+     "label": "Easy run + 4 × 20 s strides",
+     "dist": "8 km",
+     "detail": "3 km easy + *4 × 20 s strides* (1:00 walk-back) + easy to finish",
+     "steps": [
+      {
+       "role": "warmup",
+       "dist": "3 km",
+       "hr": [
+        "{{.Athlete.HR.easyLo}}",
+        "{{.Athlete.HR.easyHi}}"
+       ]
+      },
+      {
+       "repeat": 4,
+       "steps": [
+        {
+         "role": "active",
+         "time": "0:20",
+         "note": "Stride: fast but relaxed, tall posture"
+        },
+        {
+         "role": "recovery",
+         "time": "1:00"
+        }
+       ]
+      },
+      {
+       "role": "cooldown",
+       "dist": "4 km",
+       "hr": [
+        135,
+        150
+       ]
+      }
+     ]
+    },
+    {
+     "kind": "easy",
+     "label": "Easy run",
+     "dist": "8 km"
+    },
+    {
+     "kind": "rest",
+     "label": "Rest"
+    },
+    {
+     "kind": "easy",
+     "label": "Easy run",
+     "dist": "8 km"
+    },
+    {
+     "kind": "long",
+     "label": "Long run, all easy",
+     "dist": "13 km"
+    },
+    {
+     "kind": "rest",
+     "label": "Rest"
+    }
+   ]
+  },
+  {
+   "n": 2,
+   "days": [
+    {
+     "kind": "rest",
+     "label": "Rest"
+    },
+    {
+     "kind": "quality",
+     "label": "3 × 4:00 @ threshold",
+     "dist": "8 km",
+     "detail": "2 km easy + *3 × 4:00 @ {{pace .Athlete.Paces.threshold}}* (2:00 jog) + 2 km down",
+     "steps": [
+      {
+       "role": "warmup",
+       "dist": "2 km",
+       "hr": [
+        "{{.Athlete.HR.easyLo}}",
+        "{{.Athlete.HR.easyCap}}"
+       ]
+      },
+      {
+       "repeat": 3,
+       "steps": [
+        {
+         "role": "active",
+         "time": "4:00",
+         "pace": [
+          "{{pace .Athlete.Paces.threshold}}",
+          "4:40/km"
+         ]
+        },
+        {
+         "role": "recovery",
+         "time": "2:00"
+        }
+       ]
+      },
+      {
+       "role": "cooldown",
+       "dist": "2 km"
+      }
+     ]
+    },
+    {
+     "kind": "easy",
+     "label": "Easy run",
+     "dist": "8 km"
+    },
+    {
+     "kind": "rest",
+     "label": "Rest"
+    },
+    {
+     "kind": "easy",
+     "label": "Easy run",
+     "dist": "8 km"
+    },
+    {
+     "kind": "long",
+     "label": "Long run, all easy",
+     "dist": "14 km"
+    },
+    {
+     "kind": "rest",
+     "label": "Rest"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,60 @@
+{
+ "schema": "athlete/1",
+ "name": "Example Runner",
+ "units": "metric",
+ "timezone": "UTC",
+ "weight": "70 kg",
+ "hr": {
+  "easyCap": 150,
+  "firstMin": 140,
+  "easyLo": 135,
+  "easyHi": 145,
+  "recoveryCap": 135
+ },
+ "power": {
+  "ftp": 200
+ },
+ "paces": {
+  "threshold": "4:30/km"
+ },
+ "issues": [
+  {
+   "key": "achilles",
+   "name": "Right Achilles",
+   "short": "Achilles",
+   "ask": "How stiff is it on the first few steps this morning?",
+   "hint": "one rating a day, before you walk it off",
+   "guide": "task-daily",
+   "scale": {
+    "min": 0,
+    "max": 4,
+    "low": "free",
+    "high": "limping"
+   },
+   "bands": [
+    {
+     "upto": 1,
+     "tone": "go",
+     "label": "Go",
+     "action": "Train as written."
+    },
+    {
+     "upto": 2,
+     "tone": "caution",
+     "label": "Caution",
+     "action": "Easy only. No hills, no strides."
+    },
+    {
+     "tone": "stop",
+     "label": "Stop",
+     "action": "No running today. If it is not clearly improving in a week, see someone."
+    }
+   ]
+  }
+ ],
+ "app": {
+  "name": "Run Coach",
+  "short": "Run Coach",
+  "description": "Training block, daily checklist and injury log"
+ }
+}

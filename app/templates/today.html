@@ -1,0 +1,93 @@
+{{define "today.html"}}{{template "head" .}}
+
+<section class="hero">
+  <div class="eyebrow">{{date .Today}}</div>
+  {{if .InBlock}}
+    <h1>Week {{.Week.N}} · {{dayName .DayIdx}}</h1>
+    <div class="sub">{{.MesoName}} · {{.PhaseName}}</div>
+  {{else if .Finished}}
+    <h1>{{.BlockName}} complete</h1>
+    <div class="sub">{{.BlockSpan}} · {{if multiBlock}}<a href="/blocks">see your blocks</a>{{else}}nothing scheduled after it{{end}}</div>
+  {{else}}
+    <h1>Block starts in {{.DaysToStart}} day{{if ne .DaysToStart 1}}s{{end}}</h1>
+    <div class="sub">{{.BlockName}} · {{.BlockSpan}}</div>
+  {{end}}
+</section>
+
+{{if .InBlock}}
+<section class="card {{kindCls .Session.Kind}}">
+  <div class="card-hd">
+    <span class="amount">{{amount .Session}}</span>
+    {{if .Session.Tag}}<span class="tag">{{.Session.Tag}}</span>{{end}}
+  </div>
+  <h2>{{emph .Session.Label}} {{template "guidebtn" .GuideID}}{{if .FitURL}} <a class="fitbtn" href="{{.FitURL}}" download>FIT</a>{{end}}{{if .ZwoURL}} <a class="fitbtn" href="{{.ZwoURL}}" download>ZWO</a>{{end}}</h2>
+  {{with .Detail}}<p class="detail">{{emph .}}</p>{{end}}
+  {{template "targets" .Targets}}
+</section>
+{{end}}
+
+<section class="card">
+  <h2 class="sec">Checklist</h2>
+  <ul class="tasks">
+    {{range .Tasks}}
+    <li class="task">
+      <input type="checkbox" id="t-{{.Key}}" data-task="{{.Key}}" data-date="{{iso $.Today}}" {{if .Done}}checked{{end}}>
+      <div class="tbody"><label for="t-{{.Key}}">{{emph .Label}}</label>{{if .SubTotal}}<span class="prog" data-prog="{{.Guide}}">{{.SubDone}}/{{.SubTotal}}</span>{{end}}{{template "guidebtn" .Guide}}</div>
+    </li>
+    {{end}}
+  </ul>
+  <p class="phase-note">{{.PhaseDetail}}</p>
+</section>
+
+{{range .Issues}}{{$is := .}}
+<section class="card issue">
+  <h2 class="sec">{{.Heading}} {{template "guidebtn" .Guide}}</h2>
+  {{if .Phase}}<p class="issue-phase"><strong>{{.Phase}}</strong>{{if .Detail}} — {{.Detail}}{{end}}</p>{{end}}
+  {{if .Rated}}
+    <p class="last logged">Logged today: <strong>{{.Today}}</strong>{{with .Band}} · <b class="tone-{{.Tone}}">{{.Label}}</b>{{end}}{{if .Note}} — {{.Note}}{{end}}<br><span class="sub">Tap another number to change it.</span></p>
+  {{else if .Last}}
+    <p class="last">Last reading <strong>{{.Last.Val}}</strong> on {{.Last.Date}}{{if .Last.Note}} — {{.Last.Note}}{{end}}</p>
+  {{else}}
+    <p class="last">No readings yet.</p>
+  {{end}}
+  {{/* Always present, empty until there is a rating, so tapping one has
+       something to fill rather than needing to build the element. An empty
+       one is hidden in CSS. */}}
+  <p class="issue-action{{with .Band}} tone-{{.Tone}}{{end}}">{{with .Band}}{{emph .Action}}{{end}}</p>
+  {{if .Ask}}<p class="issue-ask">{{.Ask}}</p>{{end}}
+  <form class="rate" data-issue="{{.Key}}" data-date="{{iso $.Today}}">
+    <div class="scale">
+      {{range .Dots}}
+      <button type="button" class="dot b{{.Tone}}{{if and $is.Rated (eq $is.Today .Value)}} sel{{end}}" data-val="{{.Value}}" data-tone="{{.Tone}}" data-label="{{.Label}}" data-rx="{{.Action}}"{{if and $is.Rated (eq $is.Today .Value)}} aria-pressed="true"{{end}}>{{.Value}}</button>
+      {{end}}
+    </div>
+    <input type="text" name="note" placeholder="optional note" autocomplete="off">
+  </form>
+  <p class="hint">{{.Range}}{{if .Hint}} · {{.Hint}}{{end}}</p>
+</section>
+{{end}}
+
+<section class="card">
+  <h2 class="sec">Feedback</h2>
+  <form id="note" data-date="{{iso .Today}}">
+    <textarea name="note" rows="3" placeholder="How did it go? Anything that felt wrong?"></textarea>
+    <button type="submit">Send</button>
+  </form>
+  <p class="hint">Goes straight into the log for Claude to read on the next update.</p>
+</section>
+
+{{if .Next}}
+<section class="card next">
+  <h2 class="sec">Coming up</h2>
+  <ul class="up">
+    {{range .Next}}
+    <li>
+      <span class="when">{{.When}}{{if gt .In 1}} · in {{.In}} days{{end}}</span>
+      <span class="what">{{if .IsBench}}<b class="bench">Benchmark</b> {{end}}{{emph .Label}}{{template "guidebtn" .Guide}}</span>
+    </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+
+{{template "foot" .}}{{end}}

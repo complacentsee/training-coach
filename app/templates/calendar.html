@@ -1,0 +1,41 @@
+{{define "calendar.html"}}{{template "head" .}}
+{{template "archive" .Archive}}
+<h1 class="page">The whole block</h1>
+{{if .Intro}}<p class="page-sub">{{.Intro}}</p>{{end}}
+{{if .FitZipURL}}<p class="fitall"><a class="fitbtn" href="{{.FitZipURL}}" download>ALL .FIT</a>{{if .ZwoZipURL}} <a class="fitbtn" href="{{.ZwoZipURL}}" download>ALL .ZWO</a>{{end}} every structured workout, zipped for the watch{{if .ZwoZipURL}} or for Zwift{{end}} — or <a href="/watch{{with .Archive}}{{.Query}}{{end}}">send straight to the watch</a></p>{{end}}
+<div class="bleed">
+<div class="calwrap">
+<table class="cal">
+  <thead><tr><th></th>{{range .Headings}}<th>{{.}}</th>{{end}}</tr></thead>
+  <tbody>
+  {{range .Rows}}
+    {{$w := .Week}}
+    <tr>
+      <th class="wk">
+        <a href="/week/{{$w.N}}{{with $.Archive}}{{.Query}}{{end}}">Week {{$w.N}}</a>
+        <span>{{$w.Dates}}</span>
+        <span>{{.Volume}}{{if .WeekGrade}} · <b class="g g{{lower .WeekGrade}}" title="{{.WeekNote}}">{{.WeekGrade}}</b>{{end}}</span>
+      </th>
+      {{range $i, $c := .Cells}}
+        <td class="{{kindCls $c.Session.Kind}}{{if $c.Grade}} graded{{end}}{{if and (eq $w.N $.TodayW) (eq $i $.TodayD)}} now{{end}}"
+            {{if $c.Guide}}data-guide="{{$c.Guide}}"{{end}}
+            {{if $c.Note}}title="{{$c.Note}}"{{end}}>
+          {{if $c.Grade}}<span class="g g{{lower $c.Grade}}">{{$c.Grade}}</span>{{end}}
+          {{if $c.Session.Tag}}<span class="tag">{{$c.Session.Tag}}</span>{{end}}
+          <span class="amt">{{amount $c.Session}}</span>
+          <span class="lbl">{{emph $c.Session.Label}}</span>
+          {{if $c.FitURL}}<a class="fitbtn" href="{{$c.FitURL}}" download>FIT</a>{{end}}{{if $c.ZwoURL}} <a class="fitbtn" href="{{$c.ZwoURL}}" download>ZWO</a>{{end}}
+        </td>
+      {{end}}
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+</div>
+{{with .Grading}}
+<p class="legend">{{emph .Note}}
+{{range $i, $b := .Bands}}{{if $i}} · {{end}}<b class="g g{{lower $b.Grade}}">{{$b.Grade}}</b> {{$b.Range}}{{end}}.{{if .Footer}}
+{{emph .Footer}}{{end}}</p>
+{{end}}
+{{template "foot" .}}{{end}}

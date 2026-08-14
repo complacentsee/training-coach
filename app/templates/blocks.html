@@ -1,0 +1,23 @@
+{{define "blocks.html"}}{{template "head" .}}
+<h1 class="page">Blocks</h1>
+<p class="page-sub">Every training block, newest first. The archived ones are read-only — their grades are still there, because grades are looked up by date.</p>
+
+<ul class="blocks">
+  {{range .Rows}}
+  <li class="block {{.Status}}">
+    <div class="block-hd">
+      <h2><a href="/calendar{{.Query}}">{{.Name}}</a></h2>
+      <span class="chip {{.Status}}">{{if eq .Status "current"}}Current{{else}}Archived{{end}}</span>
+    </div>
+    <p class="block-sub">{{.Span}}{{if .Goal}} · {{.Goal}}{{end}}{{if .Detail}} · {{.Detail}}{{end}}</p>
+    <p class="block-stats">{{.Weeks}} weeks · {{.Volume}} · {{.Sessions}} sessions{{if .Grades}}
+      <span class="block-grades">{{range $g, $n := .Grades}}<b class="g g{{lower $g}}">{{$g}}</b>×{{$n}} {{end}}</span>
+    {{end}}</p>
+    <p class="block-links">
+      <a href="/calendar{{.Query}}">Calendar</a>
+      <a href="/workouts{{.Query}}">Workouts</a>
+    </p>
+  </li>
+  {{end}}
+</ul>
+{{template "foot" .}}{{end}}

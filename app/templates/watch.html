@@ -1,0 +1,79 @@
+{{define "watch.html"}}{{template "head" .}}
+{{template "archive" .Archive}}
+<h1 class="page">Watch</h1>
+<p class="page-sub">Plug the watch in (USB mode: MTP), connect, then send
+workouts or pull recorded activities. Needs Chrome or Edge; the
+<a href="/fit.zip{{with .Archive}}{{.Query}}{{end}}" download>zip download</a>
+works in any browser.</p>
+
+<p id="wstatus" class="wstatus">Not connected.</p>
+<p class="wbtns">
+  <button id="wconnect" class="wbtn">Connect watch</button>
+</p>
+
+<div class="wtabs" role="tablist" aria-label="transfer direction">
+  <button id="wtab-send" class="wtab on" role="tab" aria-selected="true" aria-controls="wpane-send">To watch</button>
+  <button id="wtab-pull" class="wtab" role="tab" aria-selected="false" aria-controls="wpane-pull" tabindex="-1">From watch</button>
+</div>
+
+<section id="wpane-send" class="card" role="tabpanel" aria-labelledby="wtab-send">
+<h2 class="sec">Send workouts</h2>
+<p class="hint">The watch stores at most <b>25 workouts</b> and drops the
+rest. The next 14 days are pre-selected; top the window up as the block
+advances.</p>
+<p class="wbtns">
+  <button id="wsend" class="wbtn" disabled>Send selected</button>
+</p>
+<div class="calwrap">
+<table class="wlist">
+  <thead><tr><th><input type="checkbox" id="wall" aria-label="select all workouts"></th><th>Day</th><th>Workout</th><th>File</th><th></th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr data-url="{{.URL}}" data-slug="{{.Slug}}">
+    <td><input type="checkbox"{{if .Checked}} checked{{end}} aria-label="send {{.Slug}}"></td>
+    <td class="wday">{{date .Date}}</td>
+    <td>{{.Name}}</td>
+    <td class="wslug">{{.Slug}}</td>
+    <td><span class="wstate"></span></td>
+  </tr>
+  {{else}}
+  <tr><td colspan="5" class="wday">No workout files in this block.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<p class="hint">After sending, unplug the watch — it imports NewFiles on
+disconnect. The workouts appear under Training → Workouts; a re-sent edit
+replaces the same-named workout on the watch.</p>
+</section>
+
+<section id="wpane-pull" class="card" role="tabpanel" aria-labelledby="wtab-pull" hidden>
+<h2 class="sec">Pull activities</h2>
+<p id="wpullinfo" class="hint">Connect to list the watch's recorded activities.</p>
+<p class="wbtns">
+  <button id="wpull" class="wbtn" disabled>Pull selected</button>
+</p>
+<div class="calwrap" id="wnewwrap" hidden>
+<table class="wlist">
+  <thead><tr><th><input type="checkbox" id="wpall" aria-label="select all new activities" disabled></th><th>File</th><th>Size</th><th></th></tr></thead>
+  <tbody id="wpullrows"></tbody>
+</table>
+</div>
+<details class="wsaved" id="wsaved" hidden>
+  <summary id="wsavedsum">already saved</summary>
+  <div class="calwrap">
+  <table class="wlist">
+    <thead><tr><th>File</th><th>Size</th><th></th></tr></thead>
+    <tbody id="wsavedrows"></tbody>
+  </table>
+  </div>
+</details>
+</section>
+
+<details class="wtracebox">
+  <summary>Transfer log</summary>
+  <pre id="wtrace">(nothing yet — connect first)</pre>
+</details>
+
+<script src="{{asset "webmtp.js"}}" defer></script>
+{{template "foot" .}}{{end}}

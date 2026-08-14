@@ -1,0 +1,83 @@
+{
+ "schema": "library/1",
+ "guides": {
+  "s-easy": {
+   "id": "s-easy",
+   "title": "Easy run",
+   "summary": "HR cap {{.Athlete.HR.easyCap}}",
+   "sections": [
+    {
+     "label": "Ceiling",
+     "text": "Alert at HR {{.Athlete.HR.easyCap}}. When it fires, walk until it clears."
+    },
+    {
+     "label": "Pace",
+     "text": "An output, not a target. Expect {{var \"easyBand\"}}."
+    }
+   ],
+   "why": "Most weekly running minutes belong here. The share, not the pace, is what the block turns on."
+  },
+  "s-long": {
+   "id": "s-long",
+   "title": "Long run",
+   "summary": "the week's distance run",
+   "sections": [
+    {
+     "label": "Ceiling",
+     "text": "HR {{.Athlete.HR.easyCap}}, same as any easy run."
+    },
+    {
+     "label": "Pace",
+     "text": "An output. Expect {{var \"easyBand\"}}."
+    }
+   ]
+  },
+  "s-quality": {
+   "id": "s-quality",
+   "title": "Quality day",
+   "summary": "the week's one hard run",
+   "sections": [
+    {
+     "label": "Shape",
+     "text": "The week's one hard run. Full warm-up and full cool-down, always."
+    }
+   ]
+  },
+  "task-daily": {
+   "id": "task-daily",
+   "title": "Daily mobility — {{phase \"achilles\"}}",
+   "why": "{{phaseDetail \"achilles\"}}",
+   "sections": [
+    {
+     "label": "When",
+     "text": "Any time of day, but every day."
+    }
+   ],
+   "steps": [
+    {
+     "text": "Hip flexor stretch — 2 × 45 s/side",
+     "guide": "m-example"
+    }
+   ]
+  },
+  "m-example": {
+   "id": "m-example",
+   "title": "Half-kneeling hip flexor stretch",
+   "group": "Mobility",
+   "sections": [
+    {
+     "label": "Set up",
+     "text": "Half-kneeling, back toe tucked, front knee over the ankle."
+    },
+    {
+     "label": "Do",
+     "text": "Tuck the pelvis, squeeze the down-side glute, then lean forward an inch."
+    },
+    {
+     "label": "Error",
+     "text": "Leaning from the lumbar spine. If you feel it in your low back, you are arching, not stretching."
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
+
+# Go
+app/runningcoach
+
+# The athlete's own plan, log, and activity archive: personal data. The repo
+# ships app/defaults/ as the reference athlete; the real one lives on the
+# volume and in this directory on the machines that run it, never in git.
+app/data/
+
+# Per-machine deployment coordinates and working notes
+app/local.mk
+CLAUDE.md
+.claude/
+
+# Never commit keys
+id_*
+*.pem
+*_rsa
+*_ed25519

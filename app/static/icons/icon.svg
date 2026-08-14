@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="114" fill="#12171B"/>
+  <!-- heart-rate trace: the plan is HR-governed, so that is the mark -->
+  <polyline points="72,300 148,300 178,300 200,236 228,352 256,268 284,300 330,300 440,300"
+            fill="none" stroke="#1893AE" stroke-width="26"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="72" y1="392" x2="440" y2="392" stroke="#2A3239" stroke-width="14" stroke-linecap="round"/>
+  <line x1="72" y1="392" x2="256" y2="392" stroke="#1893AE" stroke-width="14" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,36 @@
+{
+ "schema": "index/1",
+ "groups": [
+  {
+   "title": "Sessions",
+   "note": "The shapes a training day takes.",
+   "rows": [
+    {
+     "guide": "s-easy",
+     "when": "{{count \"easy\"}}×"
+    },
+    {
+     "guide": "s-long",
+     "when": "{{count \"long\"}}×"
+    },
+    {
+     "guide": "s-quality",
+     "when": "{{count \"quality\"}}×"
+    }
+   ]
+  },
+  {
+   "title": "Daily",
+   "rows": [
+    {
+     "guide": "task-daily",
+     "when": "every day"
+    }
+   ]
+  },
+  {
+   "title": "Mobility",
+   "movements": "Mobility"
+  }
+ ]
+}

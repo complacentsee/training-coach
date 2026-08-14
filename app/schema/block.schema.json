@@ -1,0 +1,595 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "archived": {
+      "type": "boolean"
+    },
+    "checklist": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "guide": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "goal": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "date",
+        "event",
+        "target"
+      ],
+      "type": "object"
+    },
+    "grading": {
+      "additionalProperties": false,
+      "properties": {
+        "bands": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "grade": {
+                "type": "string"
+              },
+              "range": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "grade",
+              "range"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "footer": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "guides": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "article": {
+            "type": "string"
+          },
+          "articleTitle": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "sections": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "text"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "source": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "guide": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "sets": {
+                  "type": "integer"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "variants": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "sections": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "label": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "label",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "steps": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "guide": {
+                        "type": "string"
+                      },
+                      "key": {
+                        "type": "string"
+                      },
+                      "sets": {
+                        "type": "integer"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "weeks": {
+                  "description": "a span of weeks: \"1-4\", \"7\", or \"14+\"",
+                  "type": "string"
+                },
+                "why": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "weeks"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "video": {
+            "type": "string"
+          },
+          "videoTitle": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "id": {
+      "type": "string"
+    },
+    "index": {
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "movements": {
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "guide": {
+                      "type": "string"
+                    },
+                    "when": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "guide"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "groups",
+        "schema"
+      ],
+      "type": "object"
+    },
+    "intro": {
+      "type": "string"
+    },
+    "mesocycles": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "weeks": {
+            "description": "a span of weeks: \"1-4\", \"7\", or \"14+\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "weeks"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "name": {
+      "type": "string"
+    },
+    "note": {
+      "type": "string"
+    },
+    "phases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "issue": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "weeks": {
+            "description": "a span of weeks: \"1-4\", \"7\", or \"14+\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "name",
+          "weeks"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "start": {
+      "type": "string"
+    },
+    "targets": {
+      "additionalProperties": false,
+      "properties": {
+        "kinds": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "tags": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "title": {
+      "type": "string"
+    },
+    "vars": {
+      "additionalProperties": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": "string"
+            },
+            "weeks": {
+              "description": "a span of weeks: \"1-4\", \"7\", or \"14+\"",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "weeks"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
+    "weeks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "detail": {
+                  "type": "string"
+                },
+                "dist": {
+                  "description": "a distance with its unit, e.g. \"7 mi\", \"12 km\", \"400 m\"",
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "mins": {
+                  "type": "integer"
+                },
+                "steps": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "dist": {
+                        "type": "string"
+                      },
+                      "hr": {
+                        "items": {
+                          "description": "a bpm number or a template like \"{{.Athlete.HR.easyLo}}\"",
+                          "type": [
+                            "integer",
+                            "string"
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "pace": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "power": {
+                        "items": {
+                          "description": "a watts number or a template like \"{{pct 62 .Athlete.Power.ftp}}\"",
+                          "type": [
+                            "integer",
+                            "string"
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "repeat": {
+                        "type": "integer"
+                      },
+                      "role": {
+                        "type": "string"
+                      },
+                      "steps": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "dist": {
+                              "type": "string"
+                            },
+                            "hr": {
+                              "items": {
+                                "description": "a bpm number or a template like \"{{.Athlete.HR.easyLo}}\"",
+                                "type": [
+                                  "integer",
+                                  "string"
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            "note": {
+                              "type": "string"
+                            },
+                            "pace": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "power": {
+                              "items": {
+                                "description": "a watts number or a template like \"{{pct 62 .Athlete.Power.ftp}}\"",
+                                "type": [
+                                  "integer",
+                                  "string"
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            "role": {
+                              "type": "string"
+                            },
+                            "time": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "role"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "time": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "tag": {
+                  "type": "string"
+                },
+                "targets": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "kind",
+                "label"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "n": {
+            "type": "integer"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "days",
+          "n"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "goal",
+    "id",
+    "name",
+    "schema",
+    "start",
+    "targets",
+    "weeks"
+  ],
+  "title": "block",
+  "type": "object"
+}

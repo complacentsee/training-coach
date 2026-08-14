@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "app": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "short": {
+          "type": "string"
+        },
+        "theme": {
+          "additionalProperties": false,
+          "properties": {
+            "dark": {
+              "type": "string"
+            },
+            "light": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "hr": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "issues": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "ask": {
+            "type": "string"
+          },
+          "bands": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "tone": {
+                  "type": "string"
+                },
+                "upto": {
+                  "type": "integer"
+                },
+                "when": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "tone"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "guide": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "retest": {
+            "type": "string"
+          },
+          "scale": {
+            "additionalProperties": false,
+            "properties": {
+              "high": {
+                "type": "string"
+              },
+              "low": {
+                "type": "string"
+              },
+              "max": {
+                "type": "integer"
+              },
+              "min": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "max",
+              "min"
+            ],
+            "type": "object"
+          },
+          "short": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bands",
+          "key",
+          "name",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "name": {
+      "type": "string"
+    },
+    "notes": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "paces": {
+      "additionalProperties": {
+        "description": "a pace with its unit, e.g. \"9:45/mi\", \"4:30/km\"",
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "place": {
+      "type": "string"
+    },
+    "power": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "timezone": {
+      "type": "string"
+    },
+    "units": {
+      "enum": [
+        "imperial",
+        "metric"
+      ],
+      "type": "string"
+    },
+    "weight": {
+      "description": "a weight with its unit, e.g. \"25 lb\", \"12 kg\"",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "schema",
+    "timezone",
+    "units"
+  ],
+  "title": "athlete",
+  "type": "object"
+}

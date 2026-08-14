@@ -1,0 +1,21 @@
+{{define "week.html"}}{{template "head" .}}
+{{template "archive" .Archive}}
+<h1 class="page">Week {{.Week.N}}</h1>
+<p class="page-sub">{{.Week.Dates}} · {{.MesoName}} · {{.VolumeLong}}</p>
+{{range .Days}}
+<section class="card {{kindCls .Session.Kind}}">
+  <div class="card-hd">
+    <span class="dayname">{{.Name}} {{date .Date}}</span>
+    <span class="amount">{{amount .Session}}</span>
+    {{if .Session.Tag}}<span class="tag">{{.Session.Tag}}</span>{{end}}
+  </div>
+  <h2>{{emph .Session.Label}} {{template "guidebtn" .GuideID}}{{if .FitURL}} <a class="fitbtn" href="{{.FitURL}}" download>FIT</a>{{end}}{{if .ZwoURL}} <a class="fitbtn" href="{{.ZwoURL}}" download>ZWO</a>{{end}}</h2>
+  {{with .Detail}}<p class="detail">{{emph .}}</p>{{end}}
+  {{template "targets" .Targets}}
+</section>
+{{end}}
+<nav class="pager">
+  {{if .Prev}}<a href="/week/{{.Prev}}{{with $.Archive}}{{.Query}}{{end}}">← Week {{.Prev}}</a>{{else}}<span></span>{{end}}
+  {{if .Next}}<a href="/week/{{.Next}}{{with $.Archive}}{{.Query}}{{end}}">Week {{.Next}} →</a>{{end}}
+</nav>
+{{template "foot" .}}{{end}}
