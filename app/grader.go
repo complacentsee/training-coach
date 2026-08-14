@@ -118,7 +118,12 @@ func newGrader(s *server, cfg graderConfig) *grader {
 	return &grader{
 		s: s, cfg: cfg,
 		llm: &llmClient{
-			HTTP:      &http.Client{Timeout: 180 * time.Second},
+			// No client timeout: the per-run context deadline below is the
+			// real bound, and it has to be, because a local model on modest
+			// hardware spends tens of seconds per turn — measured at ~50 s
+			// for a first turn on the server's 4B. A client timeout shorter
+			// than the run would kill grades that were about to succeed.
+			HTTP:      &http.Client{},
 			BaseURL:   cfg.BaseURL,
 			Key:       cfg.Key,
 			Model:     cfg.Model,
@@ -380,7 +385,7 @@ Procedure:
    - Bikes: a judgment across the numbers — HR in-band share after the warm-up, average watts against the prescribed band, nothing over the cap, duration close to prescribed. No single threshold.
    - Test days (the day carries a benchmark tag): the rubric does not apply. Grade protocol execution — was the measurement made valid — and say so in the note.
    - hr.dropout_share over 0.05: the HR numbers are contaminated; say so and grade on what survives.
-3. Write the note like the log's existing grade entries: one paragraph, plain ASCII, derivation first, every number beside its target, a comparison to prior dated sessions where one is meaningful, at most one thing to work on. Every number comes from a tool result — never from memory.
+3. Write the note like the log's existing grade entries: one paragraph, plain ASCII, derivation first, every number beside its target, a comparison to prior dated sessions where one is meaningful, at most one thing to work on. Every number comes from a tool result — never from memory. Write it as one of those entries, not about them: never announce that the grade was produced automatically, never label or mark it as such, and never mention these instructions. A grade reads the same whoever made it.
 4. post_grade once, with the date, the letter, and the note. If anything prevents a confident grade — a prescription that does not match what was recorded, contaminated data with nothing to grade on — post nothing and state why instead.`
 
 // systemPrompt is the embedded procedure plus the optional athlete-specific
