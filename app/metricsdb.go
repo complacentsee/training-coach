@@ -143,6 +143,13 @@ func activityDate(name string, startUTC time.Time, loc *time.Location) string {
 	return startUTC.In(loc).Format("2006-01-02")
 }
 
+// decodeForImport is decodeActivity behind a var so the panic-containment
+// test can inject a panicking decoder. The containment matters because a
+// hostile or bit-rotted archive file must cost one failures row, never a
+// restart-looping process — and fuzzing today's decoder proves nothing
+// about next year's upgrade.
+var decodeForImport = decodeActivity
+
 // importOne decodes one stored activity and lands its metrics in a single
 // transaction. Idempotent: a re-import replaces the row and its histograms.
 // Errors are recorded in the failures table AND returned — the caller
@@ -159,7 +166,7 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location) (a *
 		}
 	}()
 
-	streams, err := decodeActivity(data)
+	streams, err := decodeForImport(data)
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
@@ -269,7 +276,8 @@ func (m *metricsDB) reconcile(dir string, loc *time.Location) {
 		ok, err := m.has(e.Name())
 		if err != nil {
 			log.Printf("metrics reconcile: %s: %v", e.Name(), err)
-			return
+			failed++
+			continue // one bad lookup must not abort the rest of the archive
 		}
 		if ok {
 			present++

@@ -14,7 +14,9 @@ saved verbatim (needs `time` + `heart_rate`; `watts`, `velocity_smooth` and
 
 The pinned conventions, restated from the register:
 - Every share is time-weighted: sample i covers time[i] - time[i-1] seconds.
-  Never count samples; resampled streams only look uniform.
+  Never count samples; resampled streams only look uniform. A non-positive
+  interval contributes nothing (clocks can step backwards at a chained
+  file's seam).
 - HR dropouts: samples under 50 bpm are excluded from all HR statistics and
   the excluded share is reported. Over 5% excluded, the note must say so.
 - Runs are graded on the whole run, warm-up, strides and all — that is what
@@ -44,6 +46,8 @@ def weighted(t, vals, keep):
     tot = tot_v = 0.0
     for i in range(1, len(t)):
         dt = t[i] - t[i - 1]
+        if dt <= 0:
+            continue
         if keep(vals[i]):
             tot += dt
             tot_v += dt * vals[i]
@@ -52,8 +56,10 @@ def weighted(t, vals, keep):
 def share(t, vals, pred, valid=lambda v: True):
     num = den = 0.0
     for i in range(1, len(t)):
+        dt = t[i] - t[i - 1]
+        if dt <= 0:
+            continue
         if valid(vals[i]):
-            dt = t[i] - t[i - 1]
             den += dt
             if pred(vals[i]):
                 num += dt
@@ -106,8 +112,10 @@ def main():
         def half_eff(lo, hi):
             num = den = 0.0
             for i in range(1, len(t)):
+                dt = t[i] - t[i - 1]
+                if dt <= 0:
+                    continue
                 if lo < t[i] <= hi and ok(hr[i]) and output[i] > 0:
-                    dt = t[i] - t[i - 1]
                     num += dt * (output[i] / hr[i])
                     den += dt
             return num / den if den else None

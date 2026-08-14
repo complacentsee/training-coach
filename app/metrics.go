@@ -11,6 +11,10 @@ package main
 //
 //   - Every share is TIME-WEIGHTED: sample i covers time[i] − time[i−1]
 //     seconds. Never count samples; resampled streams only look uniform.
+//     A non-positive interval contributes nothing — clocks can step
+//     backwards at a chained file's seam, and negative seconds subtracting
+//     from a share is how the histogram and the stream computation were
+//     once able to disagree about the same run.
 //   - HR dropouts: samples under 50 bpm are excluded from all HR statistics
 //     and the excluded share is reported (dropout_share). Over 5% excluded,
 //     a grade note must say the HR numbers are contaminated.
@@ -37,7 +41,10 @@ package main
 //     from athlete.json as it is at that moment — never at import, never
 //     from an older document. Import stores anchor-free aggregates only.
 
-import "math"
+import (
+	"math"
+	"math/big"
+)
 
 // activityMetrics is one activity's anchor-free aggregate row plus its
 // time-at-value histograms — what the import pipeline writes to the DB.
@@ -73,6 +80,9 @@ func weightedMean(t []int, vals []float64, keep func(float64) bool) (float64, *f
 	var tot, totV float64
 	for i := 1; i < len(t); i++ {
 		dt := float64(t[i] - t[i-1])
+		if dt <= 0 {
+			continue
+		}
 		if keep(vals[i]) {
 			tot += dt
 			totV += dt * vals[i]
@@ -89,8 +99,11 @@ func weightedMean(t []int, vals []float64, keep func(float64) bool) (float64, *f
 func timeShare(t []int, vals []float64, pred, valid func(float64) bool) *float64 {
 	var num, den float64
 	for i := 1; i < len(t); i++ {
+		dt := float64(t[i] - t[i-1])
+		if dt <= 0 {
+			continue
+		}
 		if valid(vals[i]) {
-			dt := float64(t[i] - t[i-1])
 			den += dt
 			if pred(vals[i]) {
 				num += dt
@@ -204,12 +217,32 @@ func computeMetrics(name, date string, s *activityStreams) *activityMetrics {
 	return a
 }
 
-// pyRound mirrors python's round(): half-to-even at n decimals. The mirror
-// rounds its output, so the register rounds identically where numbers are
-// presented — never where they are stored.
+// pyRound mirrors python's round(): the float's exact value rounded to the
+// nearest multiple of 10^-n, ties to even. Computed over exact rationals —
+// the obvious RoundToEven(x*10^n)/10^n rounds the intermediate product and
+// measurably diverges from python on tie quotients the register actually
+// produces (2007/20 → 100.4 vs python's 100.3; 2049/20 → 102.4 vs 102.5).
+// The mirror rounds its output, so the register rounds identically where
+// numbers are presented — never where they are stored.
 func pyRound(x float64, n int) float64 {
-	p := math.Pow(10, float64(n))
-	return math.RoundToEven(x*p) / p
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return x
+	}
+	r := new(big.Rat).SetFloat64(x)
+	pow := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
+	r.Mul(r, new(big.Rat).SetInt(pow)) // exact x·10ⁿ
+	num, den := r.Num(), r.Denom()
+	q, rem := new(big.Int).QuoRem(num, den, new(big.Int))
+	twice := new(big.Int).Lsh(new(big.Int).Abs(rem), 1)
+	if c := twice.Cmp(den); c > 0 || (c == 0 && q.Bit(0) == 1) {
+		if num.Sign() >= 0 {
+			q.Add(q, big.NewInt(1))
+		} else {
+			q.Sub(q, big.NewInt(1))
+		}
+	}
+	f, _ := new(big.Rat).SetFrac(q, pow).Float64()
+	return f
 }
 
 // halfEfficiency is the mean output/HR over (lo, hi], valid HR and positive
@@ -218,8 +251,11 @@ func halfEfficiency(t []int, hr, output []float64, lo, hi float64) *float64 {
 	var num, den float64
 	for i := 1; i < len(t); i++ {
 		ti := float64(t[i])
+		dt := float64(t[i] - t[i-1])
+		if dt <= 0 {
+			continue
+		}
 		if lo < ti && ti <= hi && hrValid(hr[i]) && output[i] > 0 {
-			dt := float64(t[i] - t[i-1])
 			num += dt * (output[i] / hr[i])
 			den += dt
 		}

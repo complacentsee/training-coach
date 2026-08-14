@@ -2,11 +2,14 @@ package main
 
 // Recorded activity files pulled off the watch land here as opaque bytes under
 // <data>/activities/. They are personal health data with the same standing as
-// the entries log: server-only, never overwritten, never decoded — the server
-// checks the .FIT magic and nothing else. The directory is invisible to the
-// plan: the data Rev hashes only the files loadDataset takes, and
-// fingerprint() counts only non-hidden .json files, so neither an activity
-// nor a stranded .tmp can perturb a reload or fail `make verify`.
+// the entries log: server-only, never overwritten, never renamed. The stored
+// bytes are canonical and immutable — since 14 Aug 2026 the binary also
+// DECODES them (decode.go) into the derived, disposable metrics cache, but
+// storage itself still checks the .FIT magic and nothing else, and nothing
+// derived can touch the bytes. The directory is invisible to the plan: the
+// data Rev hashes only the files loadDataset takes, and fingerprint() counts
+// only non-hidden .json files, so neither an activity nor a stranded .tmp can
+// perturb a reload or fail `make verify`.
 
 import (
 	"encoding/json"
@@ -115,11 +118,13 @@ func (s *server) postActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+		s.retryFailedImport(name)
 		http.Error(w, "already stored", http.StatusConflict)
 		return
 	}
 	if err := publishActivity(dir, name, body); err != nil {
 		if errors.Is(err, fs.ErrExist) {
+			s.retryFailedImport(name)
 			http.Error(w, "already stored", http.StatusConflict)
 			return
 		}
@@ -138,6 +143,30 @@ func (s *server) postActivity(w http.ResponseWriter, r *http.Request) {
 		go s.grader.maybeGrade(m)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// retryFailedImport gives a stored-but-unmeasured file another decode when
+// its name is re-POSTed. The bytes on disk are canonical, so the retry reads
+// them rather than trusting the request body; without this, a transient
+// import failure (full disk, killed txn) was unrecoverable over HTTP until
+// the next restart's reconcile, because the store correctly 409s the name.
+func (s *server) retryFailedImport(name string) {
+	if msg, _ := s.metrics.failureFor(name); msg == "" {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(s.activitiesDir(), name))
+	if err != nil {
+		log.Printf("metrics retry %s: %v", name, err)
+		return
+	}
+	if m, err := s.metrics.importOne(name, data, s.ds().Loc); err != nil {
+		log.Printf("metrics retry %s: %v", name, err)
+	} else {
+		log.Printf("metrics retry %s: recovered", name)
+		if s.grader != nil {
+			go s.grader.maybeGrade(m)
+		}
+	}
 }
 
 // publishActivity lands body at dir/name via a temp file and a hard link.
@@ -200,6 +229,14 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 	}
 	if row == nil {
 		if msg, _ := s.metrics.failureFor(name); msg != "" {
+			// One line, bounded: the stored cause can carry decoder or
+			// driver internals and this body reaches the network.
+			if i := strings.IndexByte(msg, '\n'); i >= 0 {
+				msg = msg[:i]
+			}
+			if len(msg) > 200 {
+				msg = msg[:200] + "…"
+			}
 			return nil, http.StatusNotFound, "import failed: " + msg
 		}
 		return nil, http.StatusNotFound, "no metrics for that activity"
