@@ -28,6 +28,19 @@ Every session and movement the plan prescribes, each opening into a guide:
 
 ![The workouts page: sessions, daily work, and movement guides](docs/workouts.png)
 
+The watch page — two-way sync with a Garmin watch, straight from the
+browser. Plug in over USB, connect, and the **To watch** tab sends the
+plan's structured workouts as FIT files (the next fortnight pre-selected,
+because the watch itself caps stored workouts at 25); the **From watch**
+tab lists the watch's recorded activities, shows which are new, and pulls
+them into the server's archive — saved once, never overwritten, and only
+counted as saved after the page re-reads the server's own list. One
+connection does both directions, nothing on the watch is ever deleted or
+renamed, and the transfer log at the bottom shows every MTP container on
+the wire when you care to look:
+
+![The watch page: To-watch and From-watch tabs, workout list with the fortnight pre-selected](docs/watch.png)
+
 ## How it works
 
 - **The plan is data.** One athlete file (units, timezone, HR/power/pace
