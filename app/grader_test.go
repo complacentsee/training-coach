@@ -190,6 +190,92 @@ func scriptedProvider(t *testing.T, date, name string) *httptest.Server {
 	}))
 }
 
+// stallingProvider gathers its facts and then writes its conclusion as
+// prose instead of calling post_grade — measured behaviour from the
+// server's local 4B. It complies after `stalls` reminders; a provider that
+// never complies is the same script with stalls larger than the nudge cap.
+func stallingProvider(t *testing.T, date, name string, stalls int) *httptest.Server {
+	t.Helper()
+	stalled := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Type    string `json:"type"`
+					Text    string `json:"text"`
+					Content any    `json:"content"`
+				} `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		seen := 0
+		for _, m := range body.Messages {
+			for _, b := range m.Content {
+				if b.Type == "tool_result" {
+					seen++
+				}
+			}
+		}
+		switch {
+		case seen == 0:
+			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"get_prescription","input":{"date":"` + date + `"}}],"stop_reason":"tool_use"}`))
+		case seen == 1:
+			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t2","name":"get_metrics","input":{"name":"` + name + `"}}],"stop_reason":"tool_use"}`))
+		case stalled < stalls:
+			stalled++
+			w.Write([]byte(`{"content":[{"type":"text","text":"Here are the key metrics for the session: avg power 119 W."}],"stop_reason":"end_turn"}`))
+		default:
+			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t3","name":"post_grade","input":{"date":"` + date + `","val":"C","note":"Posted after the reminder."}}],"stop_reason":"tool_use"}`))
+		}
+	}))
+}
+
+// TestGraderNudgesAStalledModel: narrating the analysis instead of calling
+// post_grade must not lose the grade — the model is reminded that only the
+// call records anything, and one reminder is enough.
+func TestGraderNudgesAStalledModel(t *testing.T) {
+	const name, date = "2026-01-13-12-00-00.fit", "2026-01-13"
+	srv := stallingProvider(t, date, name, 1)
+	defer srv.Close()
+	g, ts := graderUnderTest(t, "live", srv.URL)
+
+	m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.maybeGrade(m)
+
+	grade, ok := ts.s.store.Grades()[date]
+	if !ok || grade.Val != "C" || !strings.Contains(grade.Note, "after the reminder") {
+		t.Fatalf("stalled model's grade never landed: ok=%v %+v", ok, grade)
+	}
+}
+
+// TestGraderNeverPostsPartially: a model that will not make the call, no
+// matter how often it is reminded, leaves the day ungraded. Prose is not a
+// grade, and the failure is loud rather than half-recorded.
+func TestGraderNeverPostsPartially(t *testing.T) {
+	const name, date = "2026-01-13-12-00-00.fit", "2026-01-13"
+	srv := stallingProvider(t, date, name, 99)
+	defer srv.Close()
+	g, ts := graderUnderTest(t, "live", srv.URL)
+
+	m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.grade(m); err == nil || !strings.Contains(err.Error(), "without posting") {
+		t.Fatalf("err = %v, want a refusal naming the missing post", err)
+	}
+	if _, ok := ts.s.store.Grades()[date]; ok {
+		t.Error("a day was graded without the grade ever being posted")
+	}
+	if n := len(ts.s.store.All()); n != 0 {
+		t.Errorf("%d entries written by a run that never posted", n)
+	}
+}
+
 func TestGraderEndToEnd(t *testing.T) {
 	const name = "2026-01-13-12-00-00.fit"
 	const date = "2026-01-13"
