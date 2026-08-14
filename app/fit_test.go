@@ -14,9 +14,12 @@ import (
 )
 
 /*
-Placement rule: every test that imports muktihari/fit lives in this file, and
-nothing else imports it. That keeps the dependency test-only by inspection as
-well as by the Dockerfile's go-version -m proof.
+muktihari/fit stopped being test-only on 14 Aug 2026: decode.go imports it
+to decode recorded activities, and the Dockerfile's dep proof became an
+allowlist. The narrower rule that survives: the OUTBOUND path stays
+hand-rolled — fit.go encodes workouts with the stdlib and nothing may
+change that — while decode-side code and tests import the library freely
+(this file for workout round-trips, decode_test.go for activity fixtures).
 */
 
 var updateGolden = flag.Bool("update-golden", false, "rewrite testdata/workout.fit from the encoder")

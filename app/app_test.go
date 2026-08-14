@@ -1877,7 +1877,12 @@ func fitTestMux(t *testing.T, dataDir string) *http.ServeMux {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &server{assets: a, loc: chicago(t), dataDir: dataDir, store: store}
+	metrics, err := openMetricsDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(metrics.close)
+	s := &server{assets: a, loc: chicago(t), dataDir: dataDir, store: store, metrics: metrics}
 	if err := s.reload(); err != nil {
 		t.Fatal(err)
 	}
@@ -1898,6 +1903,8 @@ func fitTestMux(t *testing.T, dataDir string) *http.ServeMux {
 	mux.HandleFunc("GET /api/activities", s.getActivities)
 	mux.HandleFunc("GET /api/activity", s.getActivity)
 	mux.HandleFunc("POST /api/activity", s.postActivity)
+	mux.HandleFunc("GET /api/activity-metrics", s.getActivityMetrics)
+	mux.HandleFunc("GET /api/day", s.getDay)
 	mux.HandleFunc("POST /api/entry", s.postEntry)
 	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
 	return mux

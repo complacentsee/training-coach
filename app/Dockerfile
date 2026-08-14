@@ -2,6 +2,8 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+# The module fetch is its own layer so editing a .go file does not re-download.
+RUN go mod download
 COPY *.go ./
 # defaults/ is a generic example block and library, embedded so the container
 # runs standalone. The real plan is NOT in the image any more: it lives on the
@@ -13,10 +15,26 @@ COPY static ./static
 ARG SRC_HASH=dev
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w -X main.buildHash=$SRC_HASH" -o /out/runningcoach .
-# The one module requirement (muktihari/fit) is test-only, and module-graph
-# pruning means this build needs no network for it. Prove the binary stayed
-# dependency-free: fail the image if `go version -m` ever lists a dep line.
-RUN ! go version -m /out/runningcoach | grep -qE '^[[:space:]]+dep[[:space:]]'
+# The stdlib-only law, amended 14 Aug 2026 into an ALLOWLIST: the import
+# pipeline decodes activity FIT (muktihari/fit) and fills the metrics cache
+# (modernc.org/sqlite); the other nine lines are those two modules' measured
+# transitive closure, nothing more. The build still fails the moment any
+# other dep line appears in the binary.
+RUN go version -m /out/runningcoach | awk '$1=="dep"{print $2}' | sort > /tmp/deps && \
+    printf '%s\n' \
+      github.com/dustin/go-humanize \
+      github.com/google/uuid \
+      github.com/mattn/go-isatty \
+      github.com/muktihari/fit \
+      github.com/ncruces/go-strftime \
+      github.com/remyoudompheng/bigfft \
+      golang.org/x/sys \
+      modernc.org/libc \
+      modernc.org/mathutil \
+      modernc.org/memory \
+      modernc.org/sqlite \
+      | sort > /tmp/allow && \
+    ! comm -23 /tmp/deps /tmp/allow | grep .
 
 # --- runtime -------------------------------------------------------------
 FROM scratch

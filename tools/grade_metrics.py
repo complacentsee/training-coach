@@ -1,7 +1,10 @@
-"""Deterministic workout metrics for grading — the arithmetic behind a grade
-entry, pinned in one place so two sessions grading the same activity get the
-same numbers. The judgment (the letter, the note) stays with whoever runs it;
-this only measures. Invoked by the `grade` skill (.claude/skills/grade/).
+"""CROSS-VALIDATION MIRROR of the measurement register in app/metrics.go —
+the register's authoritative home since 14 Aug 2026, when grading moved into
+the binary. This script exists to check that register against an independent
+implementation (the acceptance gate in app/acceptgate_test.go runs both over
+the whole archive); it is also still runnable by hand exactly as before.
+A measurement convention changes in app/metrics.go and here in step, or not
+at all.
 
     python3 tools/grade_metrics.py --streams s.json --athlete app/data/athlete.json --kind bike
 
@@ -9,7 +12,7 @@ this only measures. Invoked by the `grade` skill (.claude/skills/grade/).
 saved verbatim (needs `time` + `heart_rate`; `watts`, `velocity_smooth` and
 `cadence` are used when present). --kind is `bike` or `run`.
 
-Pinned conventions — change them here or not at all:
+The pinned conventions, restated from the register:
 - Every share is time-weighted: sample i covers time[i] - time[i-1] seconds.
   Never count samples; resampled streams only look uniform.
 - HR dropouts: samples under 50 bpm are excluded from all HR statistics and
