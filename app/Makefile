@@ -99,7 +99,8 @@ new-block:      ## scaffold a block: make new-block ID=2027-spring-5k START=2027
 push-files: validate ## ship athlete/blocks/library to the server WITHOUT reloading
 	@set -e; \
 	$(SSH) $(REMOTE) "mkdir -p $(DEST)/data && rm -rf $(DEST)/data/blocks $(DEST)/data/library"; \
-	COPYFILE_DISABLE=1 tar --no-xattrs -czf - -C data athlete.json blocks library \
+	EXTRA=""; [ -f data/grading-notes.md ] && EXTRA="grading-notes.md"; \
+	COPYFILE_DISABLE=1 tar --no-xattrs -czf - -C data athlete.json blocks library $$EXTRA \
 	  | $(SSH) $(REMOTE) "tar -xzf - -C $(DEST)/data"; \
 	JUNK=$$($(SSH) $(REMOTE) "find $(DEST)/data -name '._*' -o -name '.DS_Store' | wc -l | tr -d ' '"); \
 	[ "$$JUNK" = "0" ] || { \
@@ -255,6 +256,7 @@ seed-dev:       ## populate the dev stack's data from live (partial activities)
 	  cp -R \$$SRC/blocks \$$DST/blocks; \
 	  cp -R \$$SRC/library \$$DST/library; \
 	  cp \$$SRC/entries.jsonl \$$DST/entries.jsonl 2>/dev/null || true; \
+	  cp \$$SRC/grading-notes.md \$$DST/grading-notes.md 2>/dev/null || true; \
 	  CUT=\$$(date -d '$(SEED_DAYS) days ago' +%Y-%m-%d); \
 	  NAMES=\$$(curl -s -m 30 --fail http://localhost:$(PORT)/api/activities \
 	    | grep -o '\"name\":\"[^\"]*\"' | cut -d'\"' -f4); \

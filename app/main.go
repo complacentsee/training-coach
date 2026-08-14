@@ -46,6 +46,7 @@ type server struct {
 	stamp   atomic.Pointer[string]
 	store   *Store
 	metrics *metricsDB
+	grader  *grader
 	tpl     *template.Template
 	loc     *time.Location // fallback timezone from the flag
 	assets  *assets
@@ -105,7 +106,26 @@ func main() {
 	if err != nil {
 		log.Fatalf("metrics: %v", err)
 	}
-	go s.metrics.reconcile(s.activitiesDir(), s.ds().Loc)
+	// A typo'd GRADER_* is fatal, not silently off: a grader that fails to
+	// arm is visible in ten seconds, one that quietly never runs costs a
+	// week of dry-mode comparison.
+	gcfg, err := graderConfigFromEnv()
+	if err != nil {
+		log.Fatalf("grader: %v", err)
+	}
+	if gcfg.Mode != "off" {
+		s.grader = newGrader(s, gcfg)
+		log.Printf("grader: armed  mode=%s dialect=%s model=%s base=%s",
+			gcfg.Mode, gcfg.Dialect, gcfg.Model, gcfg.BaseURL)
+	}
+	go func() {
+		s.metrics.reconcile(s.activitiesDir(), s.ds().Loc)
+		if s.grader != nil {
+			// Metrics first, then grades: a failed grade retries here on
+			// the next startup, per the idempotency contract.
+			s.grader.reconcile()
+		}
+	}()
 	tpl, err := template.New("").Funcs(s.makeFuncs()).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("templates: %v", err)
@@ -1494,21 +1514,31 @@ func (s *server) getIssueTrend(w http.ResponseWriter, r *http.Request) {
 // 400/404, never a fallback: a date outside the block has no prescription,
 // and inventing one is how two sources of truth start.
 func (s *server) getDay(w http.ResponseWriter, r *http.Request) {
-	d := s.ds()
-	date, err := time.ParseInLocation("2006-01-02", r.URL.Query().Get("date"), d.Loc)
-	if err != nil {
-		http.Error(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
+	out, code, msg := s.dayPayload(r.URL.Query().Get("date"), r.URL.Query().Get("block"))
+	if code != http.StatusOK {
+		http.Error(w, msg, code)
 		return
 	}
-	blk, ok := d.blockFor(r.URL.Query().Get("block"), s.day(d))
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// dayPayload builds the response for the handler above and for the grader's
+// get_prescription tool — one builder, one truth about what a day asks.
+func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
+	d := s.ds()
+	date, err := time.ParseInLocation("2006-01-02", dateStr, d.Loc)
+	if err != nil {
+		return nil, http.StatusBadRequest, "date must be YYYY-MM-DD"
+	}
+	blk, ok := d.blockFor(blockID, s.day(d))
 	if !ok {
-		http.NotFound(w, r)
-		return
+		return nil, http.StatusNotFound, "no such block"
 	}
 	wk, di, ok := blk.Locate(date)
 	if !ok {
-		http.Error(w, "date is outside the block", http.StatusNotFound)
-		return
+		return nil, http.StatusNotFound, "date is outside the block"
 	}
 	sess := wk.Days[di]
 	ctx := blk.ctxFor(d.Athlete, wk.N)
@@ -1518,15 +1548,13 @@ func (s *server) getDay(w http.ResponseWriter, r *http.Request) {
 
 	detail, err := sc.resolve(sess.Detail)
 	if err != nil {
-		log.Printf("day %s: detail: %v", r.URL.Query().Get("date"), err)
-		http.Error(w, "prescription unavailable", http.StatusInternalServerError)
-		return
+		log.Printf("day %s: detail: %v", dateStr, err)
+		return nil, http.StatusInternalServerError, "prescription unavailable"
 	}
 	targets, err := sc.resolveAll(blk.TargetsFor(sess))
 	if err != nil {
-		log.Printf("day %s: targets: %v", r.URL.Query().Get("date"), err)
-		http.Error(w, "prescription unavailable", http.StatusInternalServerError)
-		return
+		log.Printf("day %s: targets: %v", dateStr, err)
+		return nil, http.StatusInternalServerError, "prescription unavailable"
 	}
 	for i := range targets {
 		targets[i] = stripEmph(targets[i])
@@ -1595,9 +1623,7 @@ func (s *server) getDay(w http.ResponseWriter, r *http.Request) {
 		out.Grading = l
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(out)
+	return out, http.StatusOK, ""
 }
 
 func (s *server) getEntries(w http.ResponseWriter, r *http.Request) {

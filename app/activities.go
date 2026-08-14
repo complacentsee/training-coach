@@ -130,8 +130,12 @@ func (s *server) postActivity(w http.ResponseWriter, r *http.Request) {
 	// Bytes on disk is the contract; metrics are derived. A decode or DB
 	// error lands in the failures table and the log, never in this response
 	// — the import already succeeded.
-	if err := s.metrics.importOne(name, body, s.ds().Loc); err != nil {
+	if m, err := s.metrics.importOne(name, body, s.ds().Loc); err != nil {
 		log.Printf("metrics %s: %v", name, err)
+	} else if s.grader != nil {
+		// A fresh import is the grading trigger; the grade never blocks
+		// the import, and every skip rule lives with the grader.
+		go s.grader.maybeGrade(m)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -172,24 +176,33 @@ func publishActivity(dir, name string, body []byte) error {
 // A name with no row is a 404 either way, but the body says which way:
 // not yet imported, or imported and failed (the failures table knows).
 func (s *server) getActivityMetrics(w http.ResponseWriter, r *http.Request) {
-	name := r.URL.Query().Get("name")
-	if !validActivityName(name) {
-		http.Error(w, "name must be a plain .fit filename", http.StatusBadRequest)
+	out, code, msg := s.activityMetricsPayload(r.URL.Query().Get("name"))
+	if code != http.StatusOK {
+		http.Error(w, msg, code)
 		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// activityMetricsPayload builds the response for the handler above and for
+// the grader's get_metrics tool — one builder, so the two consumers can
+// never disagree about what an activity measured.
+func (s *server) activityMetricsPayload(name string) (any, int, string) {
+	if !validActivityName(name) {
+		return nil, http.StatusBadRequest, "name must be a plain .fit filename"
 	}
 	row, err := s.metrics.rowByName(name)
 	if err != nil {
 		log.Printf("activity-metrics %s: %v", name, err)
-		http.Error(w, "could not read metrics", http.StatusInternalServerError)
-		return
+		return nil, http.StatusInternalServerError, "could not read metrics"
 	}
 	if row == nil {
 		if msg, _ := s.metrics.failureFor(name); msg != "" {
-			http.Error(w, "import failed: "+msg, http.StatusNotFound)
-			return
+			return nil, http.StatusNotFound, "import failed: " + msg
 		}
-		http.Error(w, "no metrics for that activity", http.StatusNotFound)
-		return
+		return nil, http.StatusNotFound, "no metrics for that activity"
 	}
 
 	type hrOut struct {
@@ -330,9 +343,7 @@ func (s *server) getActivityMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(out)
+	return out, http.StatusOK, ""
 }
 
 // getActivity serves one stored file back, byte for byte. Health data, so
