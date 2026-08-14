@@ -598,6 +598,37 @@ func TestBikeDecouplingExcludesWarmup(t *testing.T) {
 	}
 }
 
+// TestBestRolling pins the peak an average hides: a ramp whose last minute
+// is the whole result, and the refusal when the trace is shorter than the
+// window.
+func TestBestRolling(t *testing.T) {
+	// 180 s: 60 s at 100 W, 60 at 200, 60 at 300 — the best minute is the
+	// last one, and the mean over the whole thing is 200.
+	tt := make([]int, 0, 181)
+	vals := make([]float64, 0, 181)
+	for i := 0; i <= 180; i++ {
+		tt = append(tt, i)
+		switch {
+		case i <= 60:
+			vals = append(vals, 100)
+		case i <= 120:
+			vals = append(vals, 200)
+		default:
+			vals = append(vals, 300)
+		}
+	}
+	got := bestRolling(tt, vals, 60)
+	if got == nil || *got != 300 {
+		t.Errorf("best 60 s = %v, want 300", got)
+	}
+	if b := bestRolling(tt[:30], vals[:30], 60); b != nil {
+		t.Errorf("a trace shorter than the window returned %v, want nil", *b)
+	}
+	if b := bestRolling(nil, nil, 60); b != nil {
+		t.Errorf("empty trace returned %v", *b)
+	}
+}
+
 // TestNonMonotonicTimeKeepsDiffZero: a backwards timestamp (a chained-file
 // seam) contributes nothing anywhere — the histogram and the stream
 // computation must still agree exactly.

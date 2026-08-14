@@ -250,6 +250,8 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 	}
 	type powerOut struct {
 		Avg     float64 `json:"avg"`
+		Max     int     `json:"max,omitempty"`
+		Best60s float64 `json:"best_60s,omitempty"`
 		WKg     float64 `json:"wkg,omitempty"`
 		PctFTP  float64 `json:"pct_ftp,omitempty"`
 		Z2BandW []int   `json:"z2_band_w,omitempty"`
@@ -274,6 +276,7 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		Cadence       *float64       `json:"cadence,omitempty"`
 		GradeInput    map[string]any `json:"grade_input,omitempty"`
 		First20       *first20Out    `json:"first_20min,omitempty"`
+		Profile       []profilePoint `json:"profile,omitempty"`
 	}{Name: row.Name, Date: row.Date, Sport: row.Sport, StartUTC: row.StartUTC,
 		ElapsedS: row.ElapsedS, Records: row.Records, DistanceM: row.DistanceM,
 		SHA256:     row.SHA256,
@@ -347,6 +350,30 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 			}
 		} else {
 			log.Printf("activity-metrics %s: %v", name, err)
+		}
+	}
+
+	// How the session was actually ridden or run, minute by minute — capped
+	// so an hour and a three-hour ride both cost about the same to read.
+	if streams != nil {
+		out.Profile = sessionProfile(streams, 60)
+	}
+
+	// The peak an average hides. A ramp test's whole result is its best
+	// minute — FTP is derived from it — and a ride that climbed to failure
+	// reads as a soft steady effort until these are on the page.
+	if out.Power != nil && streams != nil && streams.HaveWatts {
+		mx := 0
+		for _, w := range streams.Watts {
+			if w > mx {
+				mx = w
+			}
+		}
+		out.Power.Max = mx
+		if kind == "bike" {
+			if b := bestRolling(streams.Time, intsToFloats(streams.Watts), 60); b != nil {
+				out.Power.Best60s = pyRound(*b, 1)
+			}
 		}
 	}
 
