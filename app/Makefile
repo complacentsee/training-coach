@@ -14,6 +14,14 @@ REMOTE  ?= your-server
 DEST    ?= ~/running-coach
 PORT    ?= 9999
 
+# The dev stack: same server, own image tag, container, port and volume.
+# deploy-dev/seed-dev/logs-dev never touch the live stack.
+DEVDEST ?= ~/running-coach-dev
+DEVPORT ?= 9998
+# How much of the live activity archive seed-dev copies across, in days by
+# device name (names are local-time timestamps, so lexicographic ≥ works).
+SEED_DAYS ?= 30
+
 SSH := ssh -o ConnectTimeout=10
 
 # A hash of everything that ends up in the image. Docker image IDs do not
@@ -27,7 +35,7 @@ SRC_HASH = $(shell cat Dockerfile go.mod go.sum `ls *.go | grep -v _test` defaul
 # the server uses, so local and live are directly comparable.
 DATA_REV = go run . -validate -data ./data 2>&1 | sed -n 's/.*rev=\([0-9a-f]*\).*/\1/p'
 
-.PHONY: help run build image test validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean
+.PHONY: help run build image test validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
 
 help:           ## list targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /|/' | column -t -s'|'
@@ -175,6 +183,102 @@ verify:         ## confirm the live site serves this exact build AND this exact 
 
 logs:           ## tail the container log
 	$(SSH) $(REMOTE) 'docker logs -f running-coach'
+
+# The dev stack mirrors deploy's verify-everything discipline but is entirely
+# parallel: running-coach:dev, running-coach-dev, $(DEVPORT), $(DEVDEST).
+# It ships no plan data — that is seed-dev's job, and dev's data comes from
+# live, not from this working tree.
+deploy-dev:     ## build the current tree, ship and restart ONLY the dev stack
+	@set -e; \
+	$(MAKE) --no-print-directory image TAG=dev; \
+	WANT=$(SRC_HASH); \
+	[ -n "$$WANT" ] || { echo "FAILED: could not hash sources" >&2; exit 1; }; \
+	echo "build         $$WANT"; \
+	HAVE=$$($(SSH) $(REMOTE) "docker inspect $(IMAGE):dev --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' 2>/dev/null" || true); \
+	if [ "$$WANT" = "$$HAVE" ]; then \
+	  echo "remote        already has this build"; \
+	else \
+	  echo "transferring  from $$HAVE ..."; \
+	  docker save $(IMAGE):dev | gzip | $(SSH) $(REMOTE) 'gunzip | docker load' >/dev/null; \
+	  GOT=$$($(SSH) $(REMOTE) "docker inspect $(IMAGE):dev --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}'"); \
+	  [ "$$WANT" = "$$GOT" ] || { \
+	    echo "FAILED: dev image on $(REMOTE) is build '$$GOT', expected '$$WANT'" >&2; exit 1; }; \
+	  echo "transferred   ok"; \
+	fi; \
+	$(SSH) $(REMOTE) "mkdir -p $(DEVDEST)/data"; \
+	scp -q compose.dev.yml $(REMOTE):$(DEVDEST)/compose.yml; \
+	$(SSH) $(REMOTE) "cd $(DEVDEST) && DEV_PORT=$(DEVPORT) docker compose up -d" >/dev/null 2>&1; \
+	sleep 2; \
+	RUN=$$($(SSH) $(REMOTE) "docker inspect running-coach-dev --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' 2>/dev/null" || true); \
+	[ "$$WANT" = "$$RUN" ] || { \
+	  echo "FAILED: dev container is running build '$$RUN', expected '$$WANT'" >&2; exit 1; }; \
+	$(MAKE) --no-print-directory verify-dev
+
+# verify-dev checks the build half only. The data half deliberately isn't
+# compared against this working tree: dev's plan is a seeded copy of live's,
+# which is allowed to differ from ./data here. The rev is still reported so a
+# stale seed is visible.
+verify-dev:     ## confirm the dev stack serves this exact build
+	@set -e; \
+	WANT=$(SRC_HASH); \
+	RAW=$$(curl -s -m 10 --fail http://$(HOST):$(DEVPORT)/healthz) \
+	  || { echo "FAILED: no response from http://$(HOST):$(DEVPORT)/healthz" >&2; exit 1; }; \
+	LIVE=$$(printf '%s' "$$RAW" | sed -n 's/.*"build":"\([^"]*\)".*/\1/p'); \
+	[ "$$WANT" = "$$LIVE" ] || { \
+	  echo "FAILED: dev build '$$LIVE', local '$$WANT' - serving a stale build" >&2; exit 1; }; \
+	CODE=$$(curl -s -m 10 -o /dev/null -w '%{http_code}' http://$(HOST):$(DEVPORT)/); \
+	[ "$$CODE" = "200" ] || { echo "FAILED: GET / returned $$CODE" >&2; exit 1; }; \
+	DREV=$$(printf '%s' "$$RAW" | sed -n 's/.*"data":"\([^"]*\)".*/\1/p'); \
+	echo "dev           http://$(HOST):$(DEVPORT)  build $$LIVE  data $$DREV"
+
+# seed-dev copies live's plan and log into the dev stack's volume, plus a
+# partial activity slice: the last $(SEED_DAYS) days by device name, and any
+# names listed one-per-line in data/seed-curated.txt (gitignored) — the
+# curated edge-case set. Plan files copy on the filesystem; activities go
+# through the two apps' own APIs (GET live → POST dev, both on localhost)
+# because the live archive's files are container-written 0600 and the ssh
+# user cannot read them — and dev's postActivity validating each byte it
+# takes is a feature, not a workaround. 409 means already seeded, so
+# re-seeding is idempotent. blocks/ and library/ are replaced wholesale,
+# same as push-files. entries.jsonl is REPLACED on every seed: dev's log is
+# disposable by design, and re-seeding is the reset.
+seed-dev:       ## populate the dev stack's data from live (partial activities)
+	@set -e; \
+	CURATED=""; \
+	[ -f data/seed-curated.txt ] && CURATED=$$(grep -v '^\#' data/seed-curated.txt | tr '\n' ' '); \
+	$(SSH) $(REMOTE) "set -e; \
+	  SRC=$(DEST)/data; DST=$(DEVDEST)/data; \
+	  [ -f \$$SRC/athlete.json ] || { echo 'FAILED: no live data at '\$$SRC >&2; exit 1; }; \
+	  mkdir -p \$$DST; \
+	  rm -rf \$$DST/blocks \$$DST/library; \
+	  cp \$$SRC/athlete.json \$$DST/athlete.json; \
+	  cp -R \$$SRC/blocks \$$DST/blocks; \
+	  cp -R \$$SRC/library \$$DST/library; \
+	  cp \$$SRC/entries.jsonl \$$DST/entries.jsonl 2>/dev/null || true; \
+	  CUT=\$$(date -d '$(SEED_DAYS) days ago' +%Y-%m-%d); \
+	  NAMES=\$$(curl -s -m 30 --fail http://localhost:$(PORT)/api/activities \
+	    | grep -o '\"name\":\"[^\"]*\"' | cut -d'\"' -f4); \
+	  N=0; F=0; T=\$$(mktemp); \
+	  for b in \$$NAMES $$CURATED; do \
+	    case \$$b in *.fit) ;; *) continue;; esac; \
+	    keep=no; \
+	    [ \"\$$b\" \\> \"\$$CUT\" ] && keep=yes; \
+	    for c in $$CURATED; do [ \"\$$b\" = \"\$$c\" ] && keep=yes; done; \
+	    [ \$$keep = yes ] || continue; \
+	    CODE=\$$(curl -s -m 30 -o \$$T -w '%{http_code}' \"http://localhost:$(PORT)/api/activity?name=\$$b\"); \
+	    [ \"\$$CODE\" = 200 ] || { echo \"WARN: live GET \$$b -> \$$CODE\" >&2; F=\$$((F+1)); continue; }; \
+	    CODE=\$$(curl -s -m 30 -o /dev/null -w '%{http_code}' -X POST --data-binary @\$$T \"http://localhost:$(DEVPORT)/api/activity?name=\$$b\"); \
+	    case \$$CODE in 204) N=\$$((N+1));; 409) ;; *) echo \"WARN: dev POST \$$b -> \$$CODE\" >&2; F=\$$((F+1));; esac; \
+	  done; \
+	  rm -f \$$T; \
+	  [ \$$F = 0 ] || { echo \"FAILED: \$$F activities did not seed\" >&2; exit 1; }; \
+	  echo \"seeded        \$$N new activities this run\""; \
+	curl -s -m 10 --fail -X POST http://$(HOST):$(DEVPORT)/api/reload >/dev/null \
+	  || { echo "FAILED: dev /api/reload rejected the seeded plan" >&2; exit 1; }; \
+	echo "seed          done — dev serving the seeded plan"
+
+logs-dev:       ## tail the dev container log
+	$(SSH) $(REMOTE) 'docker logs -f running-coach-dev'
 
 fetch-log:      ## pull the entry log back for Claude to read
 	scp $(REMOTE):$(DEST)/data/entries.jsonl ./data/entries.jsonl
