@@ -278,12 +278,26 @@ func (c *llmClient) openaiTurn(ctx context.Context, system string, msgs []llmMsg
 // target.
 const llmLoopTurns = 10
 
-func runLLMLoop(ctx context.Context, turn llmTurn, system, prompt string, tools []llmTool) (string, error) {
+// llmMaxNudges is how many times a model that stops without finishing its
+// work is told to finish it. A small model reliably gathers its facts and
+// then writes its conclusion as prose instead of calling the tool that
+// records it — measured on a local 4B, 14 Aug 2026. One reminder converts
+// that into a completed call; two is the limit, because a model that will
+// not finish after being asked twice is not going to.
+const llmMaxNudges = 2
+
+// runLLMLoop drives the conversation. done reports whether the model has
+// actually completed its work — when it is non-nil and still false as the
+// model tries to stop, the model is nudged rather than taken at its word.
+// Pass nil when ending the turn is itself completion.
+func runLLMLoop(ctx context.Context, turn llmTurn, system, prompt string, tools []llmTool,
+	done func() bool, nudge string) (string, error) {
 	byName := make(map[string]*llmTool, len(tools))
 	for i := range tools {
 		byName[tools[i].Name] = &tools[i]
 	}
 	msgs := []llmMsg{{Role: "user", Text: prompt}}
+	nudges := 0
 	for i := 0; i < llmLoopTurns; i++ {
 		reply, reason, err := turn(ctx, system, msgs, tools)
 		if err != nil {
@@ -291,7 +305,13 @@ func runLLMLoop(ctx context.Context, turn llmTurn, system, prompt string, tools 
 		}
 		msgs = append(msgs, reply)
 		if len(reply.Calls) == 0 || (reason != "tool_use" && reason != "tool_calls") {
-			return reply.Text, nil // end_turn/stop/refusal/max_tokens all land here
+			// end_turn/stop/refusal/max_tokens all land here
+			if done == nil || done() || nudges >= llmMaxNudges {
+				return reply.Text, nil
+			}
+			nudges++
+			msgs = append(msgs, llmMsg{Role: "user", Text: nudge})
+			continue
 		}
 		res := llmMsg{Role: "tool"}
 		for _, tc := range reply.Calls {

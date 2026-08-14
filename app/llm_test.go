@@ -63,7 +63,7 @@ func TestAnthropicDialectRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	c := &llmClient{HTTP: &http.Client{Timeout: 5 * time.Second}, BaseURL: srv.URL, Model: "m", MaxTokens: 256}
-	out, err := runLLMLoop(context.Background(), c.anthropicTurn, "sys", "weather in Tokyo?", []llmTool{weatherTool(t)})
+	out, err := runLLMLoop(context.Background(), c.anthropicTurn, "sys", "weather in Tokyo?", []llmTool{weatherTool(t)}, nil, "")
 	if err != nil || out != "22C and clear." || turns != 2 {
 		t.Fatalf("out=%q err=%v turns=%d", out, err, turns)
 	}
@@ -103,7 +103,7 @@ func TestOpenAIDialectRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	c := &llmClient{HTTP: &http.Client{Timeout: 5 * time.Second}, BaseURL: srv.URL, Model: "m", MaxTokens: 256}
-	out, err := runLLMLoop(context.Background(), c.openaiTurn, "sys", "weather in Tokyo?", []llmTool{weatherTool(t)})
+	out, err := runLLMLoop(context.Background(), c.openaiTurn, "sys", "weather in Tokyo?", []llmTool{weatherTool(t)}, nil, "")
 	if err != nil || out != "22C and clear." || turns != 2 {
 		t.Fatalf("out=%q err=%v turns=%d", out, err, turns)
 	}
@@ -131,7 +131,7 @@ func TestLoopSurfacesToolErrors(t *testing.T) {
 	defer srv.Close()
 
 	c := &llmClient{HTTP: &http.Client{Timeout: 5 * time.Second}, BaseURL: srv.URL, Model: "m", MaxTokens: 256}
-	out, err := runLLMLoop(context.Background(), c.anthropicTurn, "", "hi", nil)
+	out, err := runLLMLoop(context.Background(), c.anthropicTurn, "", "hi", nil, nil, "")
 	if err != nil || out != "understood." {
 		t.Fatalf("out=%q err=%v", out, err)
 	}

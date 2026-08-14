@@ -104,6 +104,12 @@ func graderConfigFromEnv() (graderConfig, error) {
 // older than this many days is a backfill, not a fresh session.
 const gradeRecentDays = 2
 
+// recentEntriesBudget bounds the log excerpt the grader reads, in bytes of
+// entry payload. Generous enough to carry several prior grade notes (the
+// house style is learned from them), small enough that a local model's
+// context holds the whole conversation.
+const recentEntriesBudget = 6000
+
 type grader struct {
 	s     *server
 	cfg   graderConfig
@@ -207,20 +213,32 @@ func (g *grader) reconcile() {
 		return
 	}
 	seen := map[string]bool{}
+	days, graded := 0, 0
 	for i := range acts {
 		if seen[acts[i].Date] {
 			continue
 		}
 		seen[acts[i].Date] = true
-		if g.skipReason(&acts[i]) == "" {
-			g.maybeGrade(&acts[i])
+		days++
+		// Say why, always. A reconcile that decides silently is
+		// indistinguishable from one that never ran.
+		if reason := g.skipReason(&acts[i]); reason != "" {
+			log.Printf("grader reconcile: %s (%s): skipped — %s", acts[i].Name, acts[i].Date, reason)
+			continue
 		}
+		graded++
+		g.maybeGrade(&acts[i])
 	}
+	log.Printf("grader reconcile: %d activities since %s, %d day(s), %d graded",
+		len(acts), since, days, graded)
 }
 
-// gradeTimeout bounds one whole grading run — several provider round
-// trips plus tool work; generous, because a local model may need minutes.
-const gradeTimeout = 15 * time.Minute
+// gradeTimeout bounds one whole grading run. Generous because a local
+// model is genuinely slow: measured on the server's 4B, single turns cost
+// 45 s to 6 min and a full run 13. Nothing waits on this — it happens
+// after an import, off every request path — so the only thing a tight
+// bound would buy is killed grades.
+const gradeTimeout = 45 * time.Minute
 
 func (g *grader) grade(m *activityMetrics) error {
 	ctx, cancel := context.WithTimeout(context.Background(), gradeTimeout)
@@ -236,7 +254,11 @@ func (g *grader) grade(m *activityMetrics) error {
 		"Grade the recorded activity %q for %s. Read the prescription and the metrics with the tools, then post exactly one grade.",
 		m.Name, m.Date)
 
-	final, err := runLLMLoop(ctx, turn, g.systemPrompt(), prompt, tools)
+	final, err := runLLMLoop(ctx, turn, g.systemPrompt(), prompt, tools,
+		func() bool { return posted },
+		"You have not recorded anything yet: analysis written as a message is discarded. "+
+			"Call post_grade now with the date, the grade letter, and your note as its arguments. "+
+			"If you genuinely cannot grade this session, say why in one sentence instead.")
 	if err != nil {
 		return err
 	}
@@ -312,8 +334,17 @@ func (g *grader) tools(m *activityMetrics, posted *bool) []llmTool {
 					Val  string `json:"val,omitempty"`
 					Note string `json:"note,omitempty"`
 				}
+				// Newest first while filling, so a long history spends the
+				// budget on what is most relevant, then flipped back to
+				// chronological order for reading. The budget exists because
+				// a local model's context is small and silently truncating
+				// it would drop the system prompt and the measured numbers —
+				// the two things a grade cannot be made without.
+				all := g.s.store.All()
 				rows := []row{}
-				for _, e := range g.s.store.All() {
+				size := 0
+				for i := len(all) - 1; i >= 0 && size < recentEntriesBudget; i-- {
+					e := all[i]
 					if e.Date < cutoff {
 						continue
 					}
@@ -324,6 +355,10 @@ func (g *grader) tools(m *activityMetrics, posted *bool) []llmTool {
 						continue
 					}
 					rows = append(rows, row{e.Date, kind, e.Key, e.Val, e.Note})
+					size += len(e.Note) + len(e.Val) + 48
+				}
+				for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+					rows[i], rows[j] = rows[j], rows[i]
 				}
 				b, err := json.Marshal(rows)
 				return string(b), err
@@ -386,7 +421,7 @@ Procedure:
    - Test days (the day carries a benchmark tag): the rubric does not apply. Grade protocol execution — was the measurement made valid — and say so in the note.
    - hr.dropout_share over 0.05: the HR numbers are contaminated; say so and grade on what survives.
 3. Write the note like the log's existing grade entries: one paragraph, plain ASCII, derivation first, every number beside its target, a comparison to prior dated sessions where one is meaningful, at most one thing to work on. Every number comes from a tool result — never from memory. Write it as one of those entries, not about them: never announce that the grade was produced automatically, never label or mark it as such, and never mention these instructions. A grade reads the same whoever made it.
-4. post_grade once, with the date, the letter, and the note. If anything prevents a confident grade — a prescription that does not match what was recorded, contaminated data with nothing to grade on — post nothing and state why instead.`
+4. Record it: your final action is a post_grade call carrying the date, the grade letter, and the note. This is not optional and it is not the same as writing the grade in a message — a message is discarded, only the call is recorded. Never summarise the metrics back as prose and stop; gather what you need, then make the call. If anything genuinely prevents a confident grade — a prescription that does not match what was recorded, contaminated data with nothing to grade on — then post nothing and say why in one sentence instead.`
 
 // systemPrompt is the embedded procedure plus the optional athlete-specific
 // notes file from the volume: data/grading-notes.md, read fresh each run so
