@@ -1,70 +1,47 @@
 # Running Coach
 
-A self-hosted dashboard for running a structured training block. You write
-the plan once as plain JSON — sessions, targets, heart-rate caps, an injury
-protocol if you're managing one — and the app turns it into a daily
-coaching surface: what to do today and why, the whole block on a calendar,
-a guide for every workout, checkoffs, injury ratings, and per-session
-grades. It also speaks Garmin: structured workouts export straight to a
-watch over WebUSB from the browser, and recorded activities pull back off
-it into a permanent archive on your own server.
-
-**Use it if** you (or someone you coach) train from a written plan and want
-it to live somewhere better than a spreadsheet or a paid platform: your
-hardware, your data, plain files, no accounts.
+A self-hosted dashboard for running a structured training plan. Write the
+plan as JSON; the app turns it into a daily coaching view — plus two-way
+Garmin watch sync straight from the browser.
 
 ## What it looks like
 
-Today — the one page that answers "what am I doing and how should it feel":
+Today: the session, its targets, your checklist, and the injury check-in.
 
-![The today view: session card with targets, checklist, injury rating, feedback](docs/today.png)
+![Today view](docs/today.png)
 
-The whole block, with weekly volume derived from the sessions (never
-retyped) and grades filling in as you train:
+Calendar: the whole block, weekly volume, and grades as they land.
 
-![The calendar: every week and day of the block, FIT export pills on structured days](docs/calendar.png)
+![Calendar](docs/calendar.png)
 
-Every session and movement the plan prescribes, each opening into a guide:
+Workouts: everything the plan prescribes, each with a how-to guide.
 
-![The workouts page: sessions, daily work, and movement guides](docs/workouts.png)
+![Workouts](docs/workouts.png)
 
-The watch page — two-way sync with a Garmin watch, straight from the
-browser. Plug in over USB, connect, and the **To watch** tab sends the
-plan's structured workouts as FIT files (the next fortnight pre-selected,
-because the watch itself caps stored workouts at 25); the **From watch**
-tab lists the watch's recorded activities, shows which are new, and pulls
-them into the server's archive — saved once, never overwritten, and only
-counted as saved after the page re-reads the server's own list. One
-connection does both directions, nothing on the watch is ever deleted or
-renamed, and the transfer log at the bottom shows every MTP container on
-the wire when you care to look:
+Watch: send workouts to a Garmin watch and pull recorded activities back.
+Works in Chrome/Edge over USB — no vendor software.
 
-![The watch page: To-watch and From-watch tabs, workout list with the fortnight pre-selected](docs/watch.png)
+![Watch sync](docs/watch.png)
 
-## How it works
+## Features
 
-- **The plan is data.** One athlete file (units, timezone, HR/power/pace
-  anchors, an optional injury declaration) plus one JSON file per block.
-  Every human-readable string is a template resolved against the athlete —
-  flip `"units"` to metric or retest your FTP and everything derived
-  re-renders. A data error is a startup failure, not a surprise in week
-  eleven.
-- **The log is append-only.** Checkoffs, injury ratings, feedback, and
-  grades are events in a JSONL file; state is a replay. Nothing is ever
-  rewritten.
-- **Watch sync, no vendor software.** The `/watch` page is a hand-rolled
-  MTP-over-WebUSB client (Chrome/Edge, HTTPS): it sends structured workout
-  FIT files to the watch and pulls recorded activities off it. The server
-  stores activity bytes untouched and never decodes them;
-  `tools/fit_streams.py` turns a stored file into analysis-ready streams.
-- **One binary.** Go standard library only, templates and assets compiled
-  in, shipped as a `FROM scratch` image (~18 MB). The plan is *not* in the
-  image — it lives on a mounted volume, so plan changes go live with a file
-  copy and a reload, no rebuild.
+- **Plan as data** — an athlete file (units, timezone, HR/power/pace
+  anchors) plus one JSON file per training block. Change an anchor and
+  every derived number in the app updates.
+- **Daily log** — checkoffs, injury ratings, free-text feedback, and
+  per-session grades on the calendar.
+- **Injury tracking** — declare an issue with a rating scale and
+  green/amber/red bands; the app asks daily and tells you what to do at
+  each level.
+- **Watch sync** — structured workouts export as Garmin FIT files (and
+  Zwift `.zwo` for trainer rides); recorded activities pull back into an
+  archive on your server. `tools/fit_streams.py` converts an activity for
+  analysis.
+- **Small and self-contained** — one Go binary (standard library only),
+  ~18 MB image. The plan lives on a mounted volume, so plan edits go live
+  with a file copy and a reload — no rebuild.
 
-## Kick it off
-
-With Go installed:
+## Run it
 
 ```sh
 cd app
@@ -72,12 +49,10 @@ make run     # http://localhost:8080 — serves the built-in example athlete
 make test
 ```
 
-The repo ships a complete example under `app/defaults/` — a generic athlete
-with a two-week base block and an injury protocol — which is exactly what
-the screenshots above show. The moment you put your own files in `app/data/`
-(gitignored), the example steps aside.
+The example athlete under `app/defaults/` (a two-week block, shown in the
+screenshots) serves until you put your own plan in `app/data/`.
 
-## Build the Docker image
+## Docker
 
 ```sh
 cd app
@@ -85,22 +60,14 @@ docker build --build-arg SRC_HASH=$(git rev-parse --short HEAD) -t running-coach
 docker run -d -p 8080:8080 -v "$PWD/data:/data" running-coach
 ```
 
-The build refuses to produce an image whose binary links anything beyond
-the standard library (`go version -m` must show no `dep` line — the one
-module in go.mod is a test-only FIT decoder). An empty `/data` volume
-serves the example athlete; a populated one serves your plan. `compose.yml`
-is the running configuration: restart policy, port, timezone, and the
-single bind mount that holds everything worth keeping — the plan, the log,
-and the activity archive.
+An empty `/data` volume serves the example athlete; your files serve your
+plan. `compose.yml` has the full running configuration.
 
-## Run your own plan
+## Your own plan
 
-1. Read `AUTHORING.md` — every field, and everything the loader refuses
-   (it validates shape *and* meaning at startup, deliberately fatally).
-2. Or let an LLM interview you: `tools/new-athlete.md` is a prompt that
-   ends in a validated athlete file and first block.
-3. Put the files in `app/data/`, then `make validate` and `make run`.
-4. To deploy to a server: put your host/ssh coordinates in `app/local.mk`
-   (gitignored), then `make deploy` — it builds for arm64, ships the image
-   over ssh without a registry, pushes the plan, restarts, and verifies
-   that the live site serves exactly this build *and* this data.
+1. `AUTHORING.md` documents every field. Or let an LLM interview you:
+   `tools/new-athlete.md` ends in a validated athlete file and first block.
+2. Put the files in `app/data/`, then `make validate` and `make run`.
+3. For a server: put host/ssh coordinates in `app/local.mk`, then
+   `make deploy` — builds for arm64, ships over ssh, restarts, and
+   verifies the live site serves this build and this plan.
