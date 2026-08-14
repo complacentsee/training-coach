@@ -257,8 +257,8 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		Z2BandW []int   `json:"z2_band_w,omitempty"`
 	}
 	type first20Out struct {
-		Avg float64 `json:"avg"`
-		Cap int     `json:"cap"`
+		Avg float64 `json:"avg_bpm"`
+		Cap int     `json:"cap_bpm"`
 	}
 	out := struct {
 		Name          string         `json:"name"`
@@ -385,7 +385,7 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 			} else if share != nil {
 				out.GradeInput = map[string]any{
 					"under_grade_cap_share": pyRound(*share, 4),
-					"grade_cap":             cap,
+					"grade_cap_bpm":         cap,
 				}
 			}
 		}
@@ -401,13 +401,16 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		if okLo && okHi && okCap && streams != nil {
 			inBand, secsOver := bikeGradeInput(streams, lo, hi, cap)
 			if inBand != nil {
+				// Named in their units: these sit beside watts, and an
+				// unlabelled "cap: 145" beside "avg: 119.2 W" came back out
+				// of a grade note as "145 W" when it is a heart rate.
 				gi := map[string]any{
 					"in_band_share_after_warmup": pyRound(*inBand, 4),
-					"band":                       []int{lo, hi},
-					"cap":                        cap,
+					"hr_band_bpm":                []int{lo, hi},
+					"hr_cap_bpm":                 cap,
 				}
 				if secsOver != nil {
-					gi["secs_over_cap"] = *secsOver
+					gi["secs_over_hr_cap"] = *secsOver
 				}
 				out.GradeInput = gi
 			}
