@@ -274,7 +274,7 @@ func TestAcceptanceGate(t *testing.T) {
 			streamDiffs++
 		}
 		if py.Error != "" {
-			if strings.Contains(py.Error, "__round__") && goRes[n].metrics.AvgHR == nil {
+			if why := mirrorCrashExplained(py.Error, goRes[n].metrics, goRes[n].streams, d); why != "" {
 				mirrorRefused++
 			} else {
 				t.Errorf("%s: python metrics: %s", n, py.Error)
@@ -292,6 +292,29 @@ func TestAcceptanceGate(t *testing.T) {
 	}
 	t.Logf("gate: %d activities, %d stream diffs, %d metric diffs over %d comparisons, %d mirror-refused (all-dropout HR)",
 		len(names), streamDiffs, metricDiffs, metricsCompared, mirrorRefused)
+}
+
+// mirrorCrashExplained names the mirror-side crash mode when grade_metrics
+// dies on a degenerate value the Go register correctly omits — all measured
+// crash modes are None reaching round() or arithmetic. Explained ONLY when
+// the Go side agrees the corresponding value does not exist; anything else
+// is a real diff.
+func mirrorCrashExplained(errText string, m *activityMetrics, s *activityStreams, d *dataset) string {
+	if !strings.Contains(errText, "__round__") && !strings.Contains(errText, "unsupported operand") {
+		return ""
+	}
+	inBand, _ := bikeGradeInput(s, d.Athlete.HR["bikeLo"], d.Athlete.HR["bikeHi"], d.Athlete.HR["bikeCap"])
+	switch {
+	case m.AvgHR == nil:
+		return "all-dropout HR"
+	case s.Sport == "cycling" && inBand == nil:
+		return "no after-warm-up window (ride under 600 s)"
+	case m.HRDrift == nil:
+		return "degenerate drift half"
+	case s.Sport == "running" && runFirst20Mean(s) == nil:
+		return "no valid first-20-min sample"
+	}
+	return ""
 }
 
 // diffStreams compares the Go streams against the mirror's JSON, exactly.

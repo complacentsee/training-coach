@@ -246,7 +246,7 @@ verify-dev:     ## confirm the dev stack serves this exact build
 seed-dev:       ## populate the dev stack's data from live (partial activities)
 	@set -e; \
 	CURATED=""; \
-	[ -f data/seed-curated.txt ] && CURATED=$$(grep -v '^\#' data/seed-curated.txt | tr '\n' ' '); \
+	[ -f data/seed-curated.txt ] && CURATED=$$(grep -hE '^[A-Za-z0-9][A-Za-z0-9._-]*\.fit$$' data/seed-curated.txt | tr '\n' ' '); \
 	$(SSH) $(REMOTE) "set -e; \
 	  SRC=$(DEST)/data; DST=$(DEVDEST)/data; \
 	  [ -f \$$SRC/athlete.json ] || { echo 'FAILED: no live data at '\$$SRC >&2; exit 1; }; \
@@ -258,8 +258,9 @@ seed-dev:       ## populate the dev stack's data from live (partial activities)
 	  cp \$$SRC/entries.jsonl \$$DST/entries.jsonl 2>/dev/null || true; \
 	  cp \$$SRC/grading-notes.md \$$DST/grading-notes.md 2>/dev/null || true; \
 	  CUT=\$$(date -d '$(SEED_DAYS) days ago' +%Y-%m-%d); \
-	  NAMES=\$$(curl -s -m 30 --fail http://localhost:$(PORT)/api/activities \
-	    | grep -o '\"name\":\"[^\"]*\"' | cut -d'\"' -f4); \
+	  LISTING=\$$(curl -s -m 30 --fail http://localhost:$(PORT)/api/activities) \
+	    || { echo 'FAILED: live /api/activities unreachable — nothing seeded' >&2; exit 1; }; \
+	  NAMES=\$$(printf '%s' \"\$$LISTING\" | grep -o '\"name\":\"[^\"]*\"' | cut -d'\"' -f4); \
 	  N=0; F=0; T=\$$(mktemp); \
 	  for b in \$$NAMES $$CURATED; do \
 	    case \$$b in *.fit) ;; *) continue;; esac; \

@@ -259,7 +259,10 @@ func TestNoHRFile(t *testing.T) {
 // read back from hr_hist by SQL equals the direct stream computation
 // exactly, at several caps, dropouts included.
 func TestHistogramMatchesDirectShares(t *testing.T) {
-	hrs := []uint8{40, 45, 60, 120, 150, 155, 157, 158, 170, 185, 60, 45}
+	// 49 and 50 pin the dropout boundary from both sides: 50 is the first
+	// valid sample, and a drift to >50 or >=51 in either the SQL or the
+	// stream side breaks the equality below.
+	hrs := []uint8{40, 45, 49, 50, 60, 120, 150, 155, 157, 158, 170, 185, 60, 45}
 	msgs := make([]proto.Message, 0, len(hrs)+1)
 	for i, h := range hrs {
 		msgs = append(msgs, runRecord(i, h, 3000, 80))
@@ -427,6 +430,19 @@ func TestReconcileImportsTheArchive(t *testing.T) {
 	if msg, err := db.failureFor("2026-08-03-12-00-00.fit"); err != nil || msg == "" {
 		t.Errorf("junk file's failure not recorded (msg=%q err=%v)", msg, err)
 	}
+
+	// A recorded failure must RETRY on the next pass, not wedge: heal the
+	// file (test-only surgery) and reconcile again.
+	if err := os.WriteFile(filepath.Join(actDir, "2026-08-03-12-00-00.fit"), good, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db.reconcile(actDir, time.UTC)
+	if ok, _ := db.has("2026-08-03-12-00-00.fit"); !ok {
+		t.Error("failure did not retry on the next reconcile pass")
+	}
+	if msg, _ := db.failureFor("2026-08-03-12-00-00.fit"); msg != "" {
+		t.Errorf("stale failure survived a successful retry: %q", msg)
+	}
 }
 
 // TestSchemaVersionBumpRebuilds: a version mismatch drops the derived
@@ -524,11 +540,304 @@ func TestDayAPI(t *testing.T) {
 	}
 }
 
+// TestPyRoundMatchesPythonTies pins the mirror-parity rounding on the tie
+// quotients where RoundToEven(x·10ⁿ)/10ⁿ measurably diverges from python's
+// round() — weighted means are integer-sum quotients, so these are
+// reachable from ordinary HR data.
+func TestPyRoundMatchesPythonTies(t *testing.T) {
+	cases := []struct {
+		x    float64
+		n    int
+		want float64
+	}{
+		{2007.0 / 20, 1, 100.3}, // just under the tie; python 100.3
+		{2049.0 / 20, 1, 102.5}, // just over the tie; python 102.5
+		{-2007.0 / 20, 1, -100.3},
+		{160.5, 0, 160}, // the FTP-214 z2 band top: exact tie, to even
+		{0.125, 2, 0.12},
+		{-2.5, 0, -2},
+		{10.45, 2, 10.45},
+	}
+	for _, c := range cases {
+		if got := pyRound(c.x, c.n); got != c.want {
+			t.Errorf("pyRound(%v, %d) = %v, want %v", c.x, c.n, got, c.want)
+		}
+	}
+}
+
+// TestBikeDecouplingExcludesWarmup pins the register's 600 s rule with the
+// same records under both sports: a ride whose first ten minutes would
+// swamp the signal decouples 0 as a bike and 200 as a run.
+func TestBikeDecouplingExcludesWarmup(t *testing.T) {
+	build := func(sport typedef.Sport) *activityMetrics {
+		msgs := make([]proto.Message, 0, 1202)
+		for i := 0; i <= 1200; i++ {
+			hr, w := uint8(100), uint16(300) // warm-up: high output, low HR
+			if i > 600 {
+				hr, w = 150, 150 // steady: efficiency exactly 1.0
+			}
+			msgs = append(msgs, mesgdef.NewRecord(nil).
+				SetTimestamp(fixtureT0.Add(time.Duration(i)*time.Second)).
+				SetHeartRate(hr).
+				SetPower(w).ToMesg(nil))
+		}
+		msgs = append(msgs, sessionMsg(sport, 100_00))
+		s, err := decodeActivity(encodeActivityFixture(t, msgs...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return computeMetrics("x.fit", "2026-08-01", s)
+	}
+	bike := build(typedef.SportCycling)
+	if bike.DecouplingPct == nil || *bike.DecouplingPct != 0 {
+		t.Errorf("bike decoupling = %v, want exactly 0 (warm-up excluded)", bike.DecouplingPct)
+	}
+	run := build(typedef.SportRunning)
+	if run.DecouplingPct == nil || *run.DecouplingPct != 200 {
+		t.Errorf("run decoupling = %v, want exactly 200 (whole trace)", run.DecouplingPct)
+	}
+}
+
+// TestNonMonotonicTimeKeepsDiffZero: a backwards timestamp (a chained-file
+// seam) contributes nothing anywhere — the histogram and the stream
+// computation must still agree exactly.
+func TestNonMonotonicTimeKeepsDiffZero(t *testing.T) {
+	secs := []int{0, 1, 2, 3, 4, 5, 3, 6, 7, 8, 9, 10}
+	hrs := []uint8{45, 120, 150, 158, 45, 160, 140, 120, 155, 49, 50, 165}
+	msgs := make([]proto.Message, 0, len(secs)+1)
+	for i, sec := range secs {
+		msgs = append(msgs, runRecord(sec, hrs[i], 3000, 80))
+	}
+	msgs = append(msgs, sessionMsg(typedef.SportRunning, 30_00))
+	data := encodeActivityFixture(t, msgs...)
+
+	s, err := decodeActivity(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Time[6] != 3 {
+		t.Fatalf("backwards timestamp lost: %v", s.Time)
+	}
+	db, err := openMetricsDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.close()
+	const name = "2026-08-01-12-00-00.fit"
+	if _, err := db.importOne(name, data, time.UTC); err != nil {
+		t.Fatal(err)
+	}
+	for _, cap := range []int{50, 140, 157} {
+		sqlShare, err := db.underCapShareSQL(name, cap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		direct := runGradeShare(s, cap)
+		if (sqlShare == nil) != (direct == nil) || (sqlShare != nil && *sqlShare != *direct) {
+			t.Errorf("cap %d: sql %v ≠ direct %v on non-monotonic time", cap, sqlShare, direct)
+		}
+	}
+}
+
+// TestImportPanicContained: a panicking decoder costs one failures row,
+// never the process. The seam exists because fuzzing today's decoder
+// proves nothing about next year's upgrade.
+func TestImportPanicContained(t *testing.T) {
+	orig := decodeForImport
+	decodeForImport = func([]byte) (*activityStreams, error) { panic("injected decoder panic") }
+	defer func() { decodeForImport = orig }()
+
+	db, err := openMetricsDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.close()
+	const name = "2026-08-01-12-00-00.fit"
+	if _, err := db.importOne(name, []byte("whatever"), time.UTC); err == nil ||
+		!strings.Contains(err.Error(), "decode panic") {
+		t.Fatalf("panic not contained as an error: %v", err)
+	}
+	if msg, _ := db.failureFor(name); !strings.Contains(msg, "injected") {
+		t.Errorf("failure not recorded: %q", msg)
+	}
+}
+
+// TestStartupReconcile pins the wiring, not just the parts: the server
+// method main launches must reach the archive.
+func TestStartupReconcile(t *testing.T) {
+	dir := t.TempDir()
+	actDir := filepath.Join(dir, "activities")
+	if err := os.MkdirAll(actDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const name = "2026-08-01-12-00-00.fit"
+	if err := os.WriteFile(filepath.Join(actDir, name), tenSecondRun(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts := fitTestMuxServer(t, dir)
+	ts.s.startupReconcile()
+	if ok, err := ts.s.metrics.has(name); err != nil || !ok {
+		t.Fatalf("startup reconcile missed the archive (ok=%v err=%v)", ok, err)
+	}
+}
+
+// TestFailedImportRecovers pins both retry paths for a stored file whose
+// first decode failed: the startup reconcile, and a re-POST of the name
+// (which 409s, and retries the import from the canonical bytes on disk).
+func TestFailedImportRecovers(t *testing.T) {
+	dir := t.TempDir()
+	ts := fitTestMuxServer(t, dir)
+	const name = "2026-08-05-12-00-00.fit"
+	if rec := post(ts.mux, "/api/activity?name="+name, fitBytes("broken")); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d", rec.Code)
+	}
+	if rec := get(ts.mux, "/api/activity-metrics?name="+name, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("failed import served metrics: %d", rec.Code)
+	}
+	// The archive file "heals" (test-only surgery — in production the bytes
+	// are immutable and it is the environment that heals).
+	if err := os.WriteFile(filepath.Join(dir, "activities", name), tenSecondRun(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(ts.mux, "/api/activity?name="+name, fitBytes("dup")); rec.Code != http.StatusConflict {
+		t.Fatalf("re-POST = %d, want 409", rec.Code)
+	}
+	if rec := get(ts.mux, "/api/activity-metrics?name="+name, nil); rec.Code != http.StatusOK {
+		t.Fatalf("retry did not recover the import: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestDayAPIExplicitBlock: with two blocks loaded, ?block= serves exactly
+// the named block's plan — the current block must never quietly answer for
+// an explicitly named one.
+func TestDayAPIExplicitBlock(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "blocks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "library"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyFile(t, "./defaults/athlete.json", filepath.Join(dir, "athlete.json"))
+	for _, f := range []string{"guides.json", "index.json"} {
+		copyFile(t, "./defaults/library/"+f, filepath.Join(dir, "library", f))
+	}
+	copyFile(t, "./defaults/blocks/example-base-block.json", filepath.Join(dir, "blocks", "example-base-block.json"))
+	raw, err := os.ReadFile("./defaults/blocks/example-base-block.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blk map[string]any
+	if err := json.Unmarshal(raw, &blk); err != nil {
+		t.Fatal(err)
+	}
+	blk["id"] = "example-later-block"
+	blk["start"] = "2026-06-01" // a Monday, so the block loads
+	later, err := json.Marshal(blk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blocks", "example-later-block.json"), later, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := fitTestMux(t, dir)
+	rec := get(mux, "/api/day?date=2026-01-06&block=example-base-block", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"block":"example-base-block"`) ||
+		!strings.Contains(rec.Body.String(), `"quality"`) {
+		t.Errorf("explicit base block: %d %.120s", rec.Code, rec.Body.String())
+	}
+	// Without ?block=, the current block (the later one) answers — and this
+	// date is outside it, so a fallback to the other block would be a lie.
+	if rec := get(mux, "/api/day?date=2026-01-06", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("date outside the current block = %d, want 404", rec.Code)
+	}
+	rec = get(mux, "/api/day?date=2026-06-02&block=example-later-block", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"block":"example-later-block"`) {
+		t.Errorf("explicit later block: %d %.120s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGradeInputServedWithAnchors drives the grade-input wiring the
+// defaults athlete deliberately cannot: an athlete who declares the run cap
+// and the bike band gets both kinds' grade inputs computed and served.
+func TestGradeInputServedWithAnchors(t *testing.T) {
+	dir := t.TempDir()
+	raw, err := os.ReadFile("./defaults/athlete.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ath map[string]any
+	if err := json.Unmarshal(raw, &ath); err != nil {
+		t.Fatal(err)
+	}
+	hr := ath["hr"].(map[string]any)
+	hr["gradeCap"] = 157
+	hr["bikeLo"], hr["bikeHi"], hr["bikeCap"] = 130, 140, 145
+	mod, err := json.Marshal(ath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "athlete.json"), mod, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := fitTestMuxServer(t, dir)
+	const run = "2026-08-01-12-00-00.fit"
+	if rec := post(ts.mux, "/api/activity?name="+run, tenSecondRun(t)); rec.Code != http.StatusNoContent {
+		t.Fatalf("run POST = %d", rec.Code)
+	}
+	var out struct {
+		GradeInput map[string]any `json:"grade_input"`
+		First20    map[string]any `json:"first_20min"`
+		Power      map[string]any `json:"power"`
+	}
+	rec := get(ts.mux, "/api/activity-metrics?name="+run, nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.GradeInput["under_grade_cap_share"] != 1.0 || out.GradeInput["grade_cap"] != 157.0 {
+		t.Errorf("run grade_input = %v", out.GradeInput)
+	}
+	if out.First20 == nil {
+		t.Error("first_20min absent with firstMin declared")
+	}
+
+	// An eleven-minute steady bike: the after-warm-up window exists, sits
+	// entirely in the 130–140 band, and never crosses the 145 cap.
+	msgs := make([]proto.Message, 0, 702)
+	for i := 0; i <= 700; i++ {
+		msgs = append(msgs, mesgdef.NewRecord(nil).
+			SetTimestamp(fixtureT0.Add(time.Duration(i)*time.Second)).
+			SetHeartRate(135).
+			SetPower(150).ToMesg(nil))
+	}
+	msgs = append(msgs, sessionMsg(typedef.SportCycling, 50_00))
+	const bike = "2026-08-02-12-00-00.fit"
+	if rec := post(ts.mux, "/api/activity?name="+bike, encodeActivityFixture(t, msgs...)); rec.Code != http.StatusNoContent {
+		t.Fatalf("bike POST = %d", rec.Code)
+	}
+	rec = get(ts.mux, "/api/activity-metrics?name="+bike, nil)
+	out.GradeInput, out.Power = nil, nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.GradeInput["in_band_share_after_warmup"] != 1.0 || out.GradeInput["secs_over_cap"] != 0.0 {
+		t.Errorf("bike grade_input = %v", out.GradeInput)
+	}
+	if out.Power["avg"] != 150.0 || out.Power["pct_ftp"] != 0.75 {
+		t.Errorf("bike power = %v", out.Power)
+	}
+}
+
 // TestActivityDate: the device name is the training day; a name without a
 // date defers to the recording's start in the athlete's timezone.
 func TestActivityDate(t *testing.T) {
+	// The named fixture is deliberately synthetic (a future date): a real
+	// device filename in a tracked file would leak the archive's contents
+	// into the public repo.
 	chi := chicago(t)
-	if d := activityDate("2026-08-13-08-47-38.fit", fixtureT0, chi); d != "2026-08-13" {
+	if d := activityDate("2030-01-02-03-04-05.fit", fixtureT0, chi); d != "2030-01-02" {
 		t.Errorf("named date = %s", d)
 	}
 	// 2026-08-01 12:00 UTC is 07:00 in Chicago — same day.

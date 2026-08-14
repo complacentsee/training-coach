@@ -118,14 +118,7 @@ func main() {
 		log.Printf("grader: armed  mode=%s dialect=%s model=%s base=%s",
 			gcfg.Mode, gcfg.Dialect, gcfg.Model, gcfg.BaseURL)
 	}
-	go func() {
-		s.metrics.reconcile(s.activitiesDir(), s.ds().Loc)
-		if s.grader != nil {
-			// Metrics first, then grades: a failed grade retries here on
-			// the next startup, per the idempotency contract.
-			s.grader.reconcile()
-		}
-	}()
+	go s.startupReconcile()
 	tpl, err := template.New("").Funcs(s.makeFuncs()).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("templates: %v", err)
@@ -192,6 +185,18 @@ func main() {
 /* ── data lifecycle ────────────────────────────────────────────────────── */
 
 func (s *server) ds() *dataset { return s.data.Load() }
+
+// startupReconcile back-fills the metrics cache from the archive, then
+// retries recent ungraded days. Metrics first, then grades: a grade that
+// failed after its import succeeded retries here on the next startup, per
+// the idempotency contract. Runs off the request path — on a fresh or
+// version-bumped DB this is the whole archive.
+func (s *server) startupReconcile() {
+	s.metrics.reconcile(s.activitiesDir(), s.ds().Loc)
+	if s.grader != nil {
+		s.grader.reconcile()
+	}
+}
 
 // reload swaps in a fresh dataset. A failed load leaves the old one serving:
 // half-applied data would be worse than slightly stale data, and the error is
