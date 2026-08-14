@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1510,6 +1511,52 @@ func (s *server) getIssueTrend(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+// bandFloor reads the lower bound out of an authored range: "≥80%" and
+// "60–79%" open at their first number, "under 20%" opens at nothing. It
+// recognises those shapes and no others.
+var bandFloorRe = regexp.MustCompile(`^(?:[≥>]=?\s*)?(\d+(?:\.\d+)?)`)
+
+func bandFloor(rng string) (float64, bool) {
+	s := strings.TrimSpace(rng)
+	if s == "" {
+		return 0, false
+	}
+	if strings.HasPrefix(strings.ToLower(s), "under") || strings.HasPrefix(s, "<") {
+		return 0, true
+	}
+	if m := bandFloorRe.FindStringSubmatch(s); m != nil {
+		v, err := strconv.ParseFloat(m[1], 64)
+		return v, err == nil
+	}
+	return 0, false
+}
+
+// bandFloors derives every band's floor, or nothing at all. All-or-nothing
+// because a half-parsed rubric is worse than a prose one: the caller falls
+// back to reading the ranges, which are what the athlete sees anyway. The
+// floors must descend strictly in the order the legend lists them, which is
+// also a check that the parse understood what it read.
+func bandFloors(bands []GradeBand) []float64 {
+	if len(bands) == 0 {
+		return nil
+	}
+	out := make([]float64, len(bands))
+	for i, b := range bands {
+		f, ok := bandFloor(b.Range)
+		if !ok {
+			return nil
+		}
+		if i > 0 && f >= out[i-1] {
+			return nil // not descending: the parse misread something
+		}
+		out[i] = f
+	}
+	if out[len(out)-1] != 0 {
+		return nil // the last band must catch everything below
+	}
+	return out
+}
+
 // stepView is one prescribed step as an API reader sees it: the same
 // numbers the watch is given, in the athlete's own units, with a repeat
 // carrying its body rather than being flattened — "4×3′ at 252 W" is the
@@ -1608,6 +1655,12 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 	type band struct {
 		Grade string `json:"grade"`
 		Range string `json:"range"`
+		// MinPct is the band's floor as a percentage, DERIVED from the
+		// authored range beside it — never a second copy of the rubric to
+		// drift from. Bands are ordered best first, so the letter is the
+		// first band whose floor the share reaches. Reading it off the
+		// prose instead put a 21% share in the "under 20%" band once.
+		MinPct *float64 `json:"min_pct,omitempty"`
 	}
 	type legend struct {
 		Note   string `json:"note,omitempty"`
@@ -1675,8 +1728,14 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 	}
 	if g := resolveGrading(ctx, blk.Grading); g != nil {
 		l := &legend{Note: stripEmph(g.Note), Footer: stripEmph(g.Footer), Bands: []band{}}
-		for _, b := range g.Bands {
-			l.Bands = append(l.Bands, band{Grade: b.Grade, Range: b.Range})
+		floors := bandFloors(g.Bands)
+		for i, b := range g.Bands {
+			bd := band{Grade: b.Grade, Range: b.Range}
+			if floors != nil {
+				f := floors[i]
+				bd.MinPct = &f
+			}
+			l.Bands = append(l.Bands, bd)
 		}
 		out.Grading = l
 	}
@@ -1758,7 +1817,7 @@ func (s *server) makeFuncs() template.FuncMap {
 			}
 			return false
 		},
-		"app":        func() App { return s.ds().Athlete.App },
+		"app": func() App { return s.ds().Athlete.App },
 		// brand is the block being trained, not the app. The header used to
 		// read "16-WEEK BUILD" as a constant, which is the block's name and
 		// would be a lie the day an eight-week one starts.

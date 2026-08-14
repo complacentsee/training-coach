@@ -139,7 +139,7 @@ func newGrader(s *server, cfg graderConfig) *grader {
 			// hardware spends tens of seconds per turn — measured at ~50 s
 			// for a first turn on the server's 4B. A client timeout shorter
 			// than the run would kill grades that were about to succeed.
-			HTTP:      &http.Client{},
+			HTTP:            &http.Client{},
 			BaseURL:         cfg.BaseURL,
 			Key:             cfg.Key,
 			Model:           cfg.Model,
@@ -332,7 +332,7 @@ func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) [
 			},
 		},
 		{
-			Name: "hr_share_under",
+			Name:        "hr_share_under",
 			Description: "The share of an activity's valid heart-rate time at or under a bpm ceiling — the number the legend's bands read. Use it whenever the day prescribes its own ceiling instead of the standing one; the everyday share in get_metrics answers only for the standing cap.",
 			Schema:      obj(`"name":{"type":"string"},"bpm":{"type":"integer","description":"the ceiling to measure against"}`),
 			Run: func(_ context.Context, args json.RawMessage) (string, error) {
@@ -469,7 +469,7 @@ const gradingProcedure = `You are the training log's automated workout grader. A
 Procedure:
 1. get_prescription for the date and get_metrics for the activity. Read the prescription's steps when it has them: they are what was actually asked for that day, in the same units the metrics come back in. get_recent_entries for context: prior grades and their notes, the athlete's own notes, issue ratings.
 2. Decide the grade:
-   - Runs: the grading legend's bands applied to grade_input.under_grade_cap_share decide the letter.
+   - Runs: the grading legend's bands applied to grade_input.under_grade_cap_share decide the letter. The bands are listed best first and each carries min_pct, its floor as a percentage: the letter is the FIRST band whose floor the share reaches. Convert the share to a percentage before comparing, and do that comparison rather than eyeballing the range text — a share of 21% belongs to the band opening at 20, not the one below it.
    - Bikes: judge against what THIS DAY prescribed, which the prescription's steps and targets state — the power bands, the interval structure, the duration. Compare the measured average watts and elapsed time to those. A hard day (intervals, a VO₂ or threshold session) is SUPPOSED to run above the athlete's easy-ride HR band, so a low in_band_share_after_warmup is not a fault there and never decides the grade; that share is the yardstick for an easy or recovery ride only. The letter bands in the legend are the run rubric and do not apply to a bike at all. No single threshold: weigh execution of the prescribed work first, then duration, then whether anything exceeded the cap.
    - Test days (the day carries a benchmark tag): THE LETTER BANDS DO NOT APPLY AT ALL, for a run test as much as a bike one. A test is graded on protocol execution — was the measurement made valid — and the note says so explicitly. Never compute an under-cap share for a test day and never let one decide the letter: these sessions are supposed to run above the everyday ceilings, so a low share is the protocol working. Read the per-minute profile in the metrics to judge execution, because averages and peaks cannot tell a ramp that climbed to failure from a steady ride with one surge. A ramp that rises through its steps and ends at its peak went to failure: the measurement is valid and the grade should say so, even though such a ride's average is low by construction.
    - A session often states its intensity in more than one currency — a heart-rate band AND a power band or a pace band. One of them is the requirement and the others are its outputs; the athlete notes say which governs for each kind of day. Judge the governing one. Treat the others as corroboration, and where a session held its governing target, a small deviation in an output is compliance rather than a fault: say so in a clause and move on, do not let it move the letter.

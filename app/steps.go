@@ -230,7 +230,7 @@ type resolvedStep struct {
 	PaceSlow Pace
 	HRLo     int // bpm; zero when the step has no HR band
 	HRHi     int
-	PowerLo  int    // watts; zero when the step has no power band
+	PowerLo  int // watts; zero when the step has no power band
 	PowerHi  int
 	Note     string // emphasis-stripped and transliterated, exactly as the file will carry it
 
