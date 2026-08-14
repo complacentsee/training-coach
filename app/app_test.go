@@ -1898,6 +1898,8 @@ func fitTestMux(t *testing.T, dataDir string) *http.ServeMux {
 	mux.HandleFunc("GET /api/activities", s.getActivities)
 	mux.HandleFunc("GET /api/activity", s.getActivity)
 	mux.HandleFunc("POST /api/activity", s.postActivity)
+	mux.HandleFunc("POST /api/entry", s.postEntry)
+	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
 	return mux
 }
 
@@ -2256,6 +2258,89 @@ func TestFitArchivedBlockThreading(t *testing.T) {
 }
 
 /* ── the activity store ────────────────────────────────────────────────── */
+
+// The trend endpoint serves the declared scale, the bands in order, and one
+// point per rated day with the last write winning — against whatever issue
+// the dataset declares, so a hardcoded key or scale would fail on defaults.
+func TestIssueTrendServesScaleBandsAndHistory(t *testing.T) {
+	dir := t.TempDir() // embedded defaults: a declared issue on its own scale
+	mux := fitTestMux(t, dir)
+	d, err := loadDataset(dir, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Athlete.Issues) == 0 {
+		t.Fatal("the defaults declare no issue; this test needs one")
+	}
+	is := d.Athlete.Issues[0]
+	lo, hi := is.Scale.Min, is.Scale.Min+1
+	entry := func(date string, val int, note string) []byte {
+		b, _ := json.Marshal(map[string]any{
+			"date": date, "kind": "issue", "key": is.Key,
+			"val": strconv.Itoa(val), "note": note,
+		})
+		return b
+	}
+	for _, e := range [][]byte{
+		entry("2026-01-05", lo, ""),
+		entry("2026-01-06", hi, "stiff"),
+		entry("2026-01-06", lo, "walked it off"), // re-rate: last wins
+	} {
+		if rec := post(mux, "/api/entry", e); rec.Code != http.StatusNoContent {
+			t.Fatalf("seed entry = %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := get(mux, "/api/issue-trend?key="+is.Key, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trend = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Name     string `json:"name"`
+		Min, Max int
+		Bands    []struct {
+			UpTo  *int   `json:"upto"`
+			Tone  string `json:"tone"`
+			Label string `json:"label"`
+		}
+		Points []struct {
+			Date string `json:"date"`
+			Val  int    `json:"val"`
+			Note string `json:"note"`
+		}
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Name != is.Name || out.Min != is.Scale.Min || out.Max != is.Scale.Max {
+		t.Errorf("declaration = %q %d–%d, want %q %d–%d", out.Name, out.Min, out.Max, is.Name, is.Scale.Min, is.Scale.Max)
+	}
+	if len(out.Bands) != len(is.Bands) || out.Bands[0].Label != is.Bands[0].Label {
+		t.Errorf("bands = %+v, want the %d declared", out.Bands, len(is.Bands))
+	}
+	if last := out.Bands[len(out.Bands)-1]; last.UpTo != nil {
+		t.Error("the last band carries an upto; it must catch the top")
+	}
+	want := []struct {
+		date string
+		val  int
+	}{{"2026-01-05", lo}, {"2026-01-06", lo}}
+	if len(out.Points) != len(want) {
+		t.Fatalf("points = %+v, want %d (one per day, last write wins)", out.Points, len(want))
+	}
+	for i, w := range want {
+		if out.Points[i].Date != w.date || out.Points[i].Val != w.val {
+			t.Errorf("point %d = %+v, want %v", i, out.Points[i], w)
+		}
+	}
+	if out.Points[1].Note != "walked it off" {
+		t.Errorf("re-rated note = %q, want the last write's", out.Points[1].Note)
+	}
+
+	if rec := get(mux, "/api/issue-trend?key=no-such-issue", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown key = %d, want 404", rec.Code)
+	}
+}
 
 func post(mux *http.ServeMux, url string, body []byte) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("POST", url, bytes.NewReader(body))

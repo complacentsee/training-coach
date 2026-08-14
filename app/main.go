@@ -123,6 +123,7 @@ func main() {
 	mux.HandleFunc("GET /api/activities", s.getActivities)
 	mux.HandleFunc("GET /api/activity", s.getActivity)
 	mux.HandleFunc("POST /api/activity", s.postActivity)
+	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -1421,6 +1422,53 @@ func (s *server) getTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(s.store.TasksFor(date))
+}
+
+// getIssueTrend hands the trend popup everything it draws: the declared
+// scale, the bands in order, and one point per rated day, oldest first.
+// The chart cannot invent a boundary the declaration does not state.
+func (s *server) getIssueTrend(w http.ResponseWriter, r *http.Request) {
+	is := s.ds().Athlete.Issue(r.URL.Query().Get("key"))
+	if is == nil {
+		http.NotFound(w, r)
+		return
+	}
+	type band struct {
+		UpTo  *int   `json:"upto,omitempty"`
+		Tone  string `json:"tone"`
+		Label string `json:"label"`
+	}
+	type point struct {
+		Date string `json:"date"`
+		Val  int    `json:"val"`
+		Note string `json:"note,omitempty"`
+	}
+	out := struct {
+		Key    string  `json:"key"`
+		Name   string  `json:"name"`
+		Ask    string  `json:"ask,omitempty"`
+		Min    int     `json:"min"`
+		Max    int     `json:"max"`
+		Low    string  `json:"low,omitempty"`
+		High   string  `json:"high,omitempty"`
+		Bands  []band  `json:"bands"`
+		Points []point `json:"points"`
+	}{Key: is.Key, Name: is.Name, Ask: is.Ask,
+		Min: is.Scale.Min, Max: is.Scale.Max, Low: is.Scale.Low, High: is.Scale.High,
+		Bands: []band{}, Points: []point{}}
+	for _, b := range is.Bands {
+		out.Bands = append(out.Bands, band{UpTo: b.UpTo, Tone: b.Tone, Label: b.Label})
+	}
+	for _, e := range s.store.Ratings(is.Key) {
+		n, err := strconv.Atoi(e.Val)
+		if err != nil {
+			continue
+		}
+		out.Points = append(out.Points, point{Date: e.Date, Val: n, Note: e.Note})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *server) getEntries(w http.ResponseWriter, r *http.Request) {

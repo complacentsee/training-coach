@@ -129,8 +129,7 @@
         post({ kind: "issue", key: form.dataset.issue, date: form.dataset.date,
                val: b.dataset.val, note: note.value.trim() })
           .then(function () {
-            var heading = card && card.querySelector("h2");
-            var name = heading ? heading.textContent.trim() : form.dataset.issue;
+            var name = form.dataset.name || form.dataset.issue;
             say(name + " " + b.dataset.val + " recorded");
             if (card) repaint(card, b, note.value.trim());
           })
@@ -378,6 +377,22 @@
       .catch(function (err) { say("Failed: " + err.message, true); })
       .finally(function () { d.disabled = false; });
   });
+
+  /* The modal shell, exposed for page features (trend.js) that fill it
+     with their own content rather than a guide. */
+  window.AppModal = {
+    show: function (title) {
+      stack = [];
+      lastFocus = document.activeElement;
+      titleEl.textContent = title || "Loading…";
+      bodyEl.innerHTML = "";
+      modal.hidden = false;
+      document.body.style.overflow = "hidden";
+      box.focus();
+      return { title: titleEl, body: bodyEl };
+    },
+    esc: esc,
+  };
 
   document.addEventListener("click", function (e) {
     /* A real link inside a guide-opening cell — the calendar's FIT download

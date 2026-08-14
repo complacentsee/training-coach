@@ -87,6 +87,18 @@ h1,.page{font-family:var(--display);font-size:clamp(1.9rem,6vw,2.7rem);line-heig
 /* Always in the DOM so a tap has something to fill; invisible until it does. */
 .issue-action{font-size:.88rem;margin:.35rem 0 .1rem;font-weight:600}
 .issue-action:empty{display:none}
+.trendbtn{position:relative;float:right;font:700 .62rem var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--accent);background:none;border:none;cursor:pointer;padding:0}
+.trendbtn::after{content:"";position:absolute;inset:-.6rem}
+.trendwrap{position:relative}
+.trend-svg text{font-family:var(--mono)}
+.trendtip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--rule);
+  border-radius:3px;padding:.25rem .45rem;font:.7rem/1.5 var(--mono);color:var(--ink);
+  box-shadow:0 2px 8px rgba(0,0,0,.18);max-width:min(18rem,90%);z-index:5}
+.trendtable summary{font:700 .62rem var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);cursor:pointer;margin:.4rem 0}
+.trendtable table{width:100%;border-collapse:collapse;font-size:.78rem}
+.trendtable td{padding:.15rem .5rem .15rem 0;border-top:1px solid var(--rule)}
 .tone-go{color:var(--go)}
 .tone-caution{color:var(--caution)}
 .tone-stop{color:var(--stop)}

@@ -41,7 +41,7 @@
 
 {{range .Issues}}{{$is := .}}
 <section class="card issue">
-  <h2 class="sec">{{.Heading}} {{template "guidebtn" .Guide}}</h2>
+  <h2 class="sec">{{.Heading}} {{template "guidebtn" .Guide}}<button class="trendbtn" type="button" data-trend="{{.Key}}" aria-label="Rating trend">trend</button></h2>
   {{if .Phase}}<p class="issue-phase"><strong>{{.Phase}}</strong>{{if .Detail}} — {{.Detail}}{{end}}</p>{{end}}
   {{if .Rated}}
     <p class="last logged">Logged today: <strong>{{.Today}}</strong>{{with .Band}} · <b class="tone-{{.Tone}}">{{.Label}}</b>{{end}}{{if .Note}} — {{.Note}}{{end}}<br><span class="sub">Tap another number to change it.</span></p>
@@ -55,7 +55,7 @@
        one is hidden in CSS. */}}
   <p class="issue-action{{with .Band}} tone-{{.Tone}}{{end}}">{{with .Band}}{{emph .Action}}{{end}}</p>
   {{if .Ask}}<p class="issue-ask">{{.Ask}}</p>{{end}}
-  <form class="rate" data-issue="{{.Key}}" data-date="{{iso $.Today}}">
+  <form class="rate" data-issue="{{.Key}}" data-name="{{.Heading}}" data-date="{{iso $.Today}}">
     <div class="scale">
       {{range .Dots}}
       <button type="button" class="dot b{{.Tone}}{{if and $is.Rated (eq $is.Today .Value)}} sel{{end}}" data-val="{{.Value}}" data-tone="{{.Tone}}" data-label="{{.Label}}" data-rx="{{.Action}}"{{if and $is.Rated (eq $is.Today .Value)}} aria-pressed="true"{{end}}>{{.Value}}</button>
@@ -66,6 +66,8 @@
   <p class="hint">{{.Range}}{{if .Hint}} · {{.Hint}}{{end}}</p>
 </section>
 {{end}}
+
+<script src="{{asset "trend.js"}}" defer></script>
 
 <section class="card">
   <h2 class="sec">Feedback</h2>
