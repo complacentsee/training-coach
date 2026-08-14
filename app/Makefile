@@ -99,7 +99,7 @@ new-block:      ## scaffold a block: make new-block ID=2027-spring-5k START=2027
 push-files: validate ## ship athlete/blocks/library to the server WITHOUT reloading
 	@set -e; \
 	$(SSH) $(REMOTE) "mkdir -p $(DEST)/data && rm -rf $(DEST)/data/blocks $(DEST)/data/library"; \
-	EXTRA=""; [ -f data/grading-notes.md ] && EXTRA="grading-notes.md"; \
+	EXTRA=""; if [ -f data/grading-notes.md ]; then EXTRA="grading-notes.md"; fi; \
 	COPYFILE_DISABLE=1 tar --no-xattrs -czf - -C data athlete.json blocks library $$EXTRA \
 	  | $(SSH) $(REMOTE) "tar -xzf - -C $(DEST)/data"; \
 	JUNK=$$($(SSH) $(REMOTE) "find $(DEST)/data -name '._*' -o -name '.DS_Store' | wc -l | tr -d ' '"); \
@@ -246,7 +246,9 @@ verify-dev:     ## confirm the dev stack serves this exact build
 seed-dev:       ## populate the dev stack's data from live (partial activities)
 	@set -e; \
 	CURATED=""; \
-	[ -f data/seed-curated.txt ] && CURATED=$$(grep -hE '^[A-Za-z0-9][A-Za-z0-9._-]*\.fit$$' data/seed-curated.txt | tr '\n' ' '); \
+	if [ -f data/seed-curated.txt ]; then \
+	  CURATED=$$(grep -hE '^[A-Za-z0-9][A-Za-z0-9._-]*\.fit$$' data/seed-curated.txt | tr '\n' ' '); \
+	fi; \
 	$(SSH) $(REMOTE) "set -e; \
 	  SRC=$(DEST)/data; DST=$(DEVDEST)/data; \
 	  [ -f \$$SRC/athlete.json ] || { echo 'FAILED: no live data at '\$$SRC >&2; exit 1; }; \
