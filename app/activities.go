@@ -308,14 +308,21 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 
 	if row.AvgPower != nil {
 		p := &powerOut{Avg: pyRound(*row.AvgPower, 1)}
-		if kg := float64(a.Weight); kg > 0 {
-			p.WKg = pyRound(*row.AvgPower/kg, 2)
-		}
-		if ftp := a.Power["ftp"]; ftp > 0 {
-			p.PctFTP = pyRound(*row.AvgPower/float64(ftp), 3)
-			// pyRound, not math.Round: at FTP 214 the band top is exactly
-			// 160.5, and the mirror's banker's rounding says 160.
-			p.Z2BandW = []int{int(pyRound(0.56*float64(ftp), 0)), int(pyRound(0.75*float64(ftp), 0))}
+		// FTP is a CYCLING anchor: a run's watts (a Garmin running-power
+		// estimate) divided by it is a meaningless ratio, and offering it
+		// invites exactly the comparison it looks like — a local model read
+		// "273 W against FTP" off a run and graded the day on it. Runs get
+		// their watts reported and nothing derived from them.
+		if kind == "bike" {
+			if kg := float64(a.Weight); kg > 0 {
+				p.WKg = pyRound(*row.AvgPower/kg, 2)
+			}
+			if ftp := a.Power["ftp"]; ftp > 0 {
+				p.PctFTP = pyRound(*row.AvgPower/float64(ftp), 3)
+				// pyRound, not math.Round: at FTP 214 the band top is
+				// exactly 160.5, and the mirror's banker's rounding says 160.
+				p.Z2BandW = []int{int(pyRound(0.56*float64(ftp), 0)), int(pyRound(0.75*float64(ftp), 0))}
+			}
 		}
 		out.Power = p
 	}

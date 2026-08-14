@@ -1510,6 +1510,46 @@ func (s *server) getIssueTrend(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+// stepView is one prescribed step as an API reader sees it: the same
+// numbers the watch is given, in the athlete's own units, with a repeat
+// carrying its body rather than being flattened — "4×3′ at 252 W" is the
+// thing being judged, and unrolling it into twelve steps loses that.
+type stepView struct {
+	Role   string     `json:"role,omitempty"`
+	Dist   string     `json:"dist,omitempty"`
+	Secs   int        `json:"secs,omitempty"`
+	Pace   string     `json:"pace,omitempty"`
+	HR     []int      `json:"hr,omitempty"`    // [lo, hi] bpm
+	Power  []int      `json:"power,omitempty"` // [lo, hi] watts
+	Note   string     `json:"note,omitempty"`
+	Repeat int        `json:"repeat,omitempty"`
+	Steps  []stepView `json:"steps,omitempty"`
+}
+
+func stepViews(rs []resolvedStep, u Units) []stepView {
+	out := make([]stepView, 0, len(rs))
+	for _, s := range rs {
+		v := stepView{Role: s.Role, Secs: s.Secs, Note: s.Note, Repeat: s.Repeat}
+		if s.DistM > 0 {
+			v.Dist = Distance(s.DistM).In(u)
+		}
+		if s.PaceFast > 0 && s.PaceSlow > 0 {
+			v.Pace = s.PaceSlow.In(u) + "–" + s.PaceFast.In(u)
+		}
+		if s.HRHi > 0 {
+			v.HR = []int{s.HRLo, s.HRHi}
+		}
+		if s.PowerHi > 0 {
+			v.Power = []int{s.PowerLo, s.PowerHi}
+		}
+		if len(s.Body) > 0 {
+			v.Steps = stepViews(s.Body, u)
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 // getDay serves one date's fully resolved prescription: the session as the
 // athlete would read it, the week it sits in, the block's grading legend,
 // and the anchors current at this moment — everything the grader (and any
@@ -1575,15 +1615,16 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		Footer string `json:"footer,omitempty"`
 	}
 	type session struct {
-		Kind     string   `json:"kind"`
-		Label    string   `json:"label"`
-		Dist     string   `json:"dist,omitempty"`
-		DistM    float64  `json:"dist_m,omitempty"`
-		Mins     int      `json:"mins,omitempty"`
-		Tag      string   `json:"tag,omitempty"`
-		Detail   string   `json:"detail,omitempty"`
-		Targets  []string `json:"targets"`
-		HasSteps bool     `json:"has_steps,omitempty"`
+		Kind     string     `json:"kind"`
+		Label    string     `json:"label"`
+		Dist     string     `json:"dist,omitempty"`
+		DistM    float64    `json:"dist_m,omitempty"`
+		Mins     int        `json:"mins,omitempty"`
+		Tag      string     `json:"tag,omitempty"`
+		Detail   string     `json:"detail,omitempty"`
+		Targets  []string   `json:"targets"`
+		HasSteps bool       `json:"has_steps,omitempty"`
+		Steps    []stepView `json:"steps,omitempty"`
 	}
 	out := struct {
 		Date    string         `json:"date"`
@@ -1619,6 +1660,18 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 	if sess.Dist > 0 {
 		out.Session.Dist = sess.Dist.In(d.Athlete.Units)
 		out.Session.DistM = float64(sess.Dist)
+	}
+	// The structured form, when the day has one. Without it a grader judging
+	// an interval session can only see the athlete's standing anchors — and
+	// would measure a VO₂ day against the easy-ride band, which is exactly
+	// backwards. What was asked for on THIS day lives here.
+	if len(sess.Steps) > 0 {
+		rs, err := resolveSteps(&sc, sess)
+		if err != nil {
+			log.Printf("day %s: steps: %v", dateStr, err)
+			return nil, http.StatusInternalServerError, "prescription unavailable"
+		}
+		out.Session.Steps = stepViews(rs, d.Athlete.Units)
 	}
 	if g := resolveGrading(ctx, blk.Grading); g != nil {
 		l := &legend{Note: stripEmph(g.Note), Footer: stripEmph(g.Footer), Bands: []band{}}
