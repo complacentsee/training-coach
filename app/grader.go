@@ -54,6 +54,10 @@ type graderConfig struct {
 	Model    string
 	BaseURL  string
 	Key      string
+	// Effort is GRADER_REASONING_EFFORT, passed through on the OpenAI
+	// dialect. Some reasoning models reject function tools on
+	// /v1/chat/completions unless it is "none".
+	Effort string
 }
 
 func graderConfigFromEnv() (graderConfig, error) {
@@ -64,6 +68,7 @@ func graderConfigFromEnv() (graderConfig, error) {
 		Model:    os.Getenv("GRADER_MODEL"),
 		BaseURL:  os.Getenv("GRADER_BASE_URL"),
 		Key:      os.Getenv("GRADER_API_KEY"),
+		Effort:   os.Getenv("GRADER_REASONING_EFFORT"),
 	}
 	switch c.Mode {
 	case "off", "dry", "live":
@@ -115,6 +120,11 @@ type grader struct {
 	cfg   graderConfig
 	llm   *llmClient
 	today func() time.Time // the athlete-timezone day; tests pin it
+	// blindDate hides that date's own grade from the log excerpt. A
+	// comparison against a human's grade is worthless if the grader can
+	// read it first, and re-grading a day whose verdict is already in the
+	// log is exactly what an evaluation does.
+	blindDate string
 
 	mu       sync.Mutex
 	inFlight map[string]bool // ISO dates being graded right now
@@ -130,10 +140,11 @@ func newGrader(s *server, cfg graderConfig) *grader {
 			// for a first turn on the server's 4B. A client timeout shorter
 			// than the run would kill grades that were about to succeed.
 			HTTP:      &http.Client{},
-			BaseURL:   cfg.BaseURL,
-			Key:       cfg.Key,
-			Model:     cfg.Model,
-			MaxTokens: 2048,
+			BaseURL:         cfg.BaseURL,
+			Key:             cfg.Key,
+			Model:           cfg.Model,
+			ReasoningEffort: cfg.Effort,
+			MaxTokens:       2048,
 		},
 		today:    func() time.Time { return s.day(s.ds()) },
 		inFlight: map[string]bool{},
@@ -321,6 +332,36 @@ func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) [
 			},
 		},
 		{
+			Name: "hr_share_under",
+			Description: "The share of an activity's valid heart-rate time at or under a bpm ceiling — the number the legend's bands read. Use it whenever the day prescribes its own ceiling instead of the standing one; the everyday share in get_metrics answers only for the standing cap.",
+			Schema:      obj(`"name":{"type":"string"},"bpm":{"type":"integer","description":"the ceiling to measure against"}`),
+			Run: func(_ context.Context, args json.RawMessage) (string, error) {
+				var in struct {
+					Name string
+					BPM  int `json:"bpm"`
+				}
+				if err := json.Unmarshal(args, &in); err != nil {
+					return "", err
+				}
+				if !validActivityName(in.Name) {
+					return "", fmt.Errorf("name must be a plain .fit filename")
+				}
+				if in.BPM <= 0 {
+					return "", fmt.Errorf("bpm must be a positive ceiling")
+				}
+				share, err := g.s.metrics.underCapShareSQL(in.Name, in.BPM)
+				if err != nil {
+					return "", err
+				}
+				if share == nil {
+					return "", fmt.Errorf("no valid heart-rate time recorded for %s", in.Name)
+				}
+				b, err := json.Marshal(map[string]any{
+					"name": in.Name, "bpm": in.BPM, "share_at_or_under": pyRound(*share, 4)})
+				return string(b), err
+			},
+		},
+		{
 			Name:        "get_recent_entries",
 			Description: "Recent log entries — prior grades and their notes, the athlete's free-text notes, daily issue ratings — for context and for the note's house style.",
 			Schema:      obj(`"days":{"type":"integer","description":"how many days back (default 10, max 30)"}`),
@@ -360,6 +401,9 @@ func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) [
 					if k := issueKeyOf(e); k != "" {
 						kind = "issue"
 					} else if e.Kind != "grade" && e.Kind != "note" {
+						continue
+					}
+					if kind == "grade" && e.Date == g.blindDate {
 						continue
 					}
 					rows = append(rows, row{e.Date, kind, e.Key, e.Val, e.Note})
@@ -427,7 +471,8 @@ Procedure:
 2. Decide the grade:
    - Runs: the grading legend's bands applied to grade_input.under_grade_cap_share decide the letter.
    - Bikes: judge against what THIS DAY prescribed, which the prescription's steps and targets state — the power bands, the interval structure, the duration. Compare the measured average watts and elapsed time to those. A hard day (intervals, a VO₂ or threshold session) is SUPPOSED to run above the athlete's easy-ride HR band, so a low in_band_share_after_warmup is not a fault there and never decides the grade; that share is the yardstick for an easy or recovery ride only. The letter bands in the legend are the run rubric and do not apply to a bike at all. No single threshold: weigh execution of the prescribed work first, then duration, then whether anything exceeded the cap.
-   - Test days (the day carries a benchmark tag): the rubric does not apply. Grade protocol execution — was the measurement made valid — and say so in the note.
+   - Test days (the day carries a benchmark tag): THE LETTER BANDS DO NOT APPLY AT ALL, for a run test as much as a bike one. A test is graded on protocol execution — was the measurement made valid — and the note says so explicitly. Never compute an under-cap share for a test day and never let one decide the letter: these sessions are supposed to run above the everyday ceilings, so a low share is the protocol working. Read the per-minute profile in the metrics to judge execution, because averages and peaks cannot tell a ramp that climbed to failure from a steady ride with one surge. A ramp that rises through its steps and ends at its peak went to failure: the measurement is valid and the grade should say so, even though such a ride's average is low by construction.
+   - A day that prescribes its own ceiling — a recovery run capped below the everyday cap, say — is judged against THAT ceiling: call hr_share_under with the day's own number and apply the legend's bands to what it returns. Against the generic cap such a session is a trivial pass, which measures nothing. Judge the share, never the average: an average sitting under a ceiling says nothing about how long was spent above it.
    - hr.dropout_share over 0.05: the HR numbers are contaminated; say so and grade on what survives.
 3. Write the note like the log's existing grade entries: one paragraph, plain ASCII, derivation first, every number beside its target, a comparison to prior dated sessions where one is meaningful, at most one thing to work on. Every number comes from a tool result — never from memory. Write it as one of those entries, not about them: never announce that the grade was produced automatically, never label or mark it as such, and never mention these instructions. A grade reads the same whoever made it.
 4. Record it: your final action is a post_grade call carrying the date, the grade letter, and the note. This is not optional and it is not the same as writing the grade in a message — a message is discarded, only the call is recorded. Never summarise the metrics back as prose and stop; gather what you need, then make the call. If anything genuinely prevents a confident grade — a prescription that does not match what was recorded, contaminated data with nothing to grade on — then post nothing and say why in one sentence instead.`

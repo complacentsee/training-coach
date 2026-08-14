@@ -106,6 +106,10 @@ func TestGradeEvalBatch(t *testing.T) {
 			}
 		}
 
+		// Blind: the grader must not read the verdict it is being measured
+		// against. Everything else in the log stays visible, because the
+		// surrounding week is real context a live grade would also have.
+		g.blindDate = date
 		start := time.Now()
 		got, err := g.grade(pick)
 		took := time.Since(start).Round(time.Second)

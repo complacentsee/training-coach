@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type llmTool struct {
@@ -59,11 +60,25 @@ type llmMsg struct {
 type llmTurn func(ctx context.Context, system string, msgs []llmMsg, tools []llmTool) (llmMsg, string, error)
 
 type llmClient struct {
-	HTTP      *http.Client
-	BaseURL   string // host only, e.g. https://api.anthropic.com or http://localhost:11434
-	Key       string
-	Model     string
-	MaxTokens int
+	HTTP    *http.Client
+	BaseURL string // host, e.g. https://api.anthropic.com or http://localhost:11434
+	Key     string
+	Model   string
+	// ReasoningEffort is sent on the OpenAI dialect when set. Some reasoning
+	// models refuse function tools on /v1/chat/completions unless it is
+	// "none" — they want the Responses API instead — so this is the knob
+	// that keeps a tool loop working against them.
+	ReasoningEffort string
+	MaxTokens       int
+}
+
+// endpoint joins the configured base to a versioned path. The base is a
+// host, but every provider's documentation writes it with the version
+// attached — "https://api.openai.com/v1" — so a trailing /v1 is stripped
+// rather than doubled. A proxy whose path genuinely ends in /v1 lands on
+// the same URL either way, so this is safe as well as forgiving.
+func (c *llmClient) endpoint(path string) string {
+	return strings.TrimSuffix(strings.TrimRight(c.BaseURL, "/"), "/v1") + path
 }
 
 func (c *llmClient) post(ctx context.Context, path string, hdr map[string]string, body any) ([]byte, error) {
@@ -71,7 +86,7 @@ func (c *llmClient) post(ctx context.Context, path string, hdr map[string]string
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+path, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint(path), bytes.NewReader(buf))
 	if err != nil {
 		return nil, err
 	}
@@ -202,10 +217,11 @@ func (c *llmClient) openaiTurn(ctx context.Context, system string, msgs []llmMsg
 	}
 
 	req := struct {
-		Model    string    `json:"model"`
-		Messages []wireMsg `json:"messages"`
-		Tools    []tool    `json:"tools,omitempty"`
-	}{Model: c.Model}
+		Model           string    `json:"model"`
+		Messages        []wireMsg `json:"messages"`
+		Tools           []tool    `json:"tools,omitempty"`
+		ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	}{Model: c.Model, ReasoningEffort: c.ReasoningEffort}
 
 	if system != "" {
 		req.Messages = append(req.Messages, wireMsg{Role: "system", Content: system})

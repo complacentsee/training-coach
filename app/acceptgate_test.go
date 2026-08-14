@@ -440,6 +440,21 @@ func diffMetrics(d *dataset, m *activityMetrics, s *activityStreams, raw json.Ra
 	}
 	check("decoupling_pct", m.DecouplingPct, dig(py, "decoupling_pct"), 2)
 	check("power.avg", m.AvgPower, dig(py, "power", "avg"), 1)
+	if s.HaveWatts {
+		mx := 0
+		for _, w := range s.Watts {
+			if w > mx {
+				mx = w
+			}
+		}
+		if pm, ok := dig(py, "power", "max").(float64); !ok || int(pm) != mx {
+			diffs = append(diffs, fmt.Sprintf("power.max: go %d, py %v", mx, dig(py, "power", "max")))
+		}
+		if kind == "bike" {
+			check("power.best_60s", bestRolling(s.Time, intsToFloats(s.Watts), 60),
+				dig(py, "power", "best_60s"), 1)
+		}
+	}
 	var cadOut *float64
 	if m.AvgCadence != nil {
 		c := *m.AvgCadence

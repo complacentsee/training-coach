@@ -101,7 +101,30 @@ def main():
     w = s.get("watts")
     if w:
         _, avg_w = weighted(t, w, lambda v: True)
-        out["power"] = {"avg": round(avg_w, 1)}
+        out["power"] = {"avg": round(avg_w, 1), "max": max(w)}
+        # best_60s is the highest time-weighted mean over any 60 s of
+        # recorded time (gaps count as elapsed, as everywhere else). A ramp
+        # test's result IS this number: FTP is 75% of it, and an average
+        # over the whole ride describes a climb to failure as a steady ride.
+        if args.kind == "bike":
+            best, j = None, 0
+            csum = [0.0] * len(t)
+            cdur = [0.0] * len(t)
+            for i in range(1, len(t)):
+                dt = max(t[i] - t[i - 1], 0)
+                csum[i] = csum[i - 1] + dt * w[i]
+                cdur[i] = cdur[i - 1] + dt
+            for i in range(len(t)):
+                while j < len(t) and t[j] - t[i] < 60:
+                    j += 1
+                if j >= len(t):
+                    break
+                d = cdur[j] - cdur[i]
+                if d > 0:
+                    m = (csum[j] - csum[i]) / d
+                    best = m if best is None or m > best else best
+            if best is not None:
+                out["power"]["best_60s"] = round(best, 1)
         # FTP is a cycling anchor, so nothing derived from it is reported for
         # a run: a running-power estimate divided by cycling FTP is a ratio
         # with no meaning, and quoting it invites grading a run on it.

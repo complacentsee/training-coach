@@ -217,6 +217,121 @@ func computeMetrics(name, date string, s *activityStreams) *activityMetrics {
 	return a
 }
 
+// profilePoint is one bucket of the session's shape: where the work
+// actually sat over time.
+type profilePoint struct {
+	Min int      `json:"min"`          // minutes from the first sample
+	W   *float64 `json:"w,omitempty"`  // mean watts over the bucket
+	HR  *float64 `json:"hr,omitempty"` // mean valid HR over the bucket
+}
+
+// sessionProfile buckets the ride or run into at most maxPoints even spans
+// and reports mean power and HR in each. Aggregates cannot show execution:
+// an average, a peak and a best minute describe a ramp to failure and a
+// ride with one surge identically, and the difference is the whole verdict
+// on a test day. The shape is what separates them — and on an interval day
+// it is what shows whether the intervals were ridden at all.
+func sessionProfile(s *activityStreams, maxPoints int) []profilePoint {
+	if len(s.Time) < 2 || maxPoints < 1 {
+		return nil
+	}
+	elapsed := s.Time[len(s.Time)-1]
+	if elapsed <= 0 {
+		return nil
+	}
+	// Whole minutes per bucket, so the axis reads in the units the
+	// prescription is written in.
+	mins := (elapsed + 59) / 60
+	perBucket := (mins + maxPoints - 1) / maxPoints
+	if perBucket < 1 {
+		perBucket = 1
+	}
+	span := perBucket * 60
+
+	hrF := intsToFloats(s.HR)
+	var wF []float64
+	if s.HaveWatts {
+		wF = intsToFloats(s.Watts)
+	}
+
+	var out []profilePoint
+	for start := 0; start < elapsed; start += span {
+		end := start + span
+		var wSum, wDur, hSum, hDur float64
+		for i := 1; i < len(s.Time); i++ {
+			ti := s.Time[i]
+			if ti <= start || ti > end {
+				continue
+			}
+			dt := float64(s.Time[i] - s.Time[i-1])
+			if dt <= 0 {
+				continue
+			}
+			if wF != nil {
+				wSum += dt * wF[i]
+				wDur += dt
+			}
+			if s.HaveHR && hrValid(hrF[i]) {
+				hSum += dt * hrF[i]
+				hDur += dt
+			}
+		}
+		p := profilePoint{Min: start / 60}
+		if wDur > 0 {
+			v := pyRound(wSum/wDur, 1)
+			p.W = &v
+		}
+		if hDur > 0 {
+			v := pyRound(hSum/hDur, 1)
+			p.HR = &v
+		}
+		if p.W != nil || p.HR != nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// bestRolling is the highest time-weighted mean of vals over any window of
+// `window` seconds. Recording gaps count as elapsed time, as everywhere
+// else in the register. Returns nil when the trace is shorter than the
+// window. This is what a ramp test is actually judged on — an average over
+// the whole ride says "steady Z2" about a session that climbed to failure,
+// which is how a valid test gets read as a soft one.
+func bestRolling(t []int, vals []float64, window int) *float64 {
+	if len(t) < 2 || t[len(t)-1]-t[0] < window {
+		return nil
+	}
+	// Prefix sums over the same dt weighting the rest of the register uses.
+	sum := make([]float64, len(t))
+	dur := make([]float64, len(t))
+	for i := 1; i < len(t); i++ {
+		dt := float64(t[i] - t[i-1])
+		if dt <= 0 {
+			dt = 0
+		}
+		sum[i] = sum[i-1] + dt*vals[i]
+		dur[i] = dur[i-1] + dt
+	}
+	var best *float64
+	j := 0
+	for i := 0; i < len(t); i++ {
+		for j < len(t) && t[j]-t[i] < window {
+			j++
+		}
+		if j >= len(t) {
+			break
+		}
+		if d := dur[j] - dur[i]; d > 0 {
+			if m := (sum[j] - sum[i]) / d; best == nil || m > *best {
+				v := m
+				best = &v
+			}
+		}
+	}
+	return best
+}
+
 // pyRound mirrors python's round(): the float's exact value rounded to the
 // nearest multiple of 10^-n, ties to even. Computed over exact rationals —
 // the obvious RoundToEven(x*10^n)/10^n rounds the intermediate product and

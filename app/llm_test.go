@@ -109,6 +109,28 @@ func TestOpenAIDialectRoundTrip(t *testing.T) {
 	}
 }
 
+// TestBaseURLSpellings: every provider documents its base URL with the
+// version attached, so both spellings must reach the same endpoint rather
+// than one of them producing /v1/v1/.
+func TestBaseURLSpellings(t *testing.T) {
+	for _, base := range []string{
+		"https://api.openai.com",
+		"https://api.openai.com/",
+		"https://api.openai.com/v1",
+		"https://api.openai.com/v1/",
+	} {
+		c := &llmClient{BaseURL: base}
+		if got := c.endpoint("/v1/chat/completions"); got != "https://api.openai.com/v1/chat/completions" {
+			t.Errorf("%q → %q", base, got)
+		}
+	}
+	// A proxy whose own path ends in /v1 still lands correctly.
+	c := &llmClient{BaseURL: "https://proxy.example/openai/v1"}
+	if got := c.endpoint("/v1/messages"); got != "https://proxy.example/openai/v1/messages" {
+		t.Errorf("proxy base → %q", got)
+	}
+}
+
 // TestLoopSurfacesToolErrors: a failing tool becomes an is_error result the
 // model can react to, not a dead loop.
 func TestLoopSurfacesToolErrors(t *testing.T) {
