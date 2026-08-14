@@ -113,8 +113,6 @@ block-specific wording in the block.
 cd app
 make validate        # shape, then meaning: refuses gaps, overlaps, bad refs
 make test            # the suite, including the unknown-field check
-make artifacts       # regenerate the published documents
-make check-artifacts # and prove they agree with the data
 make run             # look at it: /, /calendar, /week/1, /workouts
 ```
 
