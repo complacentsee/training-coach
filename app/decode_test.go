@@ -366,8 +366,13 @@ func TestActivityMetricsAPI(t *testing.T) {
 	if out["cadence"] != 160.0 { // per-leg 80, doubled at presentation for a run
 		t.Errorf("cadence = %v", out["cadence"])
 	}
-	if _, ok := out["grade_input"]; ok {
-		t.Error("grade_input against an athlete who declares no gradeCap")
+	// The rubric measures under the anchor the BLOCK names — the example
+	// block's legend says easyCap (150), and the example athlete carries no
+	// anchor called gradeCap at all, so anything hardcoding that name
+	// serves nothing here.
+	gi, _ := out["grade_input"].(map[string]any)
+	if gi == nil || gi["grade_cap_bpm"] != 150.0 || gi["under_grade_cap_share"] != 1.0 {
+		t.Errorf("grade_input = %v, want the declared easyCap of 150", out["grade_input"])
 	}
 	f20, _ := out["first_20min"].(map[string]any)
 	if f20 == nil || f20["cap_bpm"] != 140.0 || f20["avg_bpm"] != 125.5 {
@@ -848,6 +853,8 @@ func TestGradeInputServedWithAnchors(t *testing.T) {
 		t.Fatal(err)
 	}
 	hr := ath["hr"].(map[string]any)
+	// gradeCap is deliberately present AND different: the example block's
+	// legend declares easyCap, so 150 must win over the tempting name.
 	hr["gradeCap"] = 157
 	hr["bikeLo"], hr["bikeHi"], hr["bikeCap"] = 130, 140, 145
 	mod, err := json.Marshal(ath)
@@ -872,7 +879,7 @@ func TestGradeInputServedWithAnchors(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.GradeInput["under_grade_cap_share"] != 1.0 || out.GradeInput["grade_cap_bpm"] != 157.0 {
+	if out.GradeInput["under_grade_cap_share"] != 1.0 || out.GradeInput["grade_cap_bpm"] != 150.0 {
 		t.Errorf("run grade_input = %v", out.GradeInput)
 	}
 	if out.First20 == nil {

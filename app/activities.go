@@ -377,9 +377,16 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		}
 	}
 
+	// Which anchor the run rubric measures under is the block's declaration,
+	// not this file's assumption.
+	capKey := "gradeCap"
+	if blk := d.Current(s.day(d)); blk != nil {
+		capKey = blk.Grading.CapKey()
+	}
+
 	switch kind {
 	case "run":
-		if cap, ok := a.HR["gradeCap"]; ok {
+		if cap, ok := a.HR[capKey]; ok {
 			if share, err := s.metrics.underCapShareSQL(name, cap); err != nil {
 				log.Printf("activity-metrics %s: share: %v", name, err)
 			} else if share != nil {

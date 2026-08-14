@@ -536,6 +536,12 @@ func (d *dataset) dryRun(b *Block) error {
 		}
 	}
 	if b.Grading != nil {
+		// The rubric measures under an anchor the athlete has to carry.
+		// Missing, the grade input silently disappears; loudly here beats
+		// discovering it from a grade note in November.
+		if key := b.Grading.CapKey(); d.Athlete.HR[key] == 0 {
+			return fmt.Errorf("grading measures under athlete HR anchor %q, which athlete.json does not declare", key)
+		}
 		if _, err := c.resolve(b.Grading.Note); err != nil {
 			return fmt.Errorf("grading.note: %w", err)
 		}

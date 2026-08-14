@@ -204,6 +204,22 @@ type Grading struct {
 	Note   string      `json:"note,omitempty"`
 	Bands  []GradeBand `json:"bands,omitempty"`
 	Footer string      `json:"footer,omitempty"`
+	// Cap names the athlete HR anchor the run rubric measures under —
+	// whichever one the note quotes. It is declared rather than assumed
+	// because the anchor's NAME is the block's choice: a legend reading
+	// "under HR {{.Athlete.HR.easyCap}}" against code looking up "gradeCap"
+	// produces no grade input at all, silently. Same lesson as the injury
+	// that used to be one hardcoded calf. Defaults to gradeCap, and the
+	// loader refuses a block whose named anchor the athlete does not carry.
+	Cap string `json:"cap,omitempty"`
+}
+
+// CapKey is the HR anchor this legend grades against.
+func (g *Grading) CapKey() string {
+	if g == nil || g.Cap == "" {
+		return "gradeCap"
+	}
+	return g.Cap
 }
 
 type GradeBand struct {
