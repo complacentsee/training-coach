@@ -1,0 +1,23 @@
+# The dev stack: a second, fully isolated deployment on the same server, for
+# proving import/grading changes against real data before the live app sees
+# them. Its own image tag, container name, port and volume — deploy-dev can
+# never touch live, and live's `running-coach:latest` never picks up an
+# unproven build on restart.
+#
+# grader.env (beside this file on the server, NOT in git) holds the GRADER_*
+# configuration including the API key. Optional so the stack runs before
+# grading is configured at all.
+services:
+  web:
+    image: running-coach:dev
+    container_name: running-coach-dev
+    restart: unless-stopped
+    environment:
+      TZ: America/Chicago
+    env_file:
+      - path: grader.env
+        required: false
+    ports:
+      - "0.0.0.0:${DEV_PORT:-9998}:8080"
+    volumes:
+      - ./data:/data
