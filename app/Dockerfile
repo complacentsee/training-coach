@@ -1,5 +1,9 @@
 # --- build ---------------------------------------------------------------
 FROM golang:1.25-alpine AS build
+# The runtime image is scratch, which has no CA roots at all. Everything the
+# binary ever spoke was plain HTTP until the grader called a provider over
+# TLS and every request failed "certificate signed by unknown authority".
+RUN apk add --no-cache ca-certificates
 WORKDIR /src
 COPY go.mod go.sum ./
 # The module fetch is its own layer so editing a .go file does not re-download.
@@ -44,6 +48,8 @@ FROM scratch
 ARG SRC_HASH=unknown
 LABEL org.opencontainers.image.revision=$SRC_HASH
 COPY --from=build /out/runningcoach /runningcoach
+# ~200 KB, and without it the grader cannot reach any provider over HTTPS.
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 # tzdata so -tz works; ~450 KB and worth it for correct "today"
 COPY --from=build /usr/local/go/lib/time/zoneinfo.zip /zoneinfo.zip
 ENV ZONEINFO=/zoneinfo.zip
