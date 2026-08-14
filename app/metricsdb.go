@@ -216,6 +216,24 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location) (a *
 	return a, tx.Commit()
 }
 
+// byDate lists the activities recorded on one training day, in name order.
+func (m *metricsDB) byDate(date string) ([]activityMetrics, error) {
+	rows, err := m.r.Query(`SELECT name, date, sport FROM activities WHERE date = ? ORDER BY name`, date)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []activityMetrics
+	for rows.Next() {
+		var a activityMetrics
+		if err := rows.Scan(&a.Name, &a.Date, &a.Sport); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // recent lists stored activities on or after a date, oldest first — the
 // grader's startup reconcile walks these looking for ungraded days.
 func (m *metricsDB) recent(sinceDate string) ([]activityMetrics, error) {

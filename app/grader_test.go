@@ -265,7 +265,7 @@ func TestGraderNeverPostsPartially(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.grade(m); err == nil || !strings.Contains(err.Error(), "without posting") {
+	if _, err := g.grade(m); err == nil || !strings.Contains(err.Error(), "without posting") {
 		t.Fatalf("err = %v, want a refusal naming the missing post", err)
 	}
 	if _, ok := ts.s.store.Grades()[date]; ok {

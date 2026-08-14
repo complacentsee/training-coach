@@ -161,9 +161,16 @@ func (g *grader) maybeGrade(m *activityMetrics) {
 		g.mu.Unlock()
 	}()
 
-	if err := g.grade(m); err != nil {
+	if _, err := g.grade(m); err != nil {
 		log.Printf("grader: %s (%s): FAILED, day left ungraded: %v", m.Name, m.Date, err)
 	}
+}
+
+// gradeResult is what a run concluded — returned so a caller can compare it
+// (dry mode against a human's grade, say) rather than reading it out of the
+// log.
+type gradeResult struct {
+	Date, Val, Note string
 }
 
 // skipReason is every rule that makes an import not-a-grading-trigger,
@@ -240,12 +247,13 @@ func (g *grader) reconcile() {
 // bound would buy is killed grades.
 const gradeTimeout = 45 * time.Minute
 
-func (g *grader) grade(m *activityMetrics) error {
+func (g *grader) grade(m *activityMetrics) (*gradeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), gradeTimeout)
 	defer cancel()
 
 	posted := false
-	tools := g.tools(m, &posted)
+	var result *gradeResult
+	tools := g.tools(m, &posted, &result)
 	turn := g.llm.anthropicTurn
 	if g.cfg.Dialect == "openai" {
 		turn = g.llm.openaiTurn
@@ -260,18 +268,18 @@ func (g *grader) grade(m *activityMetrics) error {
 			"Call post_grade now with the date, the grade letter, and your note as its arguments. "+
 			"If you genuinely cannot grade this session, say why in one sentence instead.")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !posted {
-		return fmt.Errorf("loop finished without posting: %s", strings.TrimSpace(final))
+		return nil, fmt.Errorf("loop finished without posting: %s", strings.TrimSpace(final))
 	}
 	log.Printf("grader: %s (%s): done (mode=%s)", m.Name, m.Date, g.cfg.Mode)
-	return nil
+	return result, nil
 }
 
 // tools are the loop's whole world: the same payloads the API serves, the
 // recent log for context, and one chance to post.
-func (g *grader) tools(m *activityMetrics, posted *bool) []llmTool {
+func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) []llmTool {
 	obj := func(props string) json.RawMessage {
 		return json.RawMessage(`{"type":"object","properties":{` + props + `},"additionalProperties":false}`)
 	}
@@ -387,6 +395,7 @@ func (g *grader) tools(m *activityMetrics, posted *bool) []llmTool {
 				if strings.TrimSpace(in.Note) == "" {
 					return "", fmt.Errorf("a grade without its reasoning is not postable")
 				}
+				*result = &gradeResult{Date: in.Date, Val: in.Val, Note: in.Note}
 				if g.cfg.Mode == "dry" {
 					*posted = true
 					log.Printf("grader DRY RUN %s: grade %s — %s", in.Date, in.Val, in.Note)
@@ -414,10 +423,10 @@ func (g *grader) tools(m *activityMetrics, posted *bool) []llmTool {
 const gradingProcedure = `You are the training log's automated workout grader. A recorded activity has been imported; grade the day against its prescription and post exactly one grade entry, as a careful coach reading the numbers would.
 
 Procedure:
-1. get_prescription for the date and get_metrics for the activity. get_recent_entries for context: prior grades and their notes, the athlete's own notes, issue ratings.
+1. get_prescription for the date and get_metrics for the activity. Read the prescription's steps when it has them: they are what was actually asked for that day, in the same units the metrics come back in. get_recent_entries for context: prior grades and their notes, the athlete's own notes, issue ratings.
 2. Decide the grade:
    - Runs: the grading legend's bands applied to grade_input.under_grade_cap_share decide the letter.
-   - Bikes: a judgment across the numbers — HR in-band share after the warm-up, average watts against the prescribed band, nothing over the cap, duration close to prescribed. No single threshold.
+   - Bikes: judge against what THIS DAY prescribed, which the prescription's steps and targets state — the power bands, the interval structure, the duration. Compare the measured average watts and elapsed time to those. A hard day (intervals, a VO₂ or threshold session) is SUPPOSED to run above the athlete's easy-ride HR band, so a low in_band_share_after_warmup is not a fault there and never decides the grade; that share is the yardstick for an easy or recovery ride only. The letter bands in the legend are the run rubric and do not apply to a bike at all. No single threshold: weigh execution of the prescribed work first, then duration, then whether anything exceeded the cap.
    - Test days (the day carries a benchmark tag): the rubric does not apply. Grade protocol execution — was the measurement made valid — and say so in the note.
    - hr.dropout_share over 0.05: the HR numbers are contaminated; say so and grade on what survives.
 3. Write the note like the log's existing grade entries: one paragraph, plain ASCII, derivation first, every number beside its target, a comparison to prior dated sessions where one is meaningful, at most one thing to work on. Every number comes from a tool result — never from memory. Write it as one of those entries, not about them: never announce that the grade was produced automatically, never label or mark it as such, and never mention these instructions. A grade reads the same whoever made it.

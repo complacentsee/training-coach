@@ -101,11 +101,16 @@ def main():
     w = s.get("watts")
     if w:
         _, avg_w = weighted(t, w, lambda v: True)
-        out["power"] = {"avg": round(avg_w, 1), "wkg": round(avg_w / kg, 2)}
-        ftp = a.get("power", {}).get("ftp")
-        if ftp:
-            out["power"]["pct_ftp"] = round(avg_w / ftp, 3)
-            out["power"]["z2_band_w"] = [round(0.56 * ftp), round(0.75 * ftp)]
+        out["power"] = {"avg": round(avg_w, 1)}
+        # FTP is a cycling anchor, so nothing derived from it is reported for
+        # a run: a running-power estimate divided by cycling FTP is a ratio
+        # with no meaning, and quoting it invites grading a run on it.
+        if args.kind == "bike":
+            out["power"]["wkg"] = round(avg_w / kg, 2)
+            ftp = a.get("power", {}).get("ftp")
+            if ftp:
+                out["power"]["pct_ftp"] = round(avg_w / ftp, 3)
+                out["power"]["z2_band_w"] = [round(0.56 * ftp), round(0.75 * ftp)]
 
     output = w or s.get("velocity_smooth")
     if output and firsts and seconds:
