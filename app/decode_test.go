@@ -598,6 +598,51 @@ func TestBikeDecouplingExcludesWarmup(t *testing.T) {
 	}
 }
 
+// TestBandFloors: the legend's letter bands are authored as prose, and the
+// floor derived from each must reproduce the rubric exactly — a share of
+// 21% is the band opening at 20, not the one below it. All-or-nothing, so
+// a rubric this cannot read falls back to prose rather than half-numbers.
+func TestBandFloors(t *testing.T) {
+	ok := []GradeBand{{"A", "≥80%"}, {"B", "60–79%"}, {"C", "40–59%"}, {"D", "20–39%"}, {"F", "under 20%"}}
+	got := bandFloors(ok)
+	want := []float64{80, 60, 40, 20, 0}
+	if len(got) != len(want) {
+		t.Fatalf("floors = %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("floor[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+	// The letter is the first band whose floor the share reaches.
+	letter := func(pct float64) string {
+		for i, f := range got {
+			if pct >= f {
+				return ok[i].Grade
+			}
+		}
+		return "?"
+	}
+	for _, c := range []struct {
+		pct  float64
+		want string
+	}{{99.4, "A"}, {80, "A"}, {79.9, "B"}, {42.3, "C"}, {21.07, "D"}, {20, "D"}, {19.9, "F"}, {1, "F"}} {
+		if g := letter(c.pct); g != c.want {
+			t.Errorf("%.2f%% → %s, want %s", c.pct, g, c.want)
+		}
+	}
+
+	for _, bad := range [][]GradeBand{
+		{{"A", "most of it"}},            // unparsable
+		{{"A", "≥80%"}, {"B", "≥90%"}},   // not descending
+		{{"A", "≥80%"}, {"B", "60–79%"}}, // nothing catches the bottom
+	} {
+		if f := bandFloors(bad); f != nil {
+			t.Errorf("%v parsed to %v, want nothing", bad, f)
+		}
+	}
+}
+
 // TestBestRolling pins the peak an average hides: a ramp whose last minute
 // is the whole result, and the refusal when the trace is shorter than the
 // window.
