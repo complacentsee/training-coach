@@ -1,9 +1,14 @@
-"""A recorded activity .fit file, converted to the streams JSON that
-tools/grade_metrics.py reads. This owns shape and unit conversion only —
-every measurement convention (time-weighting, the dropout rule, run-cadence
-doubling) lives in grade_metrics.py's docstring and is not restated here.
+"""CROSS-VALIDATION MIRROR of the conversion register in app/decode.go —
+the authoritative home since 14 Aug 2026, when activity decoding moved into
+the binary. This converts a recorded .fit into the streams JSON that
+grade_metrics.py (itself the mirror of app/metrics.go) reads; the acceptance
+gate in app/acceptgate_test.go runs both implementations over the whole
+archive and demands identity. A conversion convention changes in
+app/decode.go and here in step, or not at all.
 Decoding is fitdecode (python3 -m pip install fitdecode) with CRC checking
-enforced: a corrupt file is a refusal, not a stream.
+enforced: a corrupt file is a refusal, not a stream. (Zwift's whole-file
+CRC wart passes here by accident of fitdecode's checking span; the Go
+register verifies that convention explicitly before accepting it.)
 
     python3 tools/fit_streams.py activity.fit > s.json
     python3 tools/fit_streams.py --describe --tz America/Chicago activity.fit

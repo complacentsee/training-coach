@@ -45,6 +45,7 @@ type server struct {
 	data    atomic.Pointer[dataset]
 	stamp   atomic.Pointer[string]
 	store   *Store
+	metrics *metricsDB
 	tpl     *template.Template
 	loc     *time.Location // fallback timezone from the flag
 	assets  *assets
@@ -95,6 +96,16 @@ func main() {
 	if err := s.reload(); err != nil {
 		log.Fatalf("data: %v", err)
 	}
+	// The metrics DB is a derived cache over the activity archive; openMetricsDB
+	// self-heals a corrupt file, so an error here is environmental (permissions,
+	// disk) and as fatal as the store's would be. The reconcile back-fills any
+	// archived file the DB does not hold — on a fresh or version-bumped DB that
+	// is the whole archive, so it runs off the request path.
+	s.metrics, err = openMetricsDB(*dataDir)
+	if err != nil {
+		log.Fatalf("metrics: %v", err)
+	}
+	go s.metrics.reconcile(s.activitiesDir(), s.ds().Loc)
 	tpl, err := template.New("").Funcs(s.makeFuncs()).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("templates: %v", err)
@@ -123,6 +134,8 @@ func main() {
 	mux.HandleFunc("GET /api/activities", s.getActivities)
 	mux.HandleFunc("GET /api/activity", s.getActivity)
 	mux.HandleFunc("POST /api/activity", s.postActivity)
+	mux.HandleFunc("GET /api/activity-metrics", s.getActivityMetrics)
+	mux.HandleFunc("GET /api/day", s.getDay)
 	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
 
 	srv := &http.Server{
@@ -152,6 +165,7 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+	s.metrics.close()
 	log.Print("stopped")
 }
 
@@ -1466,6 +1480,121 @@ func (s *server) getIssueTrend(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Points = append(out.Points, point{Date: e.Date, Val: n, Note: e.Note})
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// getDay serves one date's fully resolved prescription: the session as the
+// athlete would read it, the week it sits in, the block's grading legend,
+// and the anchors current at this moment — everything the grader (and any
+// future UI) needs to measure a day without re-implementing resolution.
+// Strings are template-resolved against the real context and emphasis-
+// stripped, because this is an API that serves text, not markup. Misses are
+// 400/404, never a fallback: a date outside the block has no prescription,
+// and inventing one is how two sources of truth start.
+func (s *server) getDay(w http.ResponseWriter, r *http.Request) {
+	d := s.ds()
+	date, err := time.ParseInLocation("2006-01-02", r.URL.Query().Get("date"), d.Loc)
+	if err != nil {
+		http.Error(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	blk, ok := d.blockFor(r.URL.Query().Get("block"), s.day(d))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	wk, di, ok := blk.Locate(date)
+	if !ok {
+		http.Error(w, "date is outside the block", http.StatusNotFound)
+		return
+	}
+	sess := wk.Days[di]
+	ctx := blk.ctxFor(d.Athlete, wk.N)
+	sc := *ctx
+	sc.Session = &sess
+	sc.InBlock = true
+
+	detail, err := sc.resolve(sess.Detail)
+	if err != nil {
+		log.Printf("day %s: detail: %v", r.URL.Query().Get("date"), err)
+		http.Error(w, "prescription unavailable", http.StatusInternalServerError)
+		return
+	}
+	targets, err := sc.resolveAll(blk.TargetsFor(sess))
+	if err != nil {
+		log.Printf("day %s: targets: %v", r.URL.Query().Get("date"), err)
+		http.Error(w, "prescription unavailable", http.StatusInternalServerError)
+		return
+	}
+	for i := range targets {
+		targets[i] = stripEmph(targets[i])
+	}
+
+	type band struct {
+		Grade string `json:"grade"`
+		Range string `json:"range"`
+	}
+	type legend struct {
+		Note   string `json:"note,omitempty"`
+		Bands  []band `json:"bands"`
+		Footer string `json:"footer,omitempty"`
+	}
+	type session struct {
+		Kind     string   `json:"kind"`
+		Label    string   `json:"label"`
+		Dist     string   `json:"dist,omitempty"`
+		DistM    float64  `json:"dist_m,omitempty"`
+		Mins     int      `json:"mins,omitempty"`
+		Tag      string   `json:"tag,omitempty"`
+		Detail   string   `json:"detail,omitempty"`
+		Targets  []string `json:"targets"`
+		HasSteps bool     `json:"has_steps,omitempty"`
+	}
+	out := struct {
+		Date    string         `json:"date"`
+		Block   string         `json:"block"`
+		WeekN   int            `json:"week"`
+		Tags    []string       `json:"week_tags"`
+		Session session        `json:"session"`
+		Grading *legend        `json:"grading,omitempty"`
+		Units   string         `json:"units"`
+		Weight  float64        `json:"weight_kg,omitempty"`
+		HR      map[string]int `json:"hr,omitempty"`
+		Power   map[string]int `json:"power,omitempty"`
+	}{
+		Date: date.Format("2006-01-02"), Block: blk.ID,
+		WeekN: wk.N, Tags: wk.Tags,
+		Session: session{
+			Kind: string(sess.Kind), Label: stripEmph(sess.Label),
+			Mins: sess.Mins, Tag: sess.Tag,
+			Detail: stripEmph(detail), Targets: targets,
+			HasSteps: len(sess.Steps) > 0,
+		},
+		Units:  string(d.Athlete.Units),
+		Weight: float64(d.Athlete.Weight),
+		HR:     d.Athlete.HR,
+		Power:  d.Athlete.Power,
+	}
+	if out.Tags == nil {
+		out.Tags = []string{}
+	}
+	if out.Session.Targets == nil {
+		out.Session.Targets = []string{}
+	}
+	if sess.Dist > 0 {
+		out.Session.Dist = sess.Dist.In(d.Athlete.Units)
+		out.Session.DistM = float64(sess.Dist)
+	}
+	if g := resolveGrading(ctx, blk.Grading); g != nil {
+		l := &legend{Note: stripEmph(g.Note), Footer: stripEmph(g.Footer), Bands: []band{}}
+		for _, b := range g.Bands {
+			l.Bands = append(l.Bands, band{Grade: b.Grade, Range: b.Range})
+		}
+		out.Grading = l
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(out)
