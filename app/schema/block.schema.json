@@ -72,6 +72,9 @@
           },
           "type": "array"
         },
+        "cap": {
+          "type": "string"
+        },
         "footer": {
           "type": "string"
         },

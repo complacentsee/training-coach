@@ -94,7 +94,8 @@
     "range": "under 20%"
    }
   ],
-  "footer": "Hover a graded cell for the reasoning."
+  "footer": "Hover a graded cell for the reasoning.",
+  "cap": "easyCap"
  },
  "weeks": [
   {
