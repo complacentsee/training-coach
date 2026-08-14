@@ -149,10 +149,10 @@ func activityDate(name string, startUTC time.Time, loc *time.Location) string {
 // decides whether they matter (an HTTP import logs and moves on; the
 // canonical bytes are already safe on disk either way). A decoder panic on
 // hostile bytes is contained here for the same reason.
-func (m *metricsDB) importOne(name string, data []byte, loc *time.Location) (err error) {
+func (m *metricsDB) importOne(name string, data []byte, loc *time.Location) (a *activityMetrics, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("decode panic: %v", r)
+			a, err = nil, fmt.Errorf("decode panic: %v", r)
 		}
 		if err != nil {
 			m.recordFailure(name, err)
@@ -161,52 +161,72 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location) (err
 
 	streams, err := decodeActivity(data)
 	if err != nil {
-		return fmt.Errorf("decode: %w", err)
+		return nil, fmt.Errorf("decode: %w", err)
 	}
 	sum := sha256.Sum256(data)
-	a := computeMetrics(name, activityDate(name, streams.StartUTC, loc), streams)
+	a = computeMetrics(name, activityDate(name, streams.StartUTC, loc), streams)
 	a.SHA256 = hex.EncodeToString(sum[:])
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	tx, err := m.w.Begin()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback()
 	for _, del := range []string{`DELETE FROM hr_hist WHERE name=?`, `DELETE FROM power_hist WHERE name=?`} {
 		if _, err := tx.Exec(del, name); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO activities VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.Name, a.Date, a.Sport, a.StartUTC, a.ElapsedS, a.Records,
 		a.AvgHR, a.MaxHR, a.DropoutShare, a.HRDrift, a.DecouplingPct,
 		a.AvgCadence, a.AvgPower, a.DistanceM, a.SHA256, metricsSchemaVersion); err != nil {
-		return err
+		return nil, err
 	}
 	insHR, err := tx.Prepare(`INSERT INTO hr_hist VALUES(?,?,?)`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for bpm, sec := range a.HRHist {
 		if _, err := insHR.Exec(name, bpm, sec); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	insPW, err := tx.Prepare(`INSERT INTO power_hist VALUES(?,?,?)`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for w, sec := range a.PowerHist {
 		if _, err := insPW.Exec(name, w, sec); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if _, err := tx.Exec(`DELETE FROM failures WHERE name=?`, name); err != nil {
-		return err
+		return nil, err
 	}
-	return tx.Commit()
+	return a, tx.Commit()
+}
+
+// recent lists stored activities on or after a date, oldest first — the
+// grader's startup reconcile walks these looking for ungraded days.
+func (m *metricsDB) recent(sinceDate string) ([]activityMetrics, error) {
+	rows, err := m.r.Query(`SELECT name, date, sport FROM activities
+		WHERE date >= ? ORDER BY name`, sinceDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []activityMetrics
+	for rows.Next() {
+		var a activityMetrics
+		if err := rows.Scan(&a.Name, &a.Date, &a.Sport); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 func (m *metricsDB) recordFailure(name string, cause error) {
@@ -261,7 +281,7 @@ func (m *metricsDB) reconcile(dir string, loc *time.Location) {
 			failed++
 			continue
 		}
-		if err := m.importOne(e.Name(), data, loc); err != nil {
+		if _, err := m.importOne(e.Name(), data, loc); err != nil {
 			log.Printf("metrics reconcile: %s: %v", e.Name(), err)
 			failed++
 			continue

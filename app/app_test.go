@@ -1864,6 +1864,17 @@ func TestStepsAgreeWithTheSessionTheyElaborate(t *testing.T) {
 // routes these tests exercise, registered with the same patterns main uses so
 // PathValue works.
 func fitTestMux(t *testing.T, dataDir string) *http.ServeMux {
+	return fitTestMuxServer(t, dataDir).mux
+}
+
+// testServer bundles the mux with the server behind it, for tests (the
+// grader's) that drive server methods directly as well as routes.
+type testServer struct {
+	s   *server
+	mux *http.ServeMux
+}
+
+func fitTestMuxServer(t *testing.T, dataDir string) testServer {
 	t.Helper()
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -1907,7 +1918,7 @@ func fitTestMux(t *testing.T, dataDir string) *http.ServeMux {
 	mux.HandleFunc("GET /api/day", s.getDay)
 	mux.HandleFunc("POST /api/entry", s.postEntry)
 	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
-	return mux
+	return testServer{s: s, mux: mux}
 }
 
 func get(mux *http.ServeMux, url string, hdr map[string]string) *httptest.ResponseRecorder {

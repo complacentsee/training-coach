@@ -277,7 +277,7 @@ func TestHistogramMatchesDirectShares(t *testing.T) {
 	}
 	defer db.close()
 	const name = "2026-08-01-12-00-00.fit"
-	if err := db.importOne(name, data, time.UTC); err != nil {
+	if _, err := db.importOne(name, data, time.UTC); err != nil {
 		t.Fatal(err)
 	}
 	for _, cap := range []int{50, 140, 157, 200} {
@@ -310,7 +310,7 @@ func TestMetricsDBInvisibleToRevAndFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.importOne("2026-08-01-12-00-00.fit", tenSecondRun(t), time.UTC); err != nil {
+	if _, err := db.importOne("2026-08-01-12-00-00.fit", tenSecondRun(t), time.UTC); err != nil {
 		t.Fatal(err)
 	}
 	db.close()
@@ -438,7 +438,7 @@ func TestSchemaVersionBumpRebuilds(t *testing.T) {
 		t.Fatal(err)
 	}
 	const name = "2026-08-01-12-00-00.fit"
-	if err := db.importOne(name, tenSecondRun(t), time.UTC); err != nil {
+	if _, err := db.importOne(name, tenSecondRun(t), time.UTC); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.w.Exec(`PRAGMA user_version = 9999`); err != nil {
