@@ -1798,6 +1798,7 @@ type daySibling struct {
 	// first draft of this feature produced exactly that sentence.
 	Elapsed  string   `json:"elapsed_hms,omitempty"`
 	Dist     string   `json:"dist,omitempty"`
+	Pace     string   `json:"pace,omitempty"`
 	ElapsedS int      `json:"elapsed_s,omitempty"`
 	Distance float64  `json:"distance_m,omitempty"`
 	AvgHR    *float64 `json:"avg_hr,omitempty"`
@@ -1853,6 +1854,9 @@ func (s *server) sameKindHistory(d *dataset, blk *Block, before time.Time, kind 
 				if m.DistanceM != nil {
 					sib.Distance = pyRound(*m.DistanceM, 1)
 					sib.Dist = Distance(*m.DistanceM).InMeasured(d.Athlete.Units)
+					if !kind.IsBike() && m.ElapsedS > 0 {
+						sib.Pace = Pace(float64(m.ElapsedS) / *m.DistanceM).In(d.Athlete.Units)
+					}
 				}
 				if m.AvgHR != nil {
 					v := pyRound(*m.AvgHR, 1)
