@@ -38,7 +38,7 @@ import (
 // metricsSchemaVersion gates the whole file: a mismatch on open drops every
 // derived table and rebuilds from the archive via the startup reconcile.
 // Bump it whenever the schema OR the register's arithmetic changes shape.
-const metricsSchemaVersion = 2
+const metricsSchemaVersion = 3
 
 const metricsSchema = `
 CREATE TABLE IF NOT EXISTS activities(
@@ -194,7 +194,7 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location, wx *
 	// The weather is read here and never again: a session's conditions are
 	// a fact about a moment, and re-deriving them later can quietly answer
 	// differently once the provider revises its reanalysis.
-	if streams.StartLat != nil && streams.StartLon != nil {
+	if streams.StartLat != nil && streams.StartLon != nil && !indoors(streams.SubSport) {
 		a.Weather = wx.at(*streams.StartLat, *streams.StartLon, streams.StartUTC)
 	}
 

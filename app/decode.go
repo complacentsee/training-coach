@@ -71,7 +71,10 @@ type activityStreams struct {
 
 	HaveHR, HaveWatts, HaveVel, HaveCad bool
 
-	Sport    string // "running", "cycling", or whatever the file declares
+	Sport string // "running", "cycling", or whatever the file declares
+	// SubSport is how it was done — "virtual_activity", "indoor_cycling",
+	// "treadmill". It decides whether the weather outside meant anything.
+	SubSport string
 	StartUTC time.Time
 	DistM    *float64 // session total, else the last record's odometer
 
@@ -257,6 +260,9 @@ func decodePassOpt(data []byte, expand, skipCRC bool) (*decodedActivity, bool, e
 				if d.activityStreamsData.Sport == "unknown" {
 					d.activityStreamsData.Sport = ses.Sport.String()
 				}
+				if d.activityStreamsData.SubSport == "" {
+					d.activityStreamsData.SubSport = ses.SubSport.String()
+				}
 				if ses.TotalDistance != basetype.Uint32Invalid {
 					dist := float64(ses.TotalDistance) / 100
 					if d.activityStreamsData.DistM == nil {
@@ -266,8 +272,12 @@ func decodePassOpt(data []byte, expand, skipCRC bool) (*decodedActivity, bool, e
 					}
 				}
 			case mesgnum.Sport:
+				sp := mesgdef.NewSport(m)
 				if d.activityStreamsData.Sport == "unknown" {
-					d.activityStreamsData.Sport = mesgdef.NewSport(m).Sport.String()
+					d.activityStreamsData.Sport = sp.Sport.String()
+				}
+				if d.activityStreamsData.SubSport == "" {
+					d.activityStreamsData.SubSport = sp.SubSport.String()
 				}
 			}
 		}
@@ -319,7 +329,10 @@ func decodePassOpt(data []byte, expand, skipCRC bool) (*decodedActivity, bool, e
 		}
 		d.activityStreamsData.Cad = append(d.activityStreamsData.Cad, c)
 	}
-	// Where it started, for the weather lookup and nothing else.
+	// Where it started, for the weather lookup and nothing else. A virtual
+	// ride records a position too — Zwift writes its own world's, and
+	// Watopia sits in the Solomon Islands — so indoors is checked before
+	// anyone asks what the weather was there.
 	for _, rr := range records {
 		if rr.r.PositionLat != basetype.Sint32Invalid && rr.r.PositionLong != basetype.Sint32Invalid {
 			lat := semicirclesToDegrees(rr.r.PositionLat)
