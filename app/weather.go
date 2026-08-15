@@ -83,6 +83,10 @@ type weatherService struct {
 	db      *metricsDB
 	http    *http.Client
 	enabled bool
+	// now is the clock the archive's own horizon is measured against; tests
+	// pin it. The archive knows nothing past today, and asking anyway costs
+	// the whole request.
+	now func() time.Time
 }
 
 func newWeatherService(db *metricsDB) *weatherService {
@@ -90,6 +94,7 @@ func newWeatherService(db *metricsDB) *weatherService {
 		db:      db,
 		http:    &http.Client{Timeout: weatherLookupTimeout},
 		enabled: envOr("WEATHER_LOOKUP", "off") == "on",
+		now:     time.Now,
 	}
 }
 
@@ -175,13 +180,38 @@ func (w *weatherService) store(la, lo float64, hour time.Time, c *conditions) {
 	}
 }
 
+// clockDay is the last date the archive can possibly hold, in UTC.
+func (w *weatherService) clockDay() time.Time {
+	n := time.Now
+	if w.now != nil {
+		n = w.now
+	}
+	return n().UTC().Truncate(24 * time.Hour)
+}
+
 // fetchDay reads the hours around a session and caches every one of them.
 // The range runs to the next day because a session late in the UTC day
 // needs the hour after it to interpolate, and because the whole day costs
 // the same one request as a single hour does.
 func (w *weatherService) fetchDay(la, lo float64, hour time.Time) error {
 	day := hour.Format("2006-01-02")
-	next := hour.Add(24 * time.Hour).Format("2006-01-02")
+	// The day after is asked for so the hour bracketing a session near
+	// midnight is there to interpolate with. But the archive refuses any date
+	// beyond its own today and fails the WHOLE request when asked — 400,
+	// "end_date is out of allowed range" — so a session recorded this morning
+	// lost every hour of its day rather than just the trailing one, and
+	// weather is frozen at import, so it lost it permanently. Every same-day
+	// session went unweathered, which is every session the grader runs on.
+	// Clamped, the last hour of a UTC day simply has no successor to
+	// interpolate with, which at() already handles.
+	end := hour.Add(24 * time.Hour)
+	if today := w.clockDay(); end.After(today) {
+		end = today
+	}
+	if end.Before(hour) {
+		end = hour
+	}
+	next := end.Format("2006-01-02")
 	q := url.Values{
 		"latitude":         {fmt.Sprintf("%.1f", la)},
 		"longitude":        {fmt.Sprintf("%.1f", lo)},

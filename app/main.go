@@ -1803,7 +1803,11 @@ type daySibling struct {
 	UnderCap *float64 `json:"under_grade_cap_share,omitempty"`
 	AvgPower *float64 `json:"avg_power,omitempty"`
 	Decoup   *float64 `json:"decoupling_pct,omitempty"`
-	TempF    *float64 `json:"temp_f,omitempty"`
+	// The conditions it was run in, whole rather than a temperature alone:
+	// heat costs beats at a given effort, so the same heart rate on a hotter
+	// day is a better session, and the comparison cannot see that without the
+	// dew point and the heat sum the athlete actually reads.
+	Weather *conditions `json:"weather,omitempty"`
 }
 
 // sameKindHistory walks back through the block for earlier days prescribing
@@ -1861,10 +1865,7 @@ func (s *server) sameKindHistory(d *dataset, blk *Block, before time.Time, kind 
 					v := pyRound(*m.AvgPower, 1)
 					sib.AvgPower = &v
 				}
-				if m.Weather != nil {
-					v := m.Weather.TempF
-					sib.TempF = &v
-				}
+				sib.Weather = m.Weather
 				// The rubric's own number, recomputed against the anchors
 				// current now rather than whatever they were then — the same
 				// rule /api/activity-metrics follows, so two readings of the
