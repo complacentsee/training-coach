@@ -9,13 +9,11 @@ services:
     restart: unless-stopped
     environment:
       TZ: America/Chicago
-    # The grader's configuration, if this stack has any. Optional and inert
-    # without the file: no file means GRADER_MODE defaults to off, which is
-    # the state until dry-run judgment has earned its way to live. See
-    # grader.env.example; a real grader.env never enters git.
-    env_file:
-      - path: grader.env
-        required: false
+    # No env_file, deliberately. This stack does not grade and does not
+    # talk to a model provider: it records what the athlete did and serves
+    # the plan, and it holds no API key to be spent or leaked. Grading runs
+    # on the dev stack, which has its own compose file and its own key.
+    # Restoring that here is a deliberate edit, not a dropped-in file.
     ports:
       - "0.0.0.0:9999:8080"
     volumes:

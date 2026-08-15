@@ -74,6 +74,17 @@ type activityStreams struct {
 	Sport    string // "running", "cycling", or whatever the file declares
 	StartUTC time.Time
 	DistM    *float64 // session total, else the last record's odometer
+
+	// StartLat/StartLon are the first fixed position, in degrees. The only
+	// use is asking what the weather was there: they are read, rounded
+	// coarse, and never stored or served. A trainer ride has none.
+	StartLat, StartLon *float64
+}
+
+// semicirclesToDegrees converts FIT's position unit — 2^31 semicircles to
+// 180 degrees.
+func semicirclesToDegrees(v int32) float64 {
+	return float64(v) * (180.0 / 2147483648.0)
 }
 
 // wholeFileFITCRCOK walks the chained FIT parts and accepts a part when its
@@ -307,6 +318,15 @@ func decodePassOpt(data []byte, expand, skipCRC bool) (*decodedActivity, bool, e
 			d.activityStreamsData.HaveCad = true
 		}
 		d.activityStreamsData.Cad = append(d.activityStreamsData.Cad, c)
+	}
+	// Where it started, for the weather lookup and nothing else.
+	for _, rr := range records {
+		if rr.r.PositionLat != basetype.Sint32Invalid && rr.r.PositionLong != basetype.Sint32Invalid {
+			lat := semicirclesToDegrees(rr.r.PositionLat)
+			lon := semicirclesToDegrees(rr.r.PositionLong)
+			d.activityStreamsData.StartLat, d.activityStreamsData.StartLon = &lat, &lon
+			break
+		}
 	}
 	if d.activityStreamsData.DistM == nil { // no session distance: last record's odometer
 		for i := len(records) - 1; i >= 0; i-- {

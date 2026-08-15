@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS power_hist(
   PRIMARY KEY(name, watts)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS failures(
   name TEXT PRIMARY KEY, error TEXT NOT NULL, at TEXT NOT NULL);
+-- Weather is cached by coarse position and hour, not by activity: the
+-- conditions at a place and time are the same for every session that
+-- touches them, and this table is what keeps one lookup from becoming a
+-- lookup per grade. Not derived from the archive, so a rebuild simply
+-- refetches; no precise position is ever written here.
+CREATE TABLE IF NOT EXISTS weather(
+  lat REAL NOT NULL, lon REAL NOT NULL, hour_utc TEXT NOT NULL,
+  temp_f REAL, dew_f REAL, humidity_pct INTEGER, wind_mph REAL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY(lat, lon, hour_utc)) WITHOUT ROWID;
 `
 
 type metricsDB struct {
@@ -98,6 +108,9 @@ func openMetricsDBAt(path string) (*metricsDB, error) {
 			log.Printf("metrics: schema v%d on disk, this build is v%d — dropping derived tables for rebuild",
 				version, metricsSchemaVersion)
 		}
+		// weather is not in this list: it caches an external service rather
+		// than deriving from the archive, so a schema bump has no reason to
+		// throw it away and refetch.
 		for _, t := range []string{"activities", "hr_hist", "power_hist", "failures"} {
 			if _, err := w.Exec(`DROP TABLE IF EXISTS ` + t); err != nil {
 				w.Close()
