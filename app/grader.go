@@ -35,6 +35,7 @@ package main
 // loudly and leaves the day ungraded — never a partial post.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -42,6 +43,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +60,10 @@ type graderConfig struct {
 	// dialect. Some reasoning models reject function tools on
 	// /v1/chat/completions unless it is "none".
 	Effort string
+	// NotesMax bounds the athlete-specific overlay appended to the embedded
+	// procedure, in bytes. GRADER_NOTES_MAX raises it for a model with room
+	// for more.
+	NotesMax int
 }
 
 func graderConfigFromEnv() (graderConfig, error) {
@@ -69,6 +75,14 @@ func graderConfigFromEnv() (graderConfig, error) {
 		BaseURL:  os.Getenv("GRADER_BASE_URL"),
 		Key:      os.Getenv("GRADER_API_KEY"),
 		Effort:   os.Getenv("GRADER_REASONING_EFFORT"),
+	}
+	c.NotesMax = defaultNotesMax
+	if v := os.Getenv("GRADER_NOTES_MAX"); v != "" {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n <= 0 {
+			return c, fmt.Errorf("GRADER_NOTES_MAX is %q, want a positive byte count", v)
+		}
+		c.NotesMax = n
 	}
 	switch c.Mode {
 	case "off", "dry", "live":
@@ -108,6 +122,15 @@ func graderConfigFromEnv() (graderConfig, error) {
 // gradeRecentDays is the auto-grade window: an import whose training day is
 // older than this many days is a backfill, not a fresh session.
 const gradeRecentDays = 2
+
+// defaultNotesMax bounds data/grading-notes.md, the athlete-specific overlay
+// appended to the embedded procedure. It is the one input to the system prompt
+// with no natural ceiling: it is a hand-edited file read fresh on every run, so
+// a runaway edit or a truncated write would otherwise be pasted in whole and
+// push the measured numbers out of a small model's context. 16 KiB is about
+// three times the current file against a 7.5 KiB procedure — room to grow
+// without ever tripping. GRADER_NOTES_MAX raises it where the model has room.
+const defaultNotesMax = 16 << 10
 
 // recentEntriesBudget bounds the log excerpt the grader reads, in bytes of
 // entry payload. Generous enough to carry several prior grade notes (the
@@ -544,8 +567,35 @@ Procedure:
 // an edit applies to the next grade with no restart.
 func (g *grader) systemPrompt() string {
 	sp := gradingProcedure
-	if b, err := os.ReadFile(filepath.Join(g.s.dataDir, "grading-notes.md")); err == nil && len(b) > 0 {
-		sp += "\n\nAthlete-specific grading notes — these override the general procedure where they conflict:\n" + string(b)
+	b, err := os.ReadFile(filepath.Join(g.s.dataDir, "grading-notes.md"))
+	if err != nil || len(b) == 0 {
+		return sp
 	}
+	if max := g.cfg.NotesMax; max > 0 && len(b) > max {
+		full := len(b)
+		b = clipAtLine(b, max)
+		// Loudly, and on every run rather than once: what falls past the cut
+		// are RULES, and a grade made without them is wrong in a way nothing
+		// downstream can detect — the note will read perfectly.
+		log.Printf("grader: grading-notes.md is %d bytes against a %d limit; only the first %d are in effect. "+
+			"Raise GRADER_NOTES_MAX or shorten the file — anything past the cut is NOT being applied.",
+			full, max, len(b))
+	}
+	sp += "\n\nAthlete-specific grading notes — these override the general procedure where they conflict:\n" + string(b)
 	return sp
+}
+
+// clipAtLine is the longest prefix of b within max bytes that ends on a line
+// boundary. Cutting mid-sentence is worse than cutting early here: half a rule
+// can read as a different rule, and "never grade a test day on the under-cap
+// share" truncated at the wrong byte says the opposite of itself.
+func clipAtLine(b []byte, max int) []byte {
+	if len(b) <= max {
+		return b
+	}
+	cut := b[:max]
+	if i := bytes.LastIndexByte(cut, '\n'); i > 0 {
+		return cut[:i+1]
+	}
+	return cut
 }
