@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -43,16 +44,19 @@ var staticFS embed.FS
 const reloadEvery = 30 * time.Second
 
 type server struct {
-	data    atomic.Pointer[dataset]
-	stamp   atomic.Pointer[string]
-	store   *Store
-	metrics *metricsDB
-	weather *weatherService
-	grader  *grader
-	tpl     *template.Template
-	loc     *time.Location // fallback timezone from the flag
-	assets  *assets
-	dataDir string
+	// data and stamp are one fact in two atomics, so reload holds reloading
+	// while it publishes both. Readers still take them lock-free.
+	reloading sync.Mutex
+	data      atomic.Pointer[dataset]
+	stamp     atomic.Pointer[string]
+	store     *Store
+	metrics   *metricsDB
+	weather   *weatherService
+	grader    *grader
+	tpl       *template.Template
+	loc       *time.Location // fallback timezone from the flag
+	assets    *assets
+	dataDir   string
 }
 
 func main() {
@@ -219,12 +223,27 @@ func (s *server) startupReconcile() {
 // reload swaps in a fresh dataset. A failed load leaves the old one serving:
 // half-applied data would be worse than slightly stale data, and the error is
 // logged loudly enough to find.
+//
+// Two reloads can overlap -- watch ticks every thirty seconds and POST
+// /api/reload arrives whenever push-data runs -- so the swap is serialised.
+// Interleaved, the two stores could leave one reload's dataset live under the
+// other's fingerprint, and once the live stamp matches what is on disk, watch
+// skips: stale forever, silently, which is the one failure mode this data
+// directory cannot signal any other way.
+//
+// The fingerprint is taken BEFORE the load for the same reason. push-files
+// replaces blocks/ and library/ wholesale, so a tick landing mid-extract can
+// read a directory that is valid but partial; stamping it afterwards records
+// the finished state against the partial data and nothing ever reloads it.
+// Stamping first can only be pessimistic -- watch tries again.
 func (s *server) reload() error {
+	s.reloading.Lock()
+	defer s.reloading.Unlock()
+	stamp := fingerprint(s.dataDir)
 	d, err := loadDataset(s.dataDir, s.loc)
 	if err != nil {
 		return err
 	}
-	stamp := fingerprint(s.dataDir)
 	s.data.Store(d)
 	s.stamp.Store(&stamp)
 	return nil
