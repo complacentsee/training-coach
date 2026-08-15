@@ -18,6 +18,8 @@ import (
 	"github.com/muktihari/fit/profile/mesgdef"
 	"github.com/muktihari/fit/profile/typedef"
 	"github.com/muktihari/fit/proto"
+	"os"
+	"path/filepath"
 )
 
 // Time-parameterized fixture pieces (decode_test.go's are anchored to its
@@ -310,5 +312,66 @@ func TestGraderEndToEnd(t *testing.T) {
 				t.Fatalf("re-grade appended: %d entries", len(all))
 			}
 		})
+	}
+}
+
+// TestGradingNotesAreBounded: the athlete overlay is the one input to the
+// system prompt with no natural ceiling — a hand-edited file, read fresh on
+// every run, appended verbatim. A runaway edit or a half-finished write would
+// otherwise push the measured numbers out of a small model's context, and the
+// grade that came back would read perfectly while being made on nothing.
+func TestGradingNotesAreBounded(t *testing.T) {
+	dir := t.TempDir()
+	write := func(s string) {
+		if err := os.WriteFile(filepath.Join(dir, "grading-notes.md"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	graderOver := func(max int) *grader {
+		return &grader{s: &server{dataDir: dir}, cfg: graderConfig{NotesMax: max}}
+	}
+
+	// Under the limit: present in full, untouched.
+	write("first rule\nsecond rule\nlast rule\n")
+	sp := graderOver(defaultNotesMax).systemPrompt()
+	for _, want := range []string{"first rule", "second rule", "last rule"} {
+		if !strings.Contains(sp, want) {
+			t.Errorf("a file well under the limit lost %q", want)
+		}
+	}
+	if !strings.Contains(sp, "You are the training log's automated workout grader") {
+		t.Error("the embedded procedure is missing from the prompt")
+	}
+
+	// Over it: cut, and cut on a line boundary so no rule is half-quoted.
+	write("keep this line\n" + strings.Repeat("x", 500) + "\nDO NOT GRADE A TEST DAY ON THE SHARE\n")
+	sp = graderOver(40).systemPrompt()
+	if !strings.Contains(sp, "keep this line") {
+		t.Error("the truncation dropped what fitted")
+	}
+	if strings.Contains(sp, "DO NOT GRADE A TEST DAY ON THE SHARE") {
+		t.Error("a rule past the limit reached the prompt")
+	}
+	if i := strings.Index(sp, "keep this line"); i >= 0 && strings.Contains(sp[i:], "xxxx") {
+		t.Error("cut mid-line; half a rule can read as a different rule")
+	}
+
+	// The limit is configurable, because a roomier model can take more.
+	t.Setenv("GRADER_MODE", "off")
+	t.Setenv("GRADER_NOTES_MAX", "")
+	if c, err := graderConfigFromEnv(); err != nil || c.NotesMax != defaultNotesMax {
+		t.Errorf("unset should default to %d, got %d (%v)", defaultNotesMax, c.NotesMax, err)
+	}
+	t.Setenv("GRADER_NOTES_MAX", "65536")
+	if c, err := graderConfigFromEnv(); err != nil || c.NotesMax != 65536 {
+		t.Errorf("override ignored: %d (%v)", c.NotesMax, err)
+	}
+	// A typo is fatal, like every other GRADER_*: a silently wrong bound
+	// would quietly amputate the rules.
+	for _, bad := range []string{"lots", "0", "-1", "16k"} {
+		t.Setenv("GRADER_NOTES_MAX", bad)
+		if _, err := graderConfigFromEnv(); err == nil {
+			t.Errorf("GRADER_NOTES_MAX=%q was accepted", bad)
+		}
 	}
 }
