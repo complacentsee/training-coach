@@ -103,9 +103,15 @@ check-hash:     ## prove SRC_HASH sees a file in a subpackage
 validate: check-schema ## load and check ./data without starting a server
 	@go run . -validate -data ./data
 
+# Capture, then filter. `go test | sed` reports sed's exit status, so a real
+# --- FAIL printed the failure and still exited 0, and validate -> push-files
+# -> push-data -> deploy all proceeded on a drifted schema. The pipe stays for
+# the one-line success message; the status no longer goes through it.
 check-schema:   ## reject data keys that no struct field would receive
-	@go test -run 'TestDataFilesHaveNoUnknownFields|TestSchemasMatchTheStructs' . \
-	  | sed 's/^ok.*/schema        ok/'
+	@out=$$(go test -run 'TestDataFilesHaveNoUnknownFields|TestSchemasMatchTheStructs' .) || { \
+	  printf '%s\n' "$$out" >&2; \
+	  echo "FAILED: the data or the schema files do not match the Go types" >&2; exit 1; }; \
+	printf '%s\n' "$$out" | sed 's/^ok.*/schema        ok/'
 
 schema:         ## rewrite app/schema/*.json after changing a struct
 	@go test -run TestSchemasMatchTheStructs -update-schema . >/dev/null && \
