@@ -63,6 +63,14 @@ docker run -d -p 8080:8080 -v "$PWD/data:/data" running-coach
 An empty `/data` volume serves the example athlete; your files serve your
 plan. `compose.yml` has the full running configuration.
 
+## Access
+
+The app has no authentication of its own. Anything that can reach the
+port gets every page and every API: the plan, the daily log, and the
+archived activity files, GPS and all. Put it behind something that
+authenticates — an identity-aware proxy, a zero-trust tunnel, or a
+network only you are on.
+
 ## Your own plan
 
 1. `AUTHORING.md` documents every field. Or let an LLM interview you:
