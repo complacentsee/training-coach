@@ -161,6 +161,60 @@
 
   /* ── guide popups ───────────────────────────────────────────────────── */
 
+  /* ── skipping a session ──────────────────────────────────────────────
+     Two taps. The first arms and says what the second will do, because a
+     session marked not-done by a stray thumb is a lie in the record that
+     nothing else would catch. Undoing needs only one: putting a day back
+     the way it was is not the consequential direction. */
+  Array.prototype.forEach.call(document.querySelectorAll("form.skip"), function (form) {
+    var btn = form.querySelector(".skipbtn");
+    var note = form.querySelector("input[name=note]");
+    var state = form.querySelector(".skip-state");
+    var card = form.closest(".card");
+    var armTimer;
+
+    function disarm() {
+      clearTimeout(armTimer);
+      form.classList.remove("armed");
+      note.hidden = true;
+      btn.textContent = form.classList.contains("on") ? "Undo" : "Couldn't do this";
+    }
+
+    btn.addEventListener("click", function () {
+      var skipping = !form.classList.contains("on");
+
+      if (skipping && !form.classList.contains("armed")) {
+        form.classList.add("armed");
+        note.hidden = false;
+        btn.textContent = "Confirm";
+        note.focus();
+        /* An armed button left alone goes back to asking. */
+        clearTimeout(armTimer);
+        armTimer = setTimeout(disarm, 8000);
+        return;
+      }
+
+      var reason = note.value.trim();
+      btn.disabled = true;
+      post({ kind: "skip", date: form.dataset.date,
+             val: skipping ? "skipped" : "unskipped", note: reason })
+        .then(function () {
+          form.classList.toggle("on", skipping);
+          if (card) card.classList.toggle("skipped", skipping);
+          if (state) {
+            state.textContent = skipping
+              ? "Not done" + (reason ? " — " + reason : "")
+              : "";
+          }
+          if (!skipping) note.value = "";
+          disarm();
+          say(skipping ? "Marked not done" : "Back on");
+        })
+        .catch(function (e) { say("Failed: " + e.message, true); })
+        .finally(function () { btn.disabled = false; });
+    });
+  });
+
   var modal = document.getElementById("modal");
   if (!modal) return;
   var box = modal.querySelector(".modal-box");

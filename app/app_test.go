@@ -1904,6 +1904,7 @@ func fitTestMuxServer(t *testing.T, dataDir string) testServer {
 	s.tpl = tpl
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", s.today)
 	mux.HandleFunc("GET /calendar", s.calendar)
 	mux.HandleFunc("GET /week/{n}", s.week)
 	mux.HandleFunc("GET /fit/{date}", s.fitFile)

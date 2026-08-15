@@ -167,6 +167,49 @@ func (s *Store) RatingOn(key, date string) *Entry {
 	return found
 }
 
+// kindSkip is a session the athlete did not do and said so. It is a fact
+// about the day, not a failure to record one: a blank day cannot tell
+// "skipped, no time" from "forgot to log it", and the difference changes
+// what the week means and how the next session reads.
+const kindSkip = "skip"
+
+// SkipOn reports whether the session on a date is currently marked skipped,
+// with the entry that says so. Append-only, so unskipping writes another
+// entry and the last one wins — the history of changing his mind survives.
+func (s *Store) SkipOn(date string) (*Entry, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var found *Entry
+	for i := range s.all {
+		if s.all[i].Kind == kindSkip && s.all[i].Date == date {
+			e := s.all[i]
+			found = &e
+		}
+	}
+	if found == nil || found.Val != "skipped" {
+		return found, false
+	}
+	return found, true
+}
+
+// Skips returns every date currently marked skipped, with its entry.
+func (s *Store) Skips() map[string]Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]Entry{}
+	for _, e := range s.all {
+		if e.Kind != kindSkip {
+			continue
+		}
+		if e.Val == "skipped" {
+			out[e.Date] = e
+		} else {
+			delete(out, e.Date)
+		}
+	}
+	return out
+}
+
 // Grades returns the graded result per training date, keyed YYYY-MM-DD.
 // Grades are pushed in by Claude after the session data is analysed — the app
 // records compliance, but the grade needs Strava, so it arrives from outside.

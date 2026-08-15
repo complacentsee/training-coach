@@ -273,6 +273,9 @@ type todayData struct {
 	MesoName    string
 	DayIdx      int
 	Session     Session
+	Skippable   bool // an actual session, so there is something to skip
+	Skipped     bool
+	SkipNote    string
 	Detail      string
 	Targets     []string
 	GuideID     string
@@ -418,6 +421,13 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 		td.Tasks = append(td.Tasks, tv)
 	}
 
+	// A session can be marked not-done. A rest day cannot: there is nothing
+	// to skip, and offering it would be noise on the one day that needs none.
+	td.Skippable = ok && td.Session.Kind != KindRest
+	if e, skipped := s.store.SkipOn(iso); skipped {
+		td.Skipped, td.SkipNote = true, e.Note
+	}
+
 	td.Issues = s.issueViews(d, blk, weekN, iso)
 	s.render(w, "today.html", td)
 }
@@ -504,6 +514,7 @@ type calCell struct {
 	Guide   string
 	Grade   string
 	Note    string
+	Skipped bool
 	FitURL  string // set only when the session carries steps
 	ZwoURL  string // bike steps days only
 }
@@ -528,6 +539,7 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 		cd.TodayW, cd.TodayD = wk.N, di
 	}
 	grades, weekGrades := s.store.Grades(), s.store.WeekGrades()
+	skips := s.store.Skips()
 	for wi, wk := range blk.Weeks {
 		row := calRow{Week: wk, Volume: wk.Volume().In(s.units())}
 		if g, ok := weekGrades[wk.StartISO()]; ok {
@@ -562,6 +574,14 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 			}
 			if g, ok := grades[dt.Format("2006-01-02")]; ok {
 				c.Grade, c.Note = g.Val, g.Note
+			}
+			// A day he said he did not do reads differently from a blank
+			// one, and the reason he gave is what the cell says on hover.
+			if sk, ok := skips[dt.Format("2006-01-02")]; ok {
+				c.Skipped = true
+				if c.Note == "" {
+					c.Note = strings.TrimSpace("Skipped — " + sk.Note)
+				}
 			}
 			row.Cells = append(row.Cells, c)
 		}
@@ -1380,9 +1400,15 @@ func (s *server) postEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch e.Kind {
-	case "task", kindIssue, legacyCalfKind, "note", "metric", "grade":
+	case "task", kindIssue, legacyCalfKind, "note", "metric", "grade", kindSkip:
 	default:
-		http.Error(w, `kind must be one of: task, issue, note, metric, grade`, http.StatusBadRequest)
+		http.Error(w, `kind must be one of: task, issue, note, metric, grade, skip`, http.StatusBadRequest)
+		return
+	}
+	// A skip says whether, and optionally why. Anything else in val would
+	// read as a state this does not have.
+	if e.Kind == kindSkip && e.Val != "skipped" && e.Val != "unskipped" {
+		http.Error(w, `skip val must be "skipped" or "unskipped"`, http.StatusBadRequest)
 		return
 	}
 	if e.Date == "" {
@@ -1701,17 +1727,19 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		Note   string `json:"note,omitempty"`
 	}
 	out := struct {
-		Date    string         `json:"date"`
-		Block   string         `json:"block"`
-		WeekN   int            `json:"week"`
-		Tags    []string       `json:"week_tags"`
-		Session session        `json:"session"`
-		Grading *legend        `json:"grading,omitempty"`
-		Units   string         `json:"units"`
-		Weight  float64        `json:"weight_kg,omitempty"`
-		HR      map[string]int `json:"hr,omitempty"`
-		Power   map[string]int `json:"power,omitempty"`
-		Issues  []issueRating  `json:"issues,omitempty"`
+		Date     string         `json:"date"`
+		Skipped  bool           `json:"skipped,omitempty"`
+		SkipNote string         `json:"skip_note,omitempty"`
+		Block    string         `json:"block"`
+		WeekN    int            `json:"week"`
+		Tags     []string       `json:"week_tags"`
+		Session  session        `json:"session"`
+		Grading  *legend        `json:"grading,omitempty"`
+		Units    string         `json:"units"`
+		Weight   float64        `json:"weight_kg,omitempty"`
+		HR       map[string]int `json:"hr,omitempty"`
+		Power    map[string]int `json:"power,omitempty"`
+		Issues   []issueRating  `json:"issues,omitempty"`
 	}{
 		Date: date.Format("2006-01-02"), Block: blk.ID,
 		WeekN: wk.N, Tags: wk.Tags,
@@ -1749,6 +1777,9 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		out.Session.Steps = stepViews(rs, d.Athlete.Units)
 	}
 	iso := date.Format("2006-01-02")
+	if e, skipped := s.store.SkipOn(iso); skipped {
+		out.Skipped, out.SkipNote = true, e.Note
+	}
 	for i := range d.Athlete.Issues {
 		is := &d.Athlete.Issues[i]
 		e := s.store.RatingOn(is.Key, iso)
