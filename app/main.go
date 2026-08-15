@@ -1008,65 +1008,76 @@ func relDay(d time.Time, in int) string {
 	}
 }
 
-// fitFile serves a day's structured session as a Garmin FIT workout file.
-// Date-addressed because ISO date is the app's universal day key. Encoding at
-// request time from one dataset snapshot costs ~1 KB of arithmetic, and
-// dryRun has already proved every loaded steps day encodes — the error
-// branches below are defensive, not reachable for loaded data. Every miss is
-// a 404, never a fallback file: a synthesized workout for an unstructured day
-// is junk pushed to a watch.
-func (s *server) fitFile(w http.ResponseWriter, r *http.Request) {
-	d := s.ds()
-	date, err := time.ParseInLocation("2006-01-02", r.PathValue("date"), d.Loc)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	blk, ok := d.blockFor(r.URL.Query().Get("block"), s.day(d))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	wk, di, ok := blk.Locate(date)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	sess := wk.Days[di]
-	if len(sess.Steps) == 0 {
-		http.NotFound(w, r)
-		return
-	}
+/* ── exports ─────────────────────────────────────────────────────────────── */
 
-	ctx := blk.ctxFor(d.Athlete, wk.N)
-	sc := *ctx
+// exportKind is one workout file format. The FIT and Zwift routes differ in
+// which sessions they carry, how a day encodes and what the file is called —
+// locating the day, resolving its steps, the 404 rules, the ETag dance and the
+// zip loop were copied between them and are written once here. The two file
+// routes had already drifted into two spellings of identical error handling.
+type exportKind struct {
+	tag     string // log prefix
+	zipName string // the archive filename's suffix
+	carries func(*Session) bool
+	slug    func(name string) string
+	encode  func(d *dataset, sess *Session, name string, rs []resolvedStep, serial uint32, created time.Time) ([]byte, error)
+}
+
+var fitExport = exportKind{
+	tag:     "fit",
+	zipName: "workouts",
+	carries: func(*Session) bool { return true },
+	slug:    fitSlug,
+	encode: func(_ *dataset, sess *Session, name string, rs []resolvedStep, serial uint32, created time.Time) ([]byte, error) {
+		return fitWorkoutFor(name, rs, fitSportFor(sess.Kind), serial, created).Encode()
+	},
+}
+
+// Bike days only: a .zwo for a run would be a file with no home. Targets are
+// fractions of Zwift's own FTP setting, which is why the athlete's FTP is read
+// here rather than baked into the steps.
+var zwoExport = exportKind{
+	tag:     "zwo",
+	zipName: "zwift",
+	carries: func(sess *Session) bool { return sess.Kind.IsBike() },
+	slug:    zwoSlug,
+	encode: func(d *dataset, _ *Session, name string, rs []resolvedStep, _ uint32, _ time.Time) ([]byte, error) {
+		return zwoFor(name, rs, d.Athlete.Power["ftp"])
+	},
+}
+
+// encodeDay resolves one day and encodes it, returning the file's name, its
+// bytes and its deterministic identity time. Identity derives from (data Rev,
+// block id, ISO date) whatever the format, so any data edit rotates every file
+// — a batch must never dedupe, and a re-import must look new.
+func (k exportKind) encodeDay(d *dataset, blk *Block, wk *Week, di int, date time.Time) (string, []byte, time.Time, error) {
+	sess := wk.Days[di]
+	sc := *blk.ctxFor(d.Athlete, wk.N)
 	sc.Session = &sess
 	sc.InBlock = true
 	rs, err := resolveSteps(&sc, sess)
 	if err != nil {
-		log.Printf("fit %s: %v", r.PathValue("date"), err)
-		http.Error(w, "workout unavailable", http.StatusInternalServerError)
-		return
+		return "", nil, time.Time{}, err
 	}
 	name, err := fitName(wk.N, di, sess.Label)
 	if err != nil {
-		log.Printf("fit %s: %v", r.PathValue("date"), err)
-		http.Error(w, "workout unavailable", http.StatusInternalServerError)
-		return
+		return "", nil, time.Time{}, err
 	}
 	serial, created := fitIdentity(d.Rev, blk.ID, date)
-	body, err := fitWorkoutFor(name, rs, fitSportFor(sess.Kind), serial, created).Encode()
+	body, err := k.encode(d, &sess, name, rs, serial, created)
 	if err != nil {
-		log.Printf("fit %s: %v", r.PathValue("date"), err)
-		http.Error(w, "workout unavailable", http.StatusInternalServerError)
-		return
+		return "", nil, time.Time{}, err
 	}
+	return k.slug(name), body, created, nil
+}
 
+// serveDownload writes a generated file with its validator. Every export ends
+// this way: the bytes are deterministic per data revision, so the body's hash
+// is the ETag and an unchanged file costs a 304 instead of a re-encode.
+func serveDownload(w http.ResponseWriter, r *http.Request, ctype, filename string, body []byte) {
 	etag := etagFor(body)
-	// FIT has no IANA registration; octet-stream plus attachment guarantees a
-	// download everywhere rather than a browser tab of mojibake.
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+fitSlug(name)+`"`)
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
 	if r.Header.Get("If-None-Match") == etag {
@@ -1076,85 +1087,14 @@ func (s *server) fitFile(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-// fitZip bundles every steps day of a block into one archive, for loading a
-// whole block's workouts in a single MTP session. Entries are the same bytes
-// the per-day route serves, under the same slug names, stored uncompressed —
-// FIT files are a few hundred bytes and an unzip tool is the only consumer.
-// A block with no steps days is a 404, because a zip of nothing is the
-// fallback-file mistake in a different wrapper.
-func (s *server) fitZip(w http.ResponseWriter, r *http.Request) {
-	d := s.ds()
-	blk, ok := d.blockFor(r.URL.Query().Get("block"), s.day(d))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	n := 0
-	for wi, wk := range blk.Weeks {
-		for di, sess := range wk.Days {
-			if len(sess.Steps) == 0 {
-				continue
-			}
-			ctx := blk.ctxFor(d.Athlete, wk.N)
-			sc := *ctx
-			sc.Session = &sess
-			sc.InBlock = true
-			rs, err := resolveSteps(&sc, sess)
-			if err == nil {
-				var name string
-				if name, err = fitName(wk.N, di, sess.Label); err == nil {
-					serial, created := fitIdentity(d.Rev, blk.ID, blk.DayOf(wi, di))
-					var body []byte
-					if body, err = fitWorkoutFor(name, rs, fitSportFor(sess.Kind), serial, created).Encode(); err == nil {
-						var f io.Writer
-						// Modified is the file's own deterministic identity
-						// time, so the archive's bytes are as reproducible as
-						// its entries'.
-						if f, err = zw.CreateHeader(&zip.FileHeader{
-							Name: fitSlug(name), Method: zip.Store, Modified: created,
-						}); err == nil {
-							_, err = f.Write(body)
-						}
-					}
-				}
-			}
-			if err != nil {
-				log.Printf("fit.zip week %d day %d: %v", wk.N, di+1, err)
-				http.Error(w, "workouts unavailable", http.StatusInternalServerError)
-				return
-			}
-			n++
-		}
-	}
-	if err := zw.Close(); err != nil {
-		log.Printf("fit.zip: %v", err)
-		http.Error(w, "workouts unavailable", http.StatusInternalServerError)
-		return
-	}
-	if n == 0 {
-		http.NotFound(w, r)
-		return
-	}
-
-	body := buf.Bytes()
-	etag := etagFor(body)
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+fitSlugBase(blk.ID)+`-workouts.zip"`)
-	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
-	if r.Header.Get("If-None-Match") == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-	_, _ = w.Write(body)
-}
-
-// zwoFile serves a bike day's steps as a Zwift custom workout. Only bike
-// days: a .zwo for a run would be a file with no home, and every miss is a
-// 404, never a fallback.
-func (s *server) zwoFile(w http.ResponseWriter, r *http.Request) {
+// exportFile serves a day's structured session as a workout file.
+// Date-addressed because ISO date is the app's universal day key. Encoding at
+// request time from one dataset snapshot costs ~1 KB of arithmetic, and dryRun
+// has already proved every loaded steps day encodes — the error branch is
+// defensive, not reachable for loaded data. Every miss is a 404, never a
+// fallback file: a synthesized workout for an unstructured day is junk pushed
+// to a watch.
+func (s *server) exportFile(w http.ResponseWriter, r *http.Request, k exportKind) {
 	d := s.ds()
 	date, err := time.ParseInLocation("2006-01-02", r.PathValue("date"), d.Loc)
 	if err != nil {
@@ -1172,42 +1112,28 @@ func (s *server) zwoFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := wk.Days[di]
-	if len(sess.Steps) == 0 || !sess.Kind.IsBike() {
+	if len(sess.Steps) == 0 || !k.carries(&sess) {
 		http.NotFound(w, r)
 		return
 	}
-
-	ctx := blk.ctxFor(d.Athlete, wk.N)
-	sc := *ctx
-	sc.Session = &sess
-	sc.InBlock = true
-	rs, err := resolveSteps(&sc, sess)
-	if err == nil {
-		var name string
-		if name, err = fitName(wk.N, di, sess.Label); err == nil {
-			var body []byte
-			if body, err = zwoFor(name, rs, d.Athlete.Power["ftp"]); err == nil {
-				etag := etagFor(body)
-				w.Header().Set("Content-Type", "application/octet-stream")
-				w.Header().Set("Content-Disposition", `attachment; filename="`+zwoSlug(name)+`"`)
-				w.Header().Set("ETag", etag)
-				w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
-				if r.Header.Get("If-None-Match") == etag {
-					w.WriteHeader(http.StatusNotModified)
-					return
-				}
-				_, _ = w.Write(body)
-				return
-			}
-		}
+	slug, body, _, err := k.encodeDay(d, blk, wk, di, date)
+	if err != nil {
+		log.Printf("%s %s: %v", k.tag, r.PathValue("date"), err)
+		http.Error(w, "workout unavailable", http.StatusInternalServerError)
+		return
 	}
-	log.Printf("zwo %s: %v", r.PathValue("date"), err)
-	http.Error(w, "workout unavailable", http.StatusInternalServerError)
+	// Neither format has an IANA registration; octet-stream plus attachment
+	// guarantees a download everywhere rather than a browser tab of mojibake.
+	serveDownload(w, r, "application/octet-stream", slug, body)
 }
 
-// zwoZip bundles every bike day's Zwift workout — the whole block lands in
-// Documents/Zwift/Workouts in one unzip.
-func (s *server) zwoZip(w http.ResponseWriter, r *http.Request) {
+// exportZip bundles every day a format carries into one archive, for loading a
+// whole block in a single session. Entries are the same bytes the per-day route
+// serves, under the same names, stored uncompressed — these are a few hundred
+// bytes each and an unzip tool is the only consumer. A block with no day of
+// this kind is a 404, because a zip of nothing is the fallback-file mistake in
+// a different wrapper.
+func (s *server) exportZip(w http.ResponseWriter, r *http.Request, k exportKind) {
 	d := s.ds()
 	blk, ok := d.blockFor(r.URL.Query().Get("block"), s.day(d))
 	if !ok {
@@ -1219,31 +1145,22 @@ func (s *server) zwoZip(w http.ResponseWriter, r *http.Request) {
 	n := 0
 	for wi, wk := range blk.Weeks {
 		for di, sess := range wk.Days {
-			if len(sess.Steps) == 0 || !sess.Kind.IsBike() {
+			if len(sess.Steps) == 0 || !k.carries(&sess) {
 				continue
 			}
-			ctx := blk.ctxFor(d.Athlete, wk.N)
-			sc := *ctx
-			sc.Session = &sess
-			sc.InBlock = true
-			rs, err := resolveSteps(&sc, sess)
+			slug, body, created, err := k.encodeDay(d, blk, wk, di, blk.DayOf(wi, di))
 			if err == nil {
-				var name string
-				if name, err = fitName(wk.N, di, sess.Label); err == nil {
-					var body []byte
-					if body, err = zwoFor(name, rs, d.Athlete.Power["ftp"]); err == nil {
-						_, created := fitIdentity(d.Rev, blk.ID, blk.DayOf(wi, di))
-						var f io.Writer
-						if f, err = zw.CreateHeader(&zip.FileHeader{
-							Name: zwoSlug(name), Method: zip.Store, Modified: created,
-						}); err == nil {
-							_, err = f.Write(body)
-						}
-					}
+				var f io.Writer
+				// Modified is the file's own deterministic identity time,
+				// so the archive's bytes are as reproducible as its entries'.
+				if f, err = zw.CreateHeader(&zip.FileHeader{
+					Name: slug, Method: zip.Store, Modified: created,
+				}); err == nil {
+					_, err = f.Write(body)
 				}
 			}
 			if err != nil {
-				log.Printf("zwo.zip week %d day %d: %v", wk.N, di+1, err)
+				log.Printf("%s.zip week %d day %d: %v", k.tag, wk.N, di+1, err)
 				http.Error(w, "workouts unavailable", http.StatusInternalServerError)
 				return
 			}
@@ -1251,7 +1168,7 @@ func (s *server) zwoZip(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := zw.Close(); err != nil {
-		log.Printf("zwo.zip: %v", err)
+		log.Printf("%s.zip: %v", k.tag, err)
 		http.Error(w, "workouts unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -1259,18 +1176,13 @@ func (s *server) zwoZip(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	body := buf.Bytes()
-	etag := etagFor(body)
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+fitSlugBase(blk.ID)+`-zwift.zip"`)
-	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
-	if r.Header.Get("If-None-Match") == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-	_, _ = w.Write(body)
+	serveDownload(w, r, "application/zip", fitSlugBase(blk.ID)+"-"+k.zipName+".zip", buf.Bytes())
 }
+
+func (s *server) fitFile(w http.ResponseWriter, r *http.Request) { s.exportFile(w, r, fitExport) }
+func (s *server) fitZip(w http.ResponseWriter, r *http.Request)  { s.exportZip(w, r, fitExport) }
+func (s *server) zwoFile(w http.ResponseWriter, r *http.Request) { s.exportFile(w, r, zwoExport) }
+func (s *server) zwoZip(w http.ResponseWriter, r *http.Request)  { s.exportZip(w, r, zwoExport) }
 
 type watchRow struct {
 	Date    time.Time
