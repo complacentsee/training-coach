@@ -92,6 +92,22 @@ func (d *dataset) BlockByID(id string) *Block {
 // blockFor resolves the ?block= parameter, falling back to the current block.
 // An unknown id is an error rather than a silent fallback: a stale bookmark
 // should say so, not quietly show a different block's data.
+// inAnyBlock reports whether an ISO date falls inside a loaded block. The
+// archive holds whatever the watch carried, including years of sessions no
+// plan ever asked for; a block date is the subset anything grades.
+func (d *dataset) inAnyBlock(iso string) bool {
+	t, err := time.ParseInLocation("2006-01-02", iso, d.Loc)
+	if err != nil {
+		return false
+	}
+	for _, b := range d.Blocks {
+		if _, _, ok := b.Locate(t); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *dataset) blockFor(id string, day time.Time) (*Block, bool) {
 	if id == "" {
 		b := d.Current(day)

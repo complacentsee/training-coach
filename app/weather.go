@@ -34,6 +34,8 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -177,6 +179,78 @@ func (w *weatherService) store(la, lo float64, hour time.Time, c *conditions) {
 		la, lo, hour.Format(time.RFC3339), c.TempF, c.DewF, c.RH, c.WindMPH,
 		time.Now().UTC().Format(time.RFC3339)); err != nil {
 		log.Printf("weather cache write: %v", err)
+	}
+}
+
+// backfillWeatherLimit bounds one startup's catch-up. The cache means several
+// sessions on the same day and place cost a single request, so this is a bound
+// on distinct days rather than on files, but it is still a bound: an archive
+// that has never been looked up should not become one long line of requests to
+// somebody else's service.
+const backfillWeatherLimit = 200
+
+// backfillWeather fills in conditions for activities that have none but sit
+// inside a training block.
+//
+// Frozen-at-import is the right rule for a session that HAS weather — the
+// provider revises its reanalysis, and a grade must go on citing what it was
+// made against. It must not also mean that a session which never got any can
+// never have any. Rows arrive weatherless when the lookup was switched off,
+// when the provider was unreachable, or — until the horizon clamp above —
+// whenever the session was recorded the same day it was run, which was every
+// session the grader ever saw.
+//
+// Confined to block dates because that is the data a grade is made from. The
+// archive holds whatever the watch carried, and asking an external service
+// about hundreds of sessions no plan will ever grade is rude and slow.
+func (s *server) backfillWeather() {
+	if s.weather == nil || !s.weather.enabled || s.metrics == nil {
+		return
+	}
+	rows, err := s.metrics.weatherless()
+	if err != nil {
+		log.Printf("weather backfill: %v", err)
+		return
+	}
+	d := s.ds()
+	var filled, failed, outside int
+	for _, r := range rows {
+		if filled+failed >= backfillWeatherLimit {
+			log.Printf("weather backfill: stopped at %d, more remain for the next start", backfillWeatherLimit)
+			break
+		}
+		if !d.inAnyBlock(r.Date) {
+			outside++
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(s.activitiesDir(), r.Name))
+		if err != nil {
+			failed++
+			continue
+		}
+		streams, err := decodeActivity(b)
+		if err != nil {
+			failed++
+			continue
+		}
+		if streams.StartLat == nil || streams.StartLon == nil || indoors(streams.SubSport) {
+			continue // nothing to ask about: no position, or a room
+		}
+		c := s.weather.at(*streams.StartLat, *streams.StartLon, streams.StartUTC)
+		if c == nil {
+			failed++
+			continue
+		}
+		if err := s.metrics.setWeather(r.Name, c); err != nil {
+			log.Printf("weather backfill %s: %v", r.Name, err)
+			failed++
+			continue
+		}
+		filled++
+	}
+	if filled > 0 || failed > 0 {
+		log.Printf("weather backfill: %d filled, %d failed, %d outside any block",
+			filled, failed, outside)
 	}
 }
 
