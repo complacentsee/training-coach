@@ -20,6 +20,14 @@ import (
 	"github.com/muktihari/fit/proto"
 )
 
+// A position for these tests to carry, and deliberately nowhere anyone
+// lives: what is being checked is that a position is coarsened before it
+// leaves this machine, never which one it was.
+const (
+	testLat = 29.7604
+	testLon = -95.3698
+)
+
 // archiveStub answers like the provider and records what it was asked.
 func archiveStub(t *testing.T, hits *int32, seen *string) *httptest.Server {
 	t.Helper()
@@ -69,7 +77,7 @@ func TestWeatherReadsTheHourAndCachesIt(t *testing.T) {
 	// session starts in is up to an hour before it started, always on the
 	// cool side of a warming morning.
 	when := time.Date(2026, 8, 13, 13, 47, 38, 0, time.UTC)
-	c := w.at(44.9778, -93.2650, when)
+	c := w.at(testLat, testLon, when)
 	if c == nil {
 		t.Fatal("no conditions")
 	}
@@ -82,27 +90,27 @@ func TestWeatherReadsTheHourAndCachesIt(t *testing.T) {
 		t.Errorf("heat sum = %v, want 136.4", c.HeatSum)
 	}
 	// On the hour exactly, there is nothing to interpolate.
-	if onHour := w.at(44.9778, -93.2650, when.Truncate(time.Hour)); onHour == nil ||
+	if onHour := w.at(testLat, testLon, when.Truncate(time.Hour)); onHour == nil ||
 		onHour.TempF != 68.4 || onHour.DewF != 65.6 {
 		t.Errorf("on the hour = %+v, want the 13:00 reading unchanged", onHour)
 	}
 	// Halfway is the mean of the two.
-	if mid := w.at(44.9778, -93.2650, when.Truncate(time.Hour).Add(30*time.Minute)); mid == nil ||
+	if mid := w.at(testLat, testLon, when.Truncate(time.Hour).Add(30*time.Minute)); mid == nil ||
 		mid.TempF != 69.7 {
 		t.Errorf("halfway = %+v, want 69.7 between 68.4 and 71", mid)
 	}
 
 	// Coarse, before it leaves: a tenth of a degree is about eleven km.
 	lat, lon, _ := parseAsked(t, asked)
-	if lat != 45.0 || lon != -93.3 {
-		t.Errorf("position sent as %v,%v — wanted it rounded to 45.0,-93.3", lat, lon)
+	if lat != 29.8 || lon != -95.4 {
+		t.Errorf("position sent as %v,%v — wanted it rounded to 29.8,-95.4", lat, lon)
 	}
 
 	// A position a few hundred metres away rounds to the same place, and
 	// every one of these reads the hourly readings already cached — what is
 	// stored is the provider's facts, and the interpolation is derived each
 	// time from them.
-	if c3 := w.at(45.0201, -93.2501, when); c3 == nil || c3.TempF != c.TempF {
+	if c3 := w.at(29.8201, -95.3501, when); c3 == nil || c3.TempF != c.TempF {
 		t.Errorf("nearby position missed the cache: %+v", c3)
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {
@@ -137,7 +145,7 @@ func TestWeatherCrossesTheDateLine(t *testing.T) {
 	defer srv.Close()
 
 	w := weatherUnderTest(t, srv.URL, true)
-	c := w.at(44.98, -93.27, local)
+	c := w.at(testLat, testLon, local)
 	if c == nil {
 		t.Fatal("no conditions for an evening session")
 	}
@@ -229,9 +237,9 @@ func runWithPosition(t *testing.T) []byte {
 			SetTimestamp(fixtureT0.Add(time.Duration(i) * time.Second)).
 			SetHeartRate(uint8(120 + i)).
 			SetEnhancedSpeed(3000).
-			// Semicircles: about 45.0N, 93.3W.
-			SetPositionLat(degreesToSemicircles(44.98)).
-			SetPositionLong(degreesToSemicircles(-93.27))
+			// Semicircles: coarsened, this is about 29.8N, 95.4W.
+			SetPositionLat(degreesToSemicircles(testLat)).
+			SetPositionLong(degreesToSemicircles(testLon))
 		msgs = append(msgs, r.ToMesg(nil))
 	}
 	msgs = append(msgs, sessionMsg(typedef.SportRunning, 100_00))
@@ -309,7 +317,7 @@ func TestWeatherOffMakesNoRequest(t *testing.T) {
 	defer srv.Close()
 	w := weatherUnderTest(t, srv.URL, false)
 
-	if c := w.at(44.98, -93.27, time.Now()); c != nil {
+	if c := w.at(testLat, testLon, time.Now()); c != nil {
 		t.Errorf("switched off and still answered: %+v", c)
 	}
 	if n := atomic.LoadInt32(&hits); n != 0 {
@@ -336,7 +344,7 @@ func TestWeatherFailuresCostOnlyTheWeather(t *testing.T) {
 			srv := httptest.NewServer(c.handler)
 			defer srv.Close()
 			w := weatherUnderTest(t, srv.URL, true)
-			if got := w.at(44.98, -93.27, time.Date(2026, 8, 13, 13, 0, 0, 0, time.UTC)); got != nil {
+			if got := w.at(testLat, testLon, time.Date(2026, 8, 13, 13, 0, 0, 0, time.UTC)); got != nil {
 				t.Errorf("returned %+v from a broken provider", got)
 			}
 		})
@@ -350,7 +358,7 @@ func TestWeatherFailuresCostOnlyTheWeather(t *testing.T) {
 
 func TestCoarsePosition(t *testing.T) {
 	for _, c := range []struct{ in, want float64 }{
-		{44.9778, 45.0}, {-93.2650, -93.3}, {0, 0}, {44.94, 44.9}, {-0.04, -0.0},
+		{29.7604, 29.8}, {-95.3698, -95.4}, {0, 0}, {29.74, 29.7}, {-0.04, -0.0},
 	} {
 		if got := coarse(c.in); got != c.want {
 			t.Errorf("coarse(%v) = %v, want %v", c.in, got, c.want)
