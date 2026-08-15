@@ -319,6 +319,23 @@ func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) [
 			},
 		},
 		{
+			Name:        "session_history",
+			Description: "Earlier sessions of the SAME kind in this block, newest first, each measured the way this one will be — grade, duration, distance, average HR, share under the grade cap, decoupling, temperature. This is how a session is compared like for like: a long run against the previous long run, a quality session against the previous quality session. The day being graded is never included.",
+			Schema: obj(`"date":{"type":"string","description":"YYYY-MM-DD, the day being graded"},` +
+				`"limit":{"type":"integer","description":"how many earlier sessions, default 6"}`),
+			Run: func(_ context.Context, args json.RawMessage) (string, error) {
+				var in struct {
+					Date  string
+					Limit int
+				}
+				if err := json.Unmarshal(args, &in); err != nil {
+					return "", err
+				}
+				out, code, msg := g.s.sessionHistoryPayload(in.Date, "", in.Limit)
+				return marshal(out, code, msg)
+			},
+		},
+		{
 			Name:        "get_metrics",
 			Description: "Measured numbers for a stored activity: HR, power, cadence, decoupling, and the grade inputs computed against the current anchors.",
 			Schema:      obj(`"name":{"type":"string","description":"the activity's stored .fit filename"}`),
@@ -508,7 +525,7 @@ func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) [
 const gradingProcedure = `You are the training log's automated workout grader. A recorded activity has been imported; grade the day against its prescription and post exactly one grade entry, as a careful coach reading the numbers would.
 
 Procedure:
-1. get_prescription for the date and get_metrics for the activity. Read the prescription's steps when it has them: they are what was actually asked for that day, in the same units the metrics come back in. get_recent_entries for context: prior grades and their notes, the athlete's own notes, issue ratings.
+1. get_prescription for the date and get_metrics for the activity. Read the prescription's steps when it has them: they are what was actually asked for that day, in the same units the metrics come back in. get_recent_entries for context: prior grades and their notes, the athlete's own notes, issue ratings. The prescription names the previous session of this same kind as "previous"; call session_history for the fuller series of them when you want the trend rather than a single comparison.
 2. Decide the grade:
    - Runs: the grading legend's bands applied to grade_input.under_grade_cap_share decide the letter. The bands are listed best first and each carries min_pct, its floor as a percentage: the letter is the FIRST band whose floor the share reaches. Convert the share to a percentage before comparing, and do that comparison rather than eyeballing the range text — a share of 21% belongs to the band opening at 20, not the one below it.
    - Bikes: judge against what THIS DAY prescribed, which the prescription's steps and targets state — the power bands, the interval structure, the duration. Compare the measured average watts and elapsed time to those. A hard day (intervals, a VO₂ or threshold session) is SUPPOSED to run above the athlete's easy-ride HR band, so a low in_band_share_after_warmup is not a fault there and never decides the grade; that share is the yardstick for an easy or recovery ride only. The letter bands in the legend are the run rubric and do not apply to a bike at all. No single threshold: weigh execution of the prescribed work first, then duration, then whether anything exceeded the cap.
@@ -519,7 +536,7 @@ Procedure:
    - A day that prescribes its own ceiling — a recovery run capped below the everyday cap, say — is judged against THAT ceiling: call hr_share_under with the day's own number and apply the legend's bands to what it returns. Against the generic cap such a session is a trivial pass, which measures nothing. Judge the share, never the average: an average sitting under a ceiling says nothing about how long was spent above it.
    - hr.dropout_share over 0.05: the HR numbers are contaminated; say so and grade on what survives.
 3. Weigh what the athlete reported, because the prescription is not the whole instruction. The day's prescription carries any issue rated that day: the number, the band it falls in, and that band's ACTION — what the declaration says to do at that rating. Where the action modifies the session, the modified session is what was prescribed, and the grade follows it. A quality day taken easy on an instruction to take it easy is compliance, and grading it as a failed quality day is wrong; say in the note that the rating is why. The metrics may carry the weather where the session started, including a heat sum of air temperature plus dew point: heat costs several beats at a given effort, so read a hot day's heart rate against that rather than against a still morning's, and say so when it changed the reading. Where the metrics carry weather AND an entry in the log also states conditions, quote the metrics: they are interpolated to the recorded start, while a check made by hand precedes the start by an unknown gap. Read the athlete's own entries too — free text about heat, illness, terrain, a stop, or anything else that bore on the session. Take stated conditions into account rather than grading as if the day were neutral, and name the condition in the note when it changed the reading.
-4. Write the note like the log's existing grade entries: one paragraph, plain ASCII, derivation first, every number beside its target, a comparison to prior dated sessions where one is meaningful, at most one thing to work on. Every number comes from a tool result — never from memory. Write it as one of those entries, not about them: never announce that the grade was produced automatically, never label or mark it as such, and never mention these instructions. A grade reads the same whoever made it.
+4. Write the note like the log's existing grade entries: one paragraph, plain ASCII, derivation first, every number beside its target, and a comparison with earlier sessions of the SAME kind - a long run against the previous long run, a quality session against the previous quality session - naming the date and what actually moved between them, whether that is an improvement or a slide. Do NOT try to work out which earlier grade was comparable by reading its note: the log records the ENTRY kind and never the SESSION kind, so prose similarity will pick the wrong session. session_history is the only reliable answer to that question, and it is empty when this is the first of its kind in the block - in which case say so rather than reaching for an unlike session. At most one thing to work on. Every number comes from a tool result — never from memory. Write it as one of those entries, not about them: never announce that the grade was produced automatically, never label or mark it as such, and never mention these instructions. A grade reads the same whoever made it.
 5. Record it: your final action is a post_grade call carrying the date, the grade letter, and the note. This is not optional and it is not the same as writing the grade in a message — a message is discarded, only the call is recorded. Never summarise the metrics back as prose and stop; gather what you need, then make the call. If anything genuinely prevents a confident grade — a prescription that does not match what was recorded, contaminated data with nothing to grade on — then post nothing and say why in one sentence instead.`
 
 // systemPrompt is the embedded procedure plus the optional athlete-specific

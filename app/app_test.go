@@ -2042,6 +2042,7 @@ func TestEveryRouteIsReachable(t *testing.T) {
 		{"POST", "/api/activity"},
 		{"GET", "/api/activity-metrics"},
 		{"GET", "/api/day"},
+		{"GET", "/api/session-history"},
 		{"GET", "/api/issue-trend"},
 	} {
 		if _, pat := mux.Handler(httptest.NewRequest(c.method, c.url, nil)); pat == "" {

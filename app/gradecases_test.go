@@ -25,6 +25,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -315,4 +316,76 @@ func TestGradeCases(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// TestSameKindHistoryComparesLikeForLike: the grader had every prior grade in
+// front of it and still compared a 10-mile long run against a 6-mile easy run
+// with strides, because the log records the ENTRY kind and never the SESSION
+// kind — so "which earlier session was comparable" could only be guessed from
+// prose. The example block has the same shape as the real one: two Saturday
+// long runs a week apart, with easy and quality days between them.
+func TestSameKindHistoryComparesLikeForLike(t *testing.T) {
+	s, _ := caseServer(t, committedCases)
+	d := s.ds()
+	blk := d.Current(mustDay(t, "2026-01-17", d.Loc))
+	if blk == nil {
+		t.Fatal("no block")
+	}
+
+	second := mustDay(t, "2026-01-17", d.Loc) // the later long run
+	got := s.sameKindHistory(d, blk, second, KindLong, 6)
+	if len(got) == 0 {
+		t.Fatal("no earlier long run found; the comparison this exists for is impossible")
+	}
+	if got[0].Date != "2026-01-10" {
+		t.Errorf("nearest earlier long run = %s, want 2026-01-10", got[0].Date)
+	}
+	for _, r := range got {
+		if r.Date >= "2026-01-17" {
+			t.Errorf("%s is not earlier than the day being graded — the grade under test must never leak", r.Date)
+		}
+		if wk, di, ok := blk.Locate(mustDay(t, r.Date, d.Loc)); ok {
+			if k := wk.Days[di].Kind; k != KindLong {
+				t.Errorf("%s is a %s, not a long run — the whole point is like for like", r.Date, k)
+			}
+		}
+	}
+	// Measured, not merely named: without the metrics join this is a list of
+	// dates and compares nothing.
+	if got[0].ElapsedS == 0 {
+		t.Errorf("%s carries no measured duration: %+v", got[0].Date, got[0])
+	}
+	if got[0].UnderCap == nil {
+		t.Errorf("%s carries no under-cap share, which is the rubric's own number", got[0].Date)
+	}
+
+	// The first session of its kind has nothing to compare with, and must say
+	// so by being empty rather than reaching for an unlike session.
+	if first := s.sameKindHistory(d, blk, mustDay(t, "2026-01-10", d.Loc), KindLong, 6); len(first) != 0 {
+		t.Errorf("the first long run of the block got %d earlier ones: %+v", len(first), first)
+	}
+
+	// And it reaches the day payload, so the grader sees it without asking.
+	out, code, _ := s.dayPayload("2026-01-17", "")
+	if code != http.StatusOK {
+		t.Fatalf("dayPayload: %d", code)
+	}
+	doc, ok := out.(dayDoc)
+	if !ok {
+		t.Fatalf("payload is %T", out)
+	}
+	if doc.Previous == nil || doc.Previous.Date != "2026-01-10" {
+		t.Errorf("the prescription does not name the previous long run: %+v", doc.Previous)
+	}
+	t.Logf("previous long run: %s %q grade=%q %ds under_cap=%v",
+		doc.Previous.Date, doc.Previous.Label, doc.Previous.Grade, doc.Previous.ElapsedS, doc.Previous.UnderCap)
+}
+
+func mustDay(t *testing.T, iso string, loc *time.Location) time.Time {
+	t.Helper()
+	d, err := time.ParseInLocation("2006-01-02", iso, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
