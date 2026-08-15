@@ -14,13 +14,17 @@
       <th class="wk">
         <a href="/week/{{$w.N}}{{with $.Archive}}{{.Query}}{{end}}">Week {{$w.N}}</a>
         <span>{{$w.Dates}}</span>
-        <span>{{.Volume}}{{if .WeekGrade}} · <b class="g g{{lower .WeekGrade}}" title="{{.WeekNote}}">{{.WeekGrade}}</b>{{end}}</span>
+        <span>{{.Volume}}{{if .WeekGrade}} · <button type="button" class="g g{{lower .WeekGrade}}" title="{{.WeekNote}}"
+              data-note="{{.WeekNote}}" data-grade="{{.WeekGrade}}" data-range="{{.WeekRange}}"
+              data-when="Week {{$w.N}}" aria-label="Week {{$w.N}} graded {{.WeekGrade}} — read why">{{.WeekGrade}}</button>{{end}}</span>
       </th>
       {{range $i, $c := .Cells}}
         <td class="{{kindCls $c.Session.Kind}}{{if $c.Grade}} graded{{end}}{{if $c.Skipped}} skipped{{end}}{{if and (eq $w.N $.TodayW) (eq $i $.TodayD)}} now{{end}}"
             {{if $c.Guide}}data-guide="{{$c.Guide}}"{{end}}
             {{if $c.Note}}title="{{$c.Note}}"{{end}}>
-          {{if $c.Grade}}<span class="g g{{lower $c.Grade}}">{{$c.Grade}}</span>{{end}}
+          {{if $c.Grade}}<button type="button" class="g g{{lower $c.Grade}}"
+              data-note="{{$c.Note}}" data-grade="{{$c.Grade}}" data-range="{{$c.Range}}"
+              data-when="{{date $c.Date}}" aria-label="Graded {{$c.Grade}} — read why">{{$c.Grade}}</button>{{end}}
           {{if $c.Session.Tag}}<span class="tag">{{$c.Session.Tag}}</span>{{end}}
           <span class="amt">{{amount $c.Session}}</span>
           <span class="lbl">{{emph $c.Session.Label}}</span>

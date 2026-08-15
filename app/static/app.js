@@ -352,6 +352,32 @@
     close();
   }
 
+  /* A grade is a judgement, and the reasoning behind it is the useful half:
+     what the session actually was, measured against what was asked, and how
+     that arrived at the letter. It was reachable only by hovering, which is a
+     tooltip on a desktop and nothing whatsoever on a phone — where he reads
+     this. So the letter is a button, and it opens in the panel the guides
+     already use rather than inventing a second kind of popup. */
+  function openNote(el) {
+    var note = el.getAttribute("data-note") || "";
+    var g = el.getAttribute("data-grade") || "";
+    var range = el.getAttribute("data-range") || "";
+    var when = el.getAttribute("data-when") || "";
+    stack = [];
+    lastFocus = document.activeElement;
+    titleEl.textContent = when || "Grade";
+    var h = "";
+    if (g) {
+      h += '<p class="g-band"><b class="g g' + esc(g.toLowerCase()) + '">' + esc(g) + "</b>" +
+        (range ? " <span>" + esc(range) + " under the cap</span>" : "") + "</p>";
+    }
+    h += "<p>" + (note ? emph(note) : "No note was recorded with this grade.") + "</p>";
+    bodyEl.innerHTML = h;
+    modal.hidden = false;
+    document.body.style.overflow = "hidden";
+    box.focus();
+  }
+
   /* The units a guide is measured in: one per set where sets are declared,
      otherwise one per step. Mirrors ProgressUnits in library.go. */
   function progressUnits(g) {
@@ -459,6 +485,14 @@
     /* A real link inside a guide-opening cell — the calendar's FIT download
        — must navigate, not open the popup. */
     if (e.target.closest("a[href]")) return;
+    /* A grade letter sits inside a cell that opens a guide, so it is checked
+       first: clicking the letter is asking about the grade, not the workout. */
+    var gn = e.target.closest("[data-note]");
+    if (gn) {
+      e.preventDefault();
+      openNote(gn);
+      return;
+    }
     var t = e.target.closest("[data-guide]");
     if (t && t.dataset.guide) {
       e.preventDefault();

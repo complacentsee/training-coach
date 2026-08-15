@@ -514,6 +514,7 @@ type calRow struct {
 	Cells     []calCell
 	WeekGrade string
 	WeekNote  string
+	WeekRange string // the legend's range for that letter, looked up not restated
 }
 
 type calCell struct {
@@ -522,6 +523,7 @@ type calCell struct {
 	Guide   string
 	Grade   string
 	Note    string
+	Range   string // the legend's range for Grade, so the popup can say what the letter meant
 	Skipped bool
 	FitURL  string // set only when the session carries steps
 	ZwoURL  string // bike steps days only
@@ -546,12 +548,21 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 	if wk, di, ok := blk.Locate(day); ok {
 		cd.TodayW, cd.TodayD = wk.N, di
 	}
+	// The legend is the one declaration of what a letter means; this is a
+	// lookup into it, never a second copy.
+	bandOf := map[string]string{}
+	if cd.Grading != nil {
+		for _, b := range cd.Grading.Bands {
+			bandOf[b.Grade] = b.Range
+		}
+	}
 	grades, weekGrades := s.store.Grades(), s.store.WeekGrades()
 	skips := s.store.Skips()
 	for wi, wk := range blk.Weeks {
 		row := calRow{Week: wk, Volume: wk.Volume().In(s.units())}
 		if g, ok := weekGrades[wk.StartISO()]; ok {
 			row.WeekGrade, row.WeekNote = g.Val, g.Note
+			row.WeekRange = bandOf[g.Val]
 		}
 		for i, sess := range wk.Days {
 			dt := blk.DayOf(wi, i)
@@ -582,6 +593,7 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 			}
 			if g, ok := grades[dt.Format("2006-01-02")]; ok {
 				c.Grade, c.Note = g.Val, g.Note
+				c.Range = bandOf[g.Val]
 			}
 			// A day he said he did not do reads differently from a blank
 			// one, and the reason he gave is what the cell says on hover.
