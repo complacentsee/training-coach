@@ -1788,9 +1788,15 @@ func (s *server) dayIssues(d *dataset, iso string) []dayIssue {
 // ENTRY kind — grade, note, issue — and never the SESSION kind. It had to
 // guess from prose. This is the missing fact, stated.
 type daySibling struct {
-	Date     string   `json:"date"`
-	Label    string   `json:"label"`
-	Grade    string   `json:"grade,omitempty"`
+	Date  string `json:"date"`
+	Label string `json:"label"`
+	Grade string `json:"grade,omitempty"`
+	// Elapsed and Dist carry their units, because these numbers are quoted
+	// back to the athlete in a note: a comparison reading "16128.53 m vs
+	// 16146.8 m, 6009 s vs 5870 s" is arithmetic done at the reader, and the
+	// first draft of this feature produced exactly that sentence.
+	Elapsed  string   `json:"elapsed_hms,omitempty"`
+	Dist     string   `json:"dist,omitempty"`
 	ElapsedS int      `json:"elapsed_s,omitempty"`
 	Distance float64  `json:"distance_m,omitempty"`
 	AvgHR    *float64 `json:"avg_hr,omitempty"`
@@ -1838,8 +1844,10 @@ func (s *server) sameKindHistory(d *dataset, blk *Block, before time.Time, kind 
 			}
 			if m := s.bestActivityOn(iso, kind.IsBike()); m != nil {
 				sib.ElapsedS = m.ElapsedS
+				sib.Elapsed = fmt.Sprintf("%d:%02d", m.ElapsedS/60, m.ElapsedS%60)
 				if m.DistanceM != nil {
 					sib.Distance = pyRound(*m.DistanceM, 1)
+					sib.Dist = Distance(*m.DistanceM).In(d.Athlete.Units)
 				}
 				if m.AvgHR != nil {
 					v := pyRound(*m.AvgHR, 1)
