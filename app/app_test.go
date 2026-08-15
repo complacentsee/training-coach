@@ -1906,6 +1906,65 @@ func fitTestMuxServer(t *testing.T, dataDir string) testServer {
 	return testServer{s: s, mux: s.routes()}
 }
 
+// TestGuidesComeFromTheBlockAsked: guides are per-block — the library merged
+// with that block's overrides, resolved against that block's anchors — so the
+// popup on an archived page must be that block's. The handler answered from
+// the current block whatever it was asked, which is invisible on screen: the
+// right guide opens, with the wrong paces inside it.
+func TestGuidesComeFromTheBlockAsked(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"blocks", "library"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile(t, "./defaults/athlete.json", filepath.Join(dir, "athlete.json"))
+	for _, n := range []string{"guides.json", "index.json"} {
+		copyFile(t, filepath.Join("./defaults/library", n), filepath.Join(dir, "library", n))
+	}
+	raw, err := os.ReadFile("./defaults/blocks/example-base-block.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blocks", "a.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var old map[string]any
+	if err := json.Unmarshal(raw, &old); err != nil {
+		t.Fatal(err)
+	}
+	const wasCalled = "Easy run — AS IT WAS THEN"
+	old["id"] = "last-year"
+	old["start"] = "2025-01-06" // a Monday, a year before the other block
+	old["guides"] = map[string]any{
+		"s-easy": map[string]any{"id": "s-easy", "title": wasCalled},
+	}
+	out, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blocks", "b.json"), out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mux := fitTestMux(t, dir)
+
+	if body := get(mux, "/api/guides", nil).Body.String(); strings.Contains(body, wasCalled) {
+		t.Error("the unqualified request served the archived block's guide")
+	}
+	rec := get(mux, "/api/guides?block=last-year", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("asking for a real block gave %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), wasCalled) {
+		t.Error("asking for the archived block still served the current block's guides")
+	}
+	// An unknown id is a 404 here for the same reason it is on every page: a
+	// silent fallback to another block's plan is the failure being prevented.
+	if rec := get(mux, "/api/guides?block=no-such-block", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("an unknown block gave %d, want 404", rec.Code)
+	}
+}
+
 // TestWeekPageResolvesInsideTheBlock: a session's own strings are resolved by
 // the week page, by the day API, by the FIT encoder and by the startup
 // validator, and all four must agree on the context. The week page used to set

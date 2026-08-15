@@ -225,11 +225,18 @@
   var guides = null, loading = null, lastFocus = null, stack = [], currentID = null;
   var tasks = {};   /* step key -> done, for today */
 
+  /* Guides are the block's, so the popup has to ask for the block the page is
+     showing. Without this an archived calendar opened its own guide titles
+     with the current block's paces resolved inside them. */
+  var blockQ = "";
+  var blockParam = new URLSearchParams(location.search).get("block");
+  if (blockParam) blockQ = "?block=" + encodeURIComponent(blockParam);
+
   function load() {
     if (guides) return Promise.resolve(guides);
     if (!loading) {
       loading = Promise.all([
-        fetch("/api/guides").then(function (r) {
+        fetch("/api/guides" + blockQ).then(function (r) {
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.json();
         }),

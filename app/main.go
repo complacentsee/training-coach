@@ -1363,14 +1363,22 @@ func (s *server) postEntry(w http.ResponseWriter, r *http.Request) {
 
 // getGuides serves every popup body in one document. Small enough (~30 KB) that
 // one cached fetch beats a round trip per popup.
+//
+// Guides are per-block: the library is merged with the block's own overrides,
+// and every body is resolved against that block's anchors, so an archived
+// block's popup says what it said then. This handler used to answer from the
+// current block whatever was asked, which meant a '?' on an archived calendar
+// opened the right guide with this block's paces inside it.
 func (s *server) getGuides(w http.ResponseWriter, r *http.Request) {
 	d := s.ds()
 	day := s.day(d)
-	blk := d.Current(day)
-	if blk == nil {
-		http.Error(w, "guides unavailable", http.StatusInternalServerError)
+	blk, ok := d.blockFor(r.URL.Query().Get("block"), day)
+	if !ok {
+		http.NotFound(w, r)
 		return
 	}
+	// Today's week, when today is inside this block; otherwise its first, which
+	// is what an archived or not-yet-started block resolves its guides against.
 	week := 1
 	if wk, _, ok := blk.Locate(day); ok {
 		week = wk.N
