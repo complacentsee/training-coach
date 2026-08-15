@@ -9,6 +9,17 @@ services:
     restart: unless-stopped
     environment:
       TZ: America/Chicago
+      # Conditions are frozen onto an activity when it is imported and can
+      # never be recovered later from the file alone, so the recording stack
+      # is where this has to happen — a session imported here without it is
+      # one that has no weather for good. Heat is the loudest uncontrolled
+      # variable in a summer session's heart rate, and a grade made anywhere
+      # reads better for having it.
+      #
+      # This is not the grader. Open-Meteo's archive is keyless, so the stack
+      # still holds no secret, and what leaves is the position rounded to a
+      # tenth of a degree — about eleven km — for the hour a session started.
+      WEATHER_LOOKUP: "on"
     # No env_file, deliberately. This stack does not grade and does not
     # talk to a model provider: it records what the athlete did and serves
     # the plan, and it holds no API key to be spent or leaked. Grading runs
