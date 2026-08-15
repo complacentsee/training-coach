@@ -1574,8 +1574,78 @@ func (s *server) getDay(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+/* The wire shape of one day. These are named types rather than anonymous
+   structs inside the builder because two readers depend on the exact field
+   set: the grader's get_prescription tool, and whatever reads /api/day. Field
+   ORDER here is the JSON's key order, so it is part of the contract. */
+
+// dayBand is one row of the block's grading legend.
+type dayBand struct {
+	Grade string `json:"grade"`
+	Range string `json:"range"`
+	// MinPct is the band's floor as a percentage, DERIVED from the authored
+	// range beside it — never a second copy of the rubric to drift from. Bands
+	// are ordered best first, so the letter is the first band whose floor the
+	// share reaches. Reading it off the prose instead put a 21% share in the
+	// "under 20%" band once.
+	MinPct *float64 `json:"min_pct,omitempty"`
+}
+
+type dayLegend struct {
+	Note   string    `json:"note,omitempty"`
+	Bands  []dayBand `json:"bands"`
+	Footer string    `json:"footer,omitempty"`
+}
+
+type daySession struct {
+	Kind     string     `json:"kind"`
+	Label    string     `json:"label"`
+	Dist     string     `json:"dist,omitempty"`
+	DistM    float64    `json:"dist_m,omitempty"`
+	Mins     int        `json:"mins,omitempty"`
+	Tag      string     `json:"tag,omitempty"`
+	Detail   string     `json:"detail,omitempty"`
+	Targets  []string   `json:"targets"`
+	HasSteps bool       `json:"has_steps,omitempty"`
+	Steps    []stepView `json:"steps,omitempty"`
+}
+
+// dayIssue is what the athlete said about an injury that day, and what the
+// declaration says to do about it. A session run easy because a rating came
+// back high was not a failed quality day, and the grader cannot know that
+// without both halves: the number and its instruction.
+type dayIssue struct {
+	Key    string `json:"key"`
+	Name   string `json:"name"`
+	Rating int    `json:"rating"`
+	Scale  string `json:"scale"`
+	Tone   string `json:"tone,omitempty"`
+	Label  string `json:"label,omitempty"`
+	Action string `json:"action,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
+type dayDoc struct {
+	Date     string         `json:"date"`
+	Skipped  bool           `json:"skipped,omitempty"`
+	SkipNote string         `json:"skip_note,omitempty"`
+	Block    string         `json:"block"`
+	WeekN    int            `json:"week"`
+	Tags     []string       `json:"week_tags"`
+	Session  daySession     `json:"session"`
+	Grading  *dayLegend     `json:"grading,omitempty"`
+	Units    string         `json:"units"`
+	Weight   float64        `json:"weight_kg,omitempty"`
+	HR       map[string]int `json:"hr,omitempty"`
+	Power    map[string]int `json:"power,omitempty"`
+	Issues   []dayIssue     `json:"issues,omitempty"`
+}
+
 // dayPayload builds the response for the handler above and for the grader's
-// get_prescription tool — one builder, one truth about what a day asks.
+// get_prescription tool — one builder, one truth about what a day asks. It
+// locates the day and delegates each part of the document; an error from any
+// part is the whole request failing, because half a prescription is worse than
+// none.
 func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 	d := s.ds()
 	date, err := time.ParseInLocation("2006-01-02", dateStr, d.Loc)
@@ -1591,120 +1661,86 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		return nil, http.StatusNotFound, "date is outside the block"
 	}
 	sess := wk.Days[di]
-	// The legend below is the block's, not this day's, so it keeps the
-	// unnarrowed context — same as the calendar page renders it against.
+	// The legend is the block's, not this day's, so it keeps the unnarrowed
+	// context — same as the calendar page renders it against.
 	ctx := blk.ctxFor(d.Athlete, wk.N)
-	sc := ctx.forSession(&sess)
 
-	detail, err := sc.resolve(sess.Detail)
+	sv, err := s.daySessionView(d, blk, ctx.forSession(&sess), sess, dateStr)
 	if err != nil {
-		log.Printf("day %s: detail: %v", dateStr, err)
 		return nil, http.StatusInternalServerError, "prescription unavailable"
 	}
-	targets, err := sc.resolveAll(blk.TargetsFor(sess))
-	if err != nil {
-		log.Printf("day %s: targets: %v", dateStr, err)
-		return nil, http.StatusInternalServerError, "prescription unavailable"
-	}
-	for i := range targets {
-		targets[i] = stripEmph(targets[i])
-	}
 
-	type band struct {
-		Grade string `json:"grade"`
-		Range string `json:"range"`
-		// MinPct is the band's floor as a percentage, DERIVED from the
-		// authored range beside it — never a second copy of the rubric to
-		// drift from. Bands are ordered best first, so the letter is the
-		// first band whose floor the share reaches. Reading it off the
-		// prose instead put a 21% share in the "under 20%" band once.
-		MinPct *float64 `json:"min_pct,omitempty"`
-	}
-	type legend struct {
-		Note   string `json:"note,omitempty"`
-		Bands  []band `json:"bands"`
-		Footer string `json:"footer,omitempty"`
-	}
-	type session struct {
-		Kind     string     `json:"kind"`
-		Label    string     `json:"label"`
-		Dist     string     `json:"dist,omitempty"`
-		DistM    float64    `json:"dist_m,omitempty"`
-		Mins     int        `json:"mins,omitempty"`
-		Tag      string     `json:"tag,omitempty"`
-		Detail   string     `json:"detail,omitempty"`
-		Targets  []string   `json:"targets"`
-		HasSteps bool       `json:"has_steps,omitempty"`
-		Steps    []stepView `json:"steps,omitempty"`
-	}
-	// issueView is what the athlete said about an injury that day, and what
-	// the declaration says to do about it. A session run easy because a
-	// rating came back high was not a failed quality day, and the grader
-	// cannot know that without both halves: the number and its instruction.
-	type issueRating struct {
-		Key    string `json:"key"`
-		Name   string `json:"name"`
-		Rating int    `json:"rating"`
-		Scale  string `json:"scale"`
-		Tone   string `json:"tone,omitempty"`
-		Label  string `json:"label,omitempty"`
-		Action string `json:"action,omitempty"`
-		Note   string `json:"note,omitempty"`
-	}
-	out := struct {
-		Date     string         `json:"date"`
-		Skipped  bool           `json:"skipped,omitempty"`
-		SkipNote string         `json:"skip_note,omitempty"`
-		Block    string         `json:"block"`
-		WeekN    int            `json:"week"`
-		Tags     []string       `json:"week_tags"`
-		Session  session        `json:"session"`
-		Grading  *legend        `json:"grading,omitempty"`
-		Units    string         `json:"units"`
-		Weight   float64        `json:"weight_kg,omitempty"`
-		HR       map[string]int `json:"hr,omitempty"`
-		Power    map[string]int `json:"power,omitempty"`
-		Issues   []issueRating  `json:"issues,omitempty"`
-	}{
-		Date: date.Format("2006-01-02"), Block: blk.ID,
+	iso := date.Format("2006-01-02")
+	out := dayDoc{
+		Date: iso, Block: blk.ID,
 		WeekN: wk.N, Tags: wk.Tags,
-		Session: session{
-			Kind: string(sess.Kind), Label: stripEmph(sess.Label),
-			Mins: sess.Mins, Tag: sess.Tag,
-			Detail: stripEmph(detail), Targets: targets,
-			HasSteps: len(sess.Steps) > 0,
-		},
-		Units:  string(d.Athlete.Units),
-		Weight: float64(d.Athlete.Weight),
-		HR:     d.Athlete.HR,
-		Power:  d.Athlete.Power,
+		Session: sv,
+		Grading: dayLegendFor(ctx, blk.Grading),
+		Units:   string(d.Athlete.Units),
+		Weight:  float64(d.Athlete.Weight),
+		HR:      d.Athlete.HR,
+		Power:   d.Athlete.Power,
+		Issues:  s.dayIssues(d, iso),
 	}
 	if out.Tags == nil {
 		out.Tags = []string{}
 	}
-	if out.Session.Targets == nil {
-		out.Session.Targets = []string{}
+	if e, skipped := s.store.SkipOn(iso); skipped {
+		out.Skipped, out.SkipNote = true, e.Note
+	}
+	return out, http.StatusOK, ""
+}
+
+// daySessionView resolves the session's own strings against sc and renders its
+// quantities in the athlete's units. Strings are emphasis-stripped, because
+// this is an API that serves text, not markup.
+func (s *server) daySessionView(d *dataset, blk *Block, sc *Ctx, sess Session, dateStr string) (daySession, error) {
+	detail, err := sc.resolve(sess.Detail)
+	if err != nil {
+		log.Printf("day %s: detail: %v", dateStr, err)
+		return daySession{}, err
+	}
+	targets, err := sc.resolveAll(blk.TargetsFor(sess))
+	if err != nil {
+		log.Printf("day %s: targets: %v", dateStr, err)
+		return daySession{}, err
+	}
+	for i := range targets {
+		targets[i] = stripEmph(targets[i])
+	}
+	if targets == nil {
+		targets = []string{}
+	}
+	sv := daySession{
+		Kind: string(sess.Kind), Label: stripEmph(sess.Label),
+		Mins: sess.Mins, Tag: sess.Tag,
+		Detail: stripEmph(detail), Targets: targets,
+		HasSteps: len(sess.Steps) > 0,
 	}
 	if sess.Dist > 0 {
-		out.Session.Dist = sess.Dist.In(d.Athlete.Units)
-		out.Session.DistM = float64(sess.Dist)
+		sv.Dist = sess.Dist.In(d.Athlete.Units)
+		sv.DistM = float64(sess.Dist)
 	}
-	// The structured form, when the day has one. Without it a grader judging
-	// an interval session can only see the athlete's standing anchors — and
-	// would measure a VO₂ day against the easy-ride band, which is exactly
-	// backwards. What was asked for on THIS day lives here.
+	// The structured form, when the day has one. Without it a grader judging an
+	// interval session can only see the athlete's standing anchors — and would
+	// measure a VO₂ day against the easy-ride band, which is exactly backwards.
+	// What was asked for on THIS day lives here.
 	if len(sess.Steps) > 0 {
 		rs, err := resolveSteps(sc, sess)
 		if err != nil {
 			log.Printf("day %s: steps: %v", dateStr, err)
-			return nil, http.StatusInternalServerError, "prescription unavailable"
+			return daySession{}, err
 		}
-		out.Session.Steps = stepViews(rs, d.Athlete.Units)
+		sv.Steps = stepViews(rs, d.Athlete.Units)
 	}
-	iso := date.Format("2006-01-02")
-	if e, skipped := s.store.SkipOn(iso); skipped {
-		out.Skipped, out.SkipNote = true, e.Note
-	}
+	return sv, nil
+}
+
+// dayIssues is every issue the athlete rated on this date, with the band that
+// rating falls in. A rating outside its declared scale is dropped rather than
+// reported: it is a number with no instruction attached.
+func (s *server) dayIssues(d *dataset, iso string) []dayIssue {
+	var out []dayIssue
 	for i := range d.Athlete.Issues {
 		is := &d.Athlete.Issues[i]
 		e := s.store.RatingOn(is.Key, iso)
@@ -1715,29 +1751,34 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		if err != nil || !is.Scale.contains(n) {
 			continue
 		}
-		r := issueRating{Key: is.Key, Name: is.Name, Rating: n,
+		r := dayIssue{Key: is.Key, Name: is.Name, Rating: n,
 			Scale: is.Range(), Note: e.Note}
 		if b := is.BandFor(n); b != nil {
 			r.Tone, r.Label, r.Action = b.Tone, b.Label, stripEmph(b.Action)
 		}
-		out.Issues = append(out.Issues, r)
+		out = append(out, r)
 	}
+	return out
+}
 
-	if g := resolveGrading(ctx, blk.Grading); g != nil {
-		l := &legend{Note: stripEmph(g.Note), Footer: stripEmph(g.Footer), Bands: []band{}}
-		floors := bandFloors(g.Bands)
-		for i, b := range g.Bands {
-			bd := band{Grade: b.Grade, Range: b.Range}
-			if floors != nil {
-				f := floors[i]
-				bd.MinPct = &f
-			}
-			l.Bands = append(l.Bands, bd)
+// dayLegendFor renders the block's grading legend, floors derived from the
+// authored ranges rather than restated beside them.
+func dayLegendFor(ctx *Ctx, g *Grading) *dayLegend {
+	g = resolveGrading(ctx, g)
+	if g == nil {
+		return nil
+	}
+	l := &dayLegend{Note: stripEmph(g.Note), Footer: stripEmph(g.Footer), Bands: []dayBand{}}
+	floors := bandFloors(g.Bands)
+	for i, b := range g.Bands {
+		bd := dayBand{Grade: b.Grade, Range: b.Range}
+		if floors != nil {
+			f := floors[i]
+			bd.MinPct = &f
 		}
-		out.Grading = l
+		l.Bands = append(l.Bands, bd)
 	}
-
-	return out, http.StatusOK, ""
+	return l
 }
 
 func (s *server) getEntries(w http.ResponseWriter, r *http.Request) {
