@@ -384,3 +384,55 @@ func parseAsked(t *testing.T, s string) (float64, float64, error) {
 	t.Fatalf("could not read %q as a position", s)
 	return 0, 0, nil
 }
+
+// TestWeatherForASessionRecordedToday: the archive holds nothing past its own
+// today, and asking for tomorrow fails the WHOLE request rather than trimming
+// it — verified against the real provider on 15 Aug 2026:
+//
+//	{"error":true,"reason":"Parameter 'end_date' is out of allowed range
+//	 from 1940-01-01 to 2026-08-15"}   HTTP 400
+//
+// fetchDay asks for the following day so a session near midnight has an hour
+// to interpolate with, which made every same-day session lose every hour of
+// its weather — and since weather is frozen at import, lose it permanently.
+// That is every session the grader actually runs on, so the feature was
+// silently absent exactly where it was meant to work.
+func TestWeatherForASessionRecordedToday(t *testing.T) {
+	const todayISO = "2026-08-15"
+	today := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		asked = append(asked, q.Get("start_date")+".."+q.Get("end_date"))
+		if q.Get("end_date") > todayISO {
+			http.Error(w, `{"error":true,"reason":"end_date is out of allowed range"}`,
+				http.StatusBadRequest)
+			return
+		}
+		day := q.Get("start_date")
+		_ = json.NewEncoder(w).Encode(map[string]any{"hourly": map[string]any{
+			"time":                 []string{day + "T13:00", day + "T14:00"},
+			"temperature_2m":       []float64{72.0, 74.0},
+			"dew_point_2m":         []float64{61.0, 63.0},
+			"relative_humidity_2m": []float64{68, 66},
+			"wind_speed_10m":       []float64{6, 8},
+		}})
+	}))
+	defer srv.Close()
+
+	w := weatherUnderTest(t, srv.URL, true)
+	w.now = func() time.Time { return today.Add(15 * time.Hour) } // this afternoon
+
+	c := w.at(testLat, testLon, time.Date(2026, 8, 15, 13, 30, 0, 0, time.UTC))
+	if c == nil {
+		t.Fatalf("a session recorded this morning got no weather at all; requests made: %v", asked)
+	}
+	if c.TempF != 73 || c.DewF != 62 {
+		t.Errorf("read %+v, want the 13:30 midpoint of 72/74 and 61/63", c)
+	}
+	for _, a := range asked {
+		if a > todayISO+".."+todayISO {
+			t.Errorf("asked the archive for %s, beyond the day it can hold", a)
+		}
+	}
+}

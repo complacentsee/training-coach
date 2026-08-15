@@ -320,7 +320,7 @@ func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) [
 		},
 		{
 			Name:        "session_history",
-			Description: "Earlier sessions of the SAME kind in this block, newest first, each measured the way this one will be — grade, duration, distance, average HR, share under the grade cap, decoupling, temperature. This is how a session is compared like for like: a long run against the previous long run, a quality session against the previous quality session. The day being graded is never included.",
+			Description: "Earlier sessions of the SAME kind in this block, newest first, each measured the way this one will be — grade, duration, distance, average HR, share under the grade cap, decoupling, and the conditions it was run in. Compare the weather as well as the numbers: heat costs several beats at a given effort, so the same heart rate on a hotter day is a better session and a lower one on a cool day may be no improvement at all. Say which it was. This is how a session is compared like for like: a long run against the previous long run, a quality session against the previous quality session. The day being graded is never included.",
 			Schema: obj(`"date":{"type":"string","description":"YYYY-MM-DD, the day being graded"},` +
 				`"limit":{"type":"integer","description":"how many earlier sessions, default 6"}`),
 			Run: func(_ context.Context, args json.RawMessage) (string, error) {
