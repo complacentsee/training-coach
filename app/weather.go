@@ -34,6 +34,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -53,6 +54,26 @@ type conditions struct {
 	// given heart rate.
 	HeatSum float64 `json:"heat_sum"`
 	Source  string  `json:"source"`
+}
+
+// indoorSubSports are the ways of training where the weather outside is
+// not the weather. A virtual ride still records a position: Zwift writes
+// its own world's coordinates, and a session in Watopia looks from the
+// outside like a ride in the South Pacific — which was frozen onto a
+// basement FTP test as 79F with a dew point of 73 before this existed.
+var indoorSubSports = map[string]bool{
+	"virtual_activity": true, "indoor_cycling": true, "indoor_running": true,
+	"indoor_rowing": true, "indoor_walking": true, "treadmill": true,
+	"spin": true, "elliptical": true, "stair_climbing": true,
+}
+
+// indoors reports whether a session happened somewhere the sky does not
+// reach. The substring test catches the sub-sports this list has not met.
+func indoors(subSport string) bool {
+	if indoorSubSports[subSport] {
+		return true
+	}
+	return strings.Contains(subSport, "indoor") || strings.Contains(subSport, "virtual")
 }
 
 // coarse rounds a coordinate to a tenth of a degree.

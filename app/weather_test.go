@@ -238,6 +238,71 @@ func runWithPosition(t *testing.T) []byte {
 	return encodeActivityFixture(t, msgs...)
 }
 
+// TestVirtualRidesGetNoWeather: a trainer session records a position like
+// any other — Zwift writes its own world's, and Watopia sits in the
+// Solomon Islands — so an indoor ride was having South Pacific weather
+// frozen onto it, 79F with a dew point of 73, ready to explain a heart
+// rate by heat that never existed. Indoors is checked before anyone asks.
+func TestVirtualRidesGetNoWeather(t *testing.T) {
+	var hits int32
+	srv := archiveStub(t, &hits, nil)
+	defer srv.Close()
+	t.Setenv("WEATHER_BASE_URL", srv.URL)
+	t.Setenv("WEATHER_LOOKUP", "on")
+
+	db, err := openMetricsDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.close()
+	wx := newWeatherService(db)
+
+	m, err := db.importOne("2026-08-05-08-30-42.fit", virtualRide(t), time.UTC, wx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Weather != nil {
+		t.Errorf("a virtual ride was given the weather at %+v", m.Weather)
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Errorf("asked the provider %d times about a room", n)
+	}
+
+	for _, sub := range []string{"virtual_activity", "indoor_cycling", "treadmill",
+		"indoor_running", "spin", "some_new_indoor_thing", "virtual_whatever"} {
+		if !indoors(sub) {
+			t.Errorf("indoors(%q) = false", sub)
+		}
+	}
+	for _, sub := range []string{"generic", "road", "trail", "track_cycling", ""} {
+		if indoors(sub) {
+			t.Errorf("indoors(%q) = true", sub)
+		}
+	}
+}
+
+// virtualRide is a trainer session carrying Watopia's coordinates, the way
+// the real ones do.
+func virtualRide(t *testing.T) []byte {
+	t.Helper()
+	msgs := []proto.Message{}
+	for i := 0; i <= 10; i++ {
+		msgs = append(msgs, mesgdef.NewRecord(nil).
+			SetTimestamp(fixtureT0.Add(time.Duration(i)*time.Second)).
+			SetHeartRate(uint8(120+i)).
+			SetPower(200).
+			SetPositionLat(degreesToSemicircles(-11.639)).
+			SetPositionLong(degreesToSemicircles(166.982)).ToMesg(nil))
+	}
+	msgs = append(msgs, mesgdef.NewSession(nil).
+		SetSport(typedef.SportCycling).
+		SetSubSport(typedef.SubSportVirtualActivity).
+		SetStartTime(fixtureT0).
+		SetTimestamp(fixtureT0.Add(time.Minute)).
+		SetTotalDistance(500_00).ToMesg(nil))
+	return encodeActivityFixture(t, msgs...)
+}
+
 func TestWeatherOffMakesNoRequest(t *testing.T) {
 	var hits int32
 	srv := archiveStub(t, &hits, nil)
