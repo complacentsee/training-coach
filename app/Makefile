@@ -38,11 +38,20 @@ SSH := ssh -o ConnectTimeout=10
 # `ls *.go | grep -v _test` produced -- so this commit does not move the hash.
 GO_SRC = $(shell find . -path ./data -prune -o -path ./tools -prune -o -name '*_test.go' -prune -o -name '*.go' -print | LC_ALL=C sort)
 
+# The assets compiled into the binary, and the same story one line up: this was
+# `defaults/*.json defaults/*/*.json templates/*.html static/*.css static/*.js
+# static/icons/*`, none of which descends, while `//go:embed defaults` and
+# `//go:embed static` both do. static/fonts/x.woff2 would ship inside the
+# binary and leave the build revision untouched. find skips the names
+# //go:embed itself ignores -- dotfiles and underscore-prefixed -- which also
+# keeps .DS_Store and macOS ._* side-files from rotating the hash.
+ASSETS = $(shell find defaults templates static -type f -not -name '.*' -not -name '_*' | LC_ALL=C sort)
+
 # A hash of everything that ends up in the image. Docker image IDs do not
 # survive save|load between different Docker versions, so this is stamped in
 # as a label and compared instead. Tests are excluded: they do not ship, and a
 # test-only edit should not force a redeploy.
-SRC_HASH = $(shell cat Dockerfile go.mod go.sum $(GO_SRC) defaults/*.json defaults/*/*.json templates/*.html static/*.css static/*.js static/icons/* 2>/dev/null | shasum -a 256 | cut -c1-12)
+SRC_HASH = $(shell cat Dockerfile go.mod go.sum $(GO_SRC) $(ASSETS) | shasum -a 256 | cut -c1-12)
 
 # The plan is no longer in the image, so "is the deploy current?" is now two
 # questions. This is the answer to the second one, computed by the same code
@@ -69,30 +78,34 @@ test:           ## run the test suite
 src-hash:       ## print the build revision this tree hashes to
 	@echo $(SRC_HASH)
 
-# SRC_HASH's entire job is to notice that a source file changed, and the one
-# case it silently missed was a file in a subpackage. Prove it cannot miss it
-# again: write one, watch the hash move, edit it, watch it move again, delete
-# it, watch it come back to where it started.
-check-hash:     ## prove SRC_HASH sees a file in a subpackage
+# SRC_HASH's entire job is to notice that a source file changed, and the cases
+# it silently missed were both nested: a .go file in a subpackage, and an asset
+# in a subdirectory of static/ or defaults/. Both compile into the binary, so
+# prove neither can hide again -- write one, watch the hash move, edit it,
+# watch it move again, delete it, watch it come back to where it started.
+check-hash:     ## prove SRC_HASH sees nested sources and nested assets
 	@set -e; \
-	PROBE=internal/hashprobe; \
-	[ ! -e $$PROBE ] || { echo "FAILED: $$PROBE exists, refusing to clobber it" >&2; exit 1; }; \
-	trap 'rm -rf internal/hashprobe; rmdir internal 2>/dev/null || true' EXIT INT TERM; \
-	BEFORE=$$($(MAKE) --no-print-directory src-hash); \
-	mkdir -p $$PROBE && printf 'package hashprobe\n\nconst probe = "one"\n' > $$PROBE/probe.go; \
-	ADDED=$$($(MAKE) --no-print-directory src-hash); \
-	printf 'package hashprobe\n\nconst probe = "two"\n' > $$PROBE/probe.go; \
-	EDITED=$$($(MAKE) --no-print-directory src-hash); \
-	rm -rf $$PROBE && rmdir internal 2>/dev/null || true; \
-	AFTER=$$($(MAKE) --no-print-directory src-hash); \
-	[ "$$BEFORE" != "$$ADDED" ] || { \
-	  echo "FAILED: adding $$PROBE/probe.go left the hash at $$BEFORE" >&2; \
-	  echo "        a subpackage edit would deploy as 'already has this build'" >&2; exit 1; }; \
-	[ "$$ADDED" != "$$EDITED" ] || { \
-	  echo "FAILED: editing $$PROBE/probe.go left the hash at $$ADDED" >&2; exit 1; }; \
-	[ "$$BEFORE" = "$$AFTER" ] || { \
-	  echo "FAILED: hash did not return to $$BEFORE after cleanup, got $$AFTER" >&2; exit 1; }; \
-	echo "src-hash      subpackages counted: $$BEFORE -> $$ADDED -> $$EDITED -> $$BEFORE"
+	trap 'rm -rf internal/hashprobe static/hashprobe; rmdir internal 2>/dev/null || true' EXIT INT TERM; \
+	for probe in internal/hashprobe/probe.go static/hashprobe/probe.css; do \
+	  DIR=$${probe%/*}; \
+	  case $$probe in *.go) HEAD='package hashprobe';; *) HEAD='/* hashprobe */';; esac; \
+	  [ ! -e $$DIR ] || { echo "FAILED: $$DIR exists, refusing to clobber it" >&2; exit 1; }; \
+	  BEFORE=$$($(MAKE) --no-print-directory src-hash); \
+	  mkdir -p $$DIR && printf '%s\n// one\n' "$$HEAD" > $$probe; \
+	  ADDED=$$($(MAKE) --no-print-directory src-hash); \
+	  printf '%s\n// two\n' "$$HEAD" > $$probe; \
+	  EDITED=$$($(MAKE) --no-print-directory src-hash); \
+	  rm -rf $$DIR; rmdir internal 2>/dev/null || true; \
+	  AFTER=$$($(MAKE) --no-print-directory src-hash); \
+	  [ "$$BEFORE" != "$$ADDED" ] || { \
+	    echo "FAILED: adding $$probe left the hash at $$BEFORE" >&2; \
+	    echo "        editing it would deploy as 'remote already has this build'" >&2; exit 1; }; \
+	  [ "$$ADDED" != "$$EDITED" ] || { \
+	    echo "FAILED: editing $$probe left the hash at $$ADDED" >&2; exit 1; }; \
+	  [ "$$BEFORE" = "$$AFTER" ] || { \
+	    echo "FAILED: hash did not return to $$BEFORE after cleanup, got $$AFTER" >&2; exit 1; }; \
+	  echo "src-hash      $$probe counted: $$BEFORE -> $$ADDED -> $$EDITED -> $$BEFORE"; \
+	done
 
 # The loader validates meaning; check-schema validates shape. encoding/json
 # drops an unknown key without complaint, so "lable" is not an error -- it is a
