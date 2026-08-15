@@ -36,7 +36,13 @@ import (
 type gradeCase struct {
 	activity, date, want string
 	share                float64
-	what                 string
+	// basis is what the expected letter rests on: "legend" means the
+	// rubric's bands applied to the measured share, so the expectation is
+	// arithmetic. "judgment" means a session the share cannot grade — a
+	// quality day, where the letter turns on whether the prescribed work
+	// was delivered.
+	basis string
+	what  string
 }
 
 const committedCases = "testdata/cases"
@@ -54,16 +60,20 @@ func loadGradeCases(t *testing.T, dir string) []gradeCase {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) < 4 {
+		if len(f) < 5 {
 			t.Fatalf("malformed case line: %q", line)
 		}
 		share, err := strconv.ParseFloat(f[3], 64)
 		if err != nil {
 			t.Fatalf("case %q: share: %v", f[0], err)
 		}
-		c := gradeCase{activity: f[0], date: f[1], want: strings.TrimSpace(f[2]), share: share}
-		if len(f) > 4 {
-			c.what = f[4]
+		c := gradeCase{activity: f[0], date: f[1], want: strings.TrimSpace(f[2]),
+			share: share, basis: strings.TrimSpace(f[4])}
+		if c.basis != "legend" && c.basis != "judgment" {
+			t.Fatalf("case %q: basis is %q, want legend or judgment", f[0], c.basis)
+		}
+		if len(f) > 5 {
+			c.what = f[5]
 		}
 		cases = append(cases, c)
 	}
@@ -142,11 +152,98 @@ func TestGradeCaseShares(t *testing.T) {
 			t.Errorf("%s: share under %d = %.4f, table says %.4f",
 				c.activity, cap, *got, c.share)
 		}
-		// And the letter the table claims must be the one the legend gives
-		// that share — the expectations are the rubric, not opinions.
+		// Where the letter rests on the rubric, it must BE the rubric — the
+		// expectation is arithmetic, not opinion. Where it rests on
+		// judgment, the same check would be wrong: those sessions are meant
+		// to run over the cap, and the share says nothing about them.
+		if c.basis != "legend" {
+			continue
+		}
 		if want := letterFor(t, s, *got); want != c.want {
 			t.Errorf("%s: %.4f is a %s by the legend, table says %s", c.activity, *got, want, c.want)
 		}
+	}
+}
+
+// TestQualityDaysAreNotShareGraded pins the trap the quality fixtures were
+// built to catch: applying the easy-run rubric to a quality day grades the
+// session that was abandoned ABOVE the one that was delivered, because
+// doing the prescribed work puts an athlete over the cap. Any change that
+// lets the share decide a quality letter fails here.
+func TestQualityDaysAreNotShareGraded(t *testing.T) {
+	s, cases := caseServer(t, casesDir())
+	var delivered, abandoned *gradeCase
+	for i := range cases {
+		if cases[i].basis != "judgment" {
+			continue
+		}
+		switch cases[i].want {
+		case "A":
+			delivered = &cases[i]
+		case "F":
+			abandoned = &cases[i]
+		}
+	}
+	if delivered == nil || abandoned == nil {
+		t.Skip("this corpus carries no judgment-graded pair")
+	}
+	if !(abandoned.share > delivered.share) {
+		t.Fatalf("the fixtures no longer demonstrate the trap: abandoned %.4f, delivered %.4f",
+			abandoned.share, delivered.share)
+	}
+	if letterFor(t, s, abandoned.share) == abandoned.want {
+		t.Error("the abandoned session's letter now falls out of the share, so it proves nothing")
+	}
+}
+
+// TestFastestSegmentsRecoverTheReps: the athlete laps nothing but whole
+// miles, so a session's repetitions arrive buried in one smooth trace.
+// Asking the stream for them must find the work that was done — and must
+// not invent work that was not.
+func TestFastestSegmentsRecoverTheReps(t *testing.T) {
+	read := func(name string) *activityStreams {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(committedCases, name))
+		if err != nil {
+			t.Skipf("committed corpus not present: %v", err)
+		}
+		st, err := decodeActivity(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+
+	// Three 4:00 reps at 4:30/km were run; three must come back, on target.
+	segs := fastestSegments(read("2026-01-13-06-00-00.fit"), 0, 240, 3, Metric)
+	if len(segs) != 3 {
+		t.Fatalf("delivered session: %d segments, want 3", len(segs))
+	}
+	for i, g := range segs {
+		if g.Pace != "4:30/km" {
+			t.Errorf("rep %d: %s, want 4:30/km", i+1, g.Pace)
+		}
+		if i > 0 && segs[i-1].StartS >= g.StartS {
+			t.Error("segments are not in the order they were run")
+		}
+	}
+
+	// One slow rep was run. Asking for three still returns three stretches
+	// — that is what "fastest" means — but only one is anywhere near the
+	// work, and none is on target. A grader reading these sees a session
+	// that was not delivered.
+	segs = fastestSegments(read("2026-01-13-07-00-00.fit"), 0, 240, 3, Metric)
+	if len(segs) != 3 {
+		t.Fatalf("abandoned session: %d segments, want 3", len(segs))
+	}
+	onTarget := 0
+	for _, g := range segs {
+		if g.Pace <= "4:40/km" && strings.HasPrefix(g.Pace, "4:") {
+			onTarget++
+		}
+	}
+	if onTarget != 0 {
+		t.Errorf("abandoned session: %d segments read as on target, want none: %+v", onTarget, segs)
 	}
 }
 
