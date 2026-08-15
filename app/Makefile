@@ -24,18 +24,32 @@ SEED_DAYS ?= 30
 
 SSH := ssh -o ConnectTimeout=10
 
+# Every .go file that compiles into the binary, deepest first. This was
+# `ls *.go`, which does not descend: the day a file lands in a subpackage its
+# contents stop reaching SRC_HASH, so editing it would not move the build
+# revision, deploy would print "remote already has this build" and skip the
+# transfer, and verify would pass while the server ran stale code. Silent
+# staleness is the one failure this whole file exists to prevent.
+#
+# data/ and tools/ are pruned rather than filtered: data/ is the volume (no Go,
+# and 1,300+ activity files to walk), and tools/ holds build-time programs the
+# Dockerfile never copies, so they are not part of the image. With no
+# subpackages present this list is the same 20 files, in the same order, that
+# `ls *.go | grep -v _test` produced -- so this commit does not move the hash.
+GO_SRC = $(shell find . -path ./data -prune -o -path ./tools -prune -o -name '*_test.go' -prune -o -name '*.go' -print | LC_ALL=C sort)
+
 # A hash of everything that ends up in the image. Docker image IDs do not
 # survive save|load between different Docker versions, so this is stamped in
 # as a label and compared instead. Tests are excluded: they do not ship, and a
 # test-only edit should not force a redeploy.
-SRC_HASH = $(shell cat Dockerfile go.mod go.sum `ls *.go | grep -v _test` defaults/*.json defaults/*/*.json templates/*.html static/*.css static/*.js static/icons/* 2>/dev/null | shasum -a 256 | cut -c1-12)
+SRC_HASH = $(shell cat Dockerfile go.mod go.sum $(GO_SRC) defaults/*.json defaults/*/*.json templates/*.html static/*.css static/*.js static/icons/* 2>/dev/null | shasum -a 256 | cut -c1-12)
 
 # The plan is no longer in the image, so "is the deploy current?" is now two
 # questions. This is the answer to the second one, computed by the same code
 # the server uses, so local and live are directly comparable.
 DATA_REV = go run . -validate -data ./data 2>&1 | sed -n 's/.*rev=\([0-9a-f]*\).*/\1/p'
 
-.PHONY: help run build image test validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
+.PHONY: help run build image test src-hash check-hash validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
 
 help:           ## list targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /|/' | column -t -s'|'
@@ -51,6 +65,34 @@ image:          ## build the linux/arm64 image
 
 test:           ## run the test suite
 	go test ./...
+
+src-hash:       ## print the build revision this tree hashes to
+	@echo $(SRC_HASH)
+
+# SRC_HASH's entire job is to notice that a source file changed, and the one
+# case it silently missed was a file in a subpackage. Prove it cannot miss it
+# again: write one, watch the hash move, edit it, watch it move again, delete
+# it, watch it come back to where it started.
+check-hash:     ## prove SRC_HASH sees a file in a subpackage
+	@set -e; \
+	PROBE=internal/hashprobe; \
+	[ ! -e $$PROBE ] || { echo "FAILED: $$PROBE exists, refusing to clobber it" >&2; exit 1; }; \
+	trap 'rm -rf internal/hashprobe; rmdir internal 2>/dev/null || true' EXIT INT TERM; \
+	BEFORE=$$($(MAKE) --no-print-directory src-hash); \
+	mkdir -p $$PROBE && printf 'package hashprobe\n\nconst probe = "one"\n' > $$PROBE/probe.go; \
+	ADDED=$$($(MAKE) --no-print-directory src-hash); \
+	printf 'package hashprobe\n\nconst probe = "two"\n' > $$PROBE/probe.go; \
+	EDITED=$$($(MAKE) --no-print-directory src-hash); \
+	rm -rf $$PROBE && rmdir internal 2>/dev/null || true; \
+	AFTER=$$($(MAKE) --no-print-directory src-hash); \
+	[ "$$BEFORE" != "$$ADDED" ] || { \
+	  echo "FAILED: adding $$PROBE/probe.go left the hash at $$BEFORE" >&2; \
+	  echo "        a subpackage edit would deploy as 'already has this build'" >&2; exit 1; }; \
+	[ "$$ADDED" != "$$EDITED" ] || { \
+	  echo "FAILED: editing $$PROBE/probe.go left the hash at $$ADDED" >&2; exit 1; }; \
+	[ "$$BEFORE" = "$$AFTER" ] || { \
+	  echo "FAILED: hash did not return to $$BEFORE after cleanup, got $$AFTER" >&2; exit 1; }; \
+	echo "src-hash      subpackages counted: $$BEFORE -> $$ADDED -> $$EDITED -> $$BEFORE"
 
 # The loader validates meaning; check-schema validates shape. encoding/json
 # drops an unknown key without complaint, so "lable" is not an error -- it is a
