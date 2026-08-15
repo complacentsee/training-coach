@@ -663,8 +663,7 @@ func (s *server) week(w http.ResponseWriter, r *http.Request) {
 		wd.MesoName = m.Name
 	}
 	for i, sess := range wk.Days {
-		sc := *ctx
-		sc.Session = &sess
+		sc := ctx.forSession(&sess)
 		targets, err := sc.resolveAll(blk.TargetsFor(sess))
 		if err != nil {
 			log.Printf("week %d day %d targets: %v", n, i+1, err)
@@ -1052,10 +1051,8 @@ var zwoExport = exportKind{
 // — a batch must never dedupe, and a re-import must look new.
 func (k exportKind) encodeDay(d *dataset, blk *Block, wk *Week, di int, date time.Time) (string, []byte, time.Time, error) {
 	sess := wk.Days[di]
-	sc := *blk.ctxFor(d.Athlete, wk.N)
-	sc.Session = &sess
-	sc.InBlock = true
-	rs, err := resolveSteps(&sc, sess)
+	sc := blk.ctxFor(d.Athlete, wk.N).forSession(&sess)
+	rs, err := resolveSteps(sc, sess)
 	if err != nil {
 		return "", nil, time.Time{}, err
 	}
@@ -1586,10 +1583,10 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		return nil, http.StatusNotFound, "date is outside the block"
 	}
 	sess := wk.Days[di]
+	// The legend below is the block's, not this day's, so it keeps the
+	// unnarrowed context — same as the calendar page renders it against.
 	ctx := blk.ctxFor(d.Athlete, wk.N)
-	sc := *ctx
-	sc.Session = &sess
-	sc.InBlock = true
+	sc := ctx.forSession(&sess)
 
 	detail, err := sc.resolve(sess.Detail)
 	if err != nil {
@@ -1689,7 +1686,7 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 	// would measure a VO₂ day against the easy-ride band, which is exactly
 	// backwards. What was asked for on THIS day lives here.
 	if len(sess.Steps) > 0 {
-		rs, err := resolveSteps(&sc, sess)
+		rs, err := resolveSteps(sc, sess)
 		if err != nil {
 			log.Printf("day %s: steps: %v", dateStr, err)
 			return nil, http.StatusInternalServerError, "prescription unavailable"
