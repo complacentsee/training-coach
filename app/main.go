@@ -133,35 +133,9 @@ func main() {
 	}
 	s.tpl = tpl
 
-	mux := http.NewServeMux()
-	mux.Handle("GET /static/", assetSet.handler())
-	mux.HandleFunc("GET /{$}", s.today)
-	mux.HandleFunc("GET /calendar", s.calendar)
-	mux.HandleFunc("GET /week/{n}", s.week)
-	mux.HandleFunc("GET /workouts", s.workouts)
-	mux.HandleFunc("GET /fit/{date}", s.fitFile)
-	mux.HandleFunc("GET /fit.zip", s.fitZip)
-	mux.HandleFunc("GET /zwo/{date}", s.zwoFile)
-	mux.HandleFunc("GET /zwo.zip", s.zwoZip)
-	mux.HandleFunc("GET /watch", s.watchPage)
-	mux.HandleFunc("GET /blocks", s.blocks)
-	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
-	mux.HandleFunc("GET /healthz", s.healthz)
-	mux.HandleFunc("POST /api/entry", s.postEntry)
-	mux.HandleFunc("POST /api/reload", s.postReload)
-	mux.HandleFunc("GET /api/entries", s.getEntries)
-	mux.HandleFunc("GET /api/guides", s.getGuides)
-	mux.HandleFunc("GET /api/tasks", s.getTasks)
-	mux.HandleFunc("GET /api/activities", s.getActivities)
-	mux.HandleFunc("GET /api/activity", s.getActivity)
-	mux.HandleFunc("POST /api/activity", s.postActivity)
-	mux.HandleFunc("GET /api/activity-metrics", s.getActivityMetrics)
-	mux.HandleFunc("GET /api/day", s.getDay)
-	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
-
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           logging(mux),
+		Handler:           logging(s.routes()),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
@@ -188,6 +162,40 @@ func main() {
 	_ = srv.Shutdown(shutdownCtx)
 	s.metrics.close()
 	log.Print("stopped")
+}
+
+// routes is the whole HTTP surface, in one place. It is a method rather than
+// part of main() so the tests mount the same table the binary serves: a test
+// mux assembled by hand is a second declaration of this, and the copy had
+// already drifted nine routes before anyone noticed — which is the failure the
+// app's own data files are arranged to prevent.
+func (s *server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("GET /static/", s.assets.handler())
+	mux.HandleFunc("GET /{$}", s.today)
+	mux.HandleFunc("GET /calendar", s.calendar)
+	mux.HandleFunc("GET /week/{n}", s.week)
+	mux.HandleFunc("GET /workouts", s.workouts)
+	mux.HandleFunc("GET /fit/{date}", s.fitFile)
+	mux.HandleFunc("GET /fit.zip", s.fitZip)
+	mux.HandleFunc("GET /zwo/{date}", s.zwoFile)
+	mux.HandleFunc("GET /zwo.zip", s.zwoZip)
+	mux.HandleFunc("GET /watch", s.watchPage)
+	mux.HandleFunc("GET /blocks", s.blocks)
+	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
+	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("POST /api/entry", s.postEntry)
+	mux.HandleFunc("POST /api/reload", s.postReload)
+	mux.HandleFunc("GET /api/entries", s.getEntries)
+	mux.HandleFunc("GET /api/guides", s.getGuides)
+	mux.HandleFunc("GET /api/tasks", s.getTasks)
+	mux.HandleFunc("GET /api/activities", s.getActivities)
+	mux.HandleFunc("GET /api/activity", s.getActivity)
+	mux.HandleFunc("POST /api/activity", s.postActivity)
+	mux.HandleFunc("GET /api/activity-metrics", s.getActivityMetrics)
+	mux.HandleFunc("GET /api/day", s.getDay)
+	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
+	return mux
 }
 
 /* ── data lifecycle ────────────────────────────────────────────────────── */

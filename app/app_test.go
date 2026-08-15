@@ -1860,9 +1860,9 @@ func TestStepsAgreeWithTheSessionTheyElaborate(t *testing.T) {
 
 /* ── the /fit route and its pills ──────────────────────────────────────── */
 
-// fitTestMux is a server over dataDir ("" = the embedded defaults) with the
-// routes these tests exercise, registered with the same patterns main uses so
-// PathValue works.
+// fitTestMux is a server over dataDir ("" = the embedded defaults) serving the
+// binary's own route table, so a route the tests never call is still a route
+// they cannot silently lose.
 func fitTestMux(t *testing.T, dataDir string) *http.ServeMux {
 	return fitTestMuxServer(t, dataDir).mux
 }
@@ -1903,23 +1903,45 @@ func fitTestMuxServer(t *testing.T, dataDir string) testServer {
 	}
 	s.tpl = tpl
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", s.today)
-	mux.HandleFunc("GET /calendar", s.calendar)
-	mux.HandleFunc("GET /week/{n}", s.week)
-	mux.HandleFunc("GET /fit/{date}", s.fitFile)
-	mux.HandleFunc("GET /fit.zip", s.fitZip)
-	mux.HandleFunc("GET /zwo/{date}", s.zwoFile)
-	mux.HandleFunc("GET /zwo.zip", s.zwoZip)
-	mux.HandleFunc("GET /watch", s.watchPage)
-	mux.HandleFunc("GET /api/activities", s.getActivities)
-	mux.HandleFunc("GET /api/activity", s.getActivity)
-	mux.HandleFunc("POST /api/activity", s.postActivity)
-	mux.HandleFunc("GET /api/activity-metrics", s.getActivityMetrics)
-	mux.HandleFunc("GET /api/day", s.getDay)
-	mux.HandleFunc("POST /api/entry", s.postEntry)
-	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
-	return testServer{s: s, mux: mux}
+	return testServer{s: s, mux: s.routes()}
+}
+
+// TestEveryRouteIsReachable checks the wiring, not the answers: mux.Handler
+// reports the pattern a request matched, and "" means nothing is registered
+// there. A handler is free to 404 on its own terms — a missing registration is
+// a different thing, and it is invisible until someone opens the page.
+func TestEveryRouteIsReachable(t *testing.T) {
+	mux := fitTestMux(t, "")
+	for _, c := range []struct{ method, url string }{
+		{"GET", "/static/app.js"},
+		{"GET", "/"},
+		{"GET", "/calendar"},
+		{"GET", "/week/1"},
+		{"GET", "/workouts"},
+		{"GET", "/fit/2026-01-05"},
+		{"GET", "/fit.zip"},
+		{"GET", "/zwo/2026-01-05"},
+		{"GET", "/zwo.zip"},
+		{"GET", "/watch"},
+		{"GET", "/blocks"},
+		{"GET", "/manifest.webmanifest"},
+		{"GET", "/healthz"},
+		{"POST", "/api/entry"},
+		{"POST", "/api/reload"},
+		{"GET", "/api/entries"},
+		{"GET", "/api/guides"},
+		{"GET", "/api/tasks"},
+		{"GET", "/api/activities"},
+		{"GET", "/api/activity"},
+		{"POST", "/api/activity"},
+		{"GET", "/api/activity-metrics"},
+		{"GET", "/api/day"},
+		{"GET", "/api/issue-trend"},
+	} {
+		if _, pat := mux.Handler(httptest.NewRequest(c.method, c.url, nil)); pat == "" {
+			t.Errorf("%s %s matched no route", c.method, c.url)
+		}
+	}
 }
 
 func get(mux *http.ServeMux, url string, hdr map[string]string) *httptest.ResponseRecorder {
