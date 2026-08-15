@@ -281,7 +281,7 @@ func TestHistogramMatchesDirectShares(t *testing.T) {
 	}
 	defer db.close()
 	const name = "2026-08-01-12-00-00.fit"
-	if _, err := db.importOne(name, data, time.UTC); err != nil {
+	if _, err := db.importOne(name, data, time.UTC, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, cap := range []int{50, 140, 157, 200} {
@@ -314,7 +314,7 @@ func TestMetricsDBInvisibleToRevAndFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.importOne("2026-08-01-12-00-00.fit", tenSecondRun(t), time.UTC); err != nil {
+	if _, err := db.importOne("2026-08-01-12-00-00.fit", tenSecondRun(t), time.UTC, nil); err != nil {
 		t.Fatal(err)
 	}
 	db.close()
@@ -423,7 +423,7 @@ func TestReconcileImportsTheArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.close()
-	db.reconcile(actDir, time.UTC)
+	db.reconcile(actDir, time.UTC, nil)
 
 	for _, n := range []string{"2026-08-01-12-00-00.fit", "2026-08-02-12-00-00.fit"} {
 		if ok, err := db.has(n); err != nil || !ok {
@@ -442,7 +442,7 @@ func TestReconcileImportsTheArchive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(actDir, "2026-08-03-12-00-00.fit"), good, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	db.reconcile(actDir, time.UTC)
+	db.reconcile(actDir, time.UTC, nil)
 	if ok, _ := db.has("2026-08-03-12-00-00.fit"); !ok {
 		t.Error("failure did not retry on the next reconcile pass")
 	}
@@ -460,7 +460,7 @@ func TestSchemaVersionBumpRebuilds(t *testing.T) {
 		t.Fatal(err)
 	}
 	const name = "2026-08-01-12-00-00.fit"
-	if _, err := db.importOne(name, tenSecondRun(t), time.UTC); err != nil {
+	if _, err := db.importOne(name, tenSecondRun(t), time.UTC, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.w.Exec(`PRAGMA user_version = 9999`); err != nil {
@@ -706,7 +706,7 @@ func TestNonMonotonicTimeKeepsDiffZero(t *testing.T) {
 	}
 	defer db.close()
 	const name = "2026-08-01-12-00-00.fit"
-	if _, err := db.importOne(name, data, time.UTC); err != nil {
+	if _, err := db.importOne(name, data, time.UTC, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, cap := range []int{50, 140, 157} {
@@ -735,7 +735,7 @@ func TestImportPanicContained(t *testing.T) {
 	}
 	defer db.close()
 	const name = "2026-08-01-12-00-00.fit"
-	if _, err := db.importOne(name, []byte("whatever"), time.UTC); err == nil ||
+	if _, err := db.importOne(name, []byte("whatever"), time.UTC, nil); err == nil ||
 		!strings.Contains(err.Error(), "decode panic") {
 		t.Fatalf("panic not contained as an error: %v", err)
 	}

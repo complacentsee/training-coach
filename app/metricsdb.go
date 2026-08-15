@@ -38,7 +38,7 @@ import (
 // metricsSchemaVersion gates the whole file: a mismatch on open drops every
 // derived table and rebuilds from the archive via the startup reconcile.
 // Bump it whenever the schema OR the register's arithmetic changes shape.
-const metricsSchemaVersion = 1
+const metricsSchemaVersion = 2
 
 const metricsSchema = `
 CREATE TABLE IF NOT EXISTS activities(
@@ -46,7 +46,12 @@ CREATE TABLE IF NOT EXISTS activities(
   start_utc TEXT NOT NULL, elapsed_s INTEGER NOT NULL, records INTEGER NOT NULL,
   avg_hr REAL, max_hr INTEGER, dropout_share REAL, hr_drift REAL,
   decoupling_pct REAL, avg_cadence REAL, avg_power REAL, distance_m REAL,
-  sha256 TEXT NOT NULL, schema_version INTEGER NOT NULL);
+  sha256 TEXT NOT NULL, schema_version INTEGER NOT NULL,
+  -- Frozen at import: the conditions where and when the session started.
+  -- Looked up once and kept, because a reanalysis is revised over time and
+  -- a grade must go on citing the weather it was made against.
+  temp_f REAL, dew_f REAL, humidity_pct INTEGER, wind_mph REAL,
+  weather_src TEXT);
 CREATE INDEX IF NOT EXISTS idx_act_sport_date ON activities(sport, date);
 CREATE TABLE IF NOT EXISTS hr_hist(
   name TEXT NOT NULL, bpm INTEGER NOT NULL, seconds INTEGER NOT NULL,
@@ -169,7 +174,7 @@ var decodeForImport = decodeActivity
 // decides whether they matter (an HTTP import logs and moves on; the
 // canonical bytes are already safe on disk either way). A decoder panic on
 // hostile bytes is contained here for the same reason.
-func (m *metricsDB) importOne(name string, data []byte, loc *time.Location) (a *activityMetrics, err error) {
+func (m *metricsDB) importOne(name string, data []byte, loc *time.Location, wx *weatherService) (a *activityMetrics, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			a, err = nil, fmt.Errorf("decode panic: %v", r)
@@ -186,6 +191,12 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location) (a *
 	sum := sha256.Sum256(data)
 	a = computeMetrics(name, activityDate(name, streams.StartUTC, loc), streams)
 	a.SHA256 = hex.EncodeToString(sum[:])
+	// The weather is read here and never again: a session's conditions are
+	// a fact about a moment, and re-deriving them later can quietly answer
+	// differently once the provider revises its reanalysis.
+	if streams.StartLat != nil && streams.StartLon != nil {
+		a.Weather = wx.at(*streams.StartLat, *streams.StartLon, streams.StartUTC)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -199,10 +210,18 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location) (a *
 			return nil, err
 		}
 	}
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO activities VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	var tempF, dewF, windMPH *float64
+	var rh *int
+	var wxSrc *string
+	if w := a.Weather; w != nil {
+		tempF, dewF, windMPH, wxSrc = &w.TempF, &w.DewF, &w.WindMPH, &w.Source
+		rh = &w.RH
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO activities VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.Name, a.Date, a.Sport, a.StartUTC, a.ElapsedS, a.Records,
 		a.AvgHR, a.MaxHR, a.DropoutShare, a.HRDrift, a.DecouplingPct,
-		a.AvgCadence, a.AvgPower, a.DistanceM, a.SHA256, metricsSchemaVersion); err != nil {
+		a.AvgCadence, a.AvgPower, a.DistanceM, a.SHA256, metricsSchemaVersion,
+		tempF, dewF, rh, windMPH, wxSrc); err != nil {
 		return nil, err
 	}
 	insHR, err := tx.Prepare(`INSERT INTO hr_hist VALUES(?,?,?)`)
@@ -289,7 +308,7 @@ func (m *metricsDB) has(name string) (bool, error) {
 // fresh or version-bumped DB is the entire archive: the initial backfill IS
 // the reconcile. Permanent decode failures retry each pass (12 ms a piece)
 // and stay visible in the failures table rather than wedging anything.
-func (m *metricsDB) reconcile(dir string, loc *time.Location) {
+func (m *metricsDB) reconcile(dir string, loc *time.Location, wx *weatherService) {
 	ents, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return // no archive yet — nothing to reconcile
@@ -320,7 +339,7 @@ func (m *metricsDB) reconcile(dir string, loc *time.Location) {
 			failed++
 			continue
 		}
-		if _, err := m.importOne(e.Name(), data, loc); err != nil {
+		if _, err := m.importOne(e.Name(), data, loc, wx); err != nil {
 			log.Printf("metrics reconcile: %s: %v", e.Name(), err)
 			failed++
 			continue
@@ -339,18 +358,35 @@ func (m *metricsDB) reconcile(dir string, loc *time.Location) {
 // row yet (not stored, or its import failed — the failures table knows).
 func (m *metricsDB) rowByName(name string) (*activityMetrics, error) {
 	a := &activityMetrics{}
+	var tempF, dewF, windMPH *float64
+	var rh *int
+	var wxSrc *string
 	err := m.r.QueryRow(`SELECT name, date, sport, start_utc, elapsed_s, records,
 		avg_hr, max_hr, dropout_share, hr_drift, decoupling_pct,
-		avg_cadence, avg_power, distance_m, sha256
+		avg_cadence, avg_power, distance_m, sha256,
+		temp_f, dew_f, humidity_pct, wind_mph, weather_src
 		FROM activities WHERE name=?`, name).Scan(
 		&a.Name, &a.Date, &a.Sport, &a.StartUTC, &a.ElapsedS, &a.Records,
 		&a.AvgHR, &a.MaxHR, &a.DropoutShare, &a.HRDrift, &a.DecouplingPct,
-		&a.AvgCadence, &a.AvgPower, &a.DistanceM, &a.SHA256)
+		&a.AvgCadence, &a.AvgPower, &a.DistanceM, &a.SHA256,
+		&tempF, &dewF, &rh, &windMPH, &wxSrc)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if tempF != nil && dewF != nil {
+		a.Weather = &conditions{TempF: *tempF, DewF: *dewF, HeatSum: pyRound(*tempF+*dewF, 1)}
+		if rh != nil {
+			a.Weather.RH = *rh
+		}
+		if windMPH != nil {
+			a.Weather.WindMPH = *windMPH
+		}
+		if wxSrc != nil {
+			a.Weather.Source = *wxSrc
+		}
 	}
 	return a, nil
 }
