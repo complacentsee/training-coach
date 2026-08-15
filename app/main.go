@@ -305,6 +305,9 @@ type todayData struct {
 	Skippable   bool // an actual session, so there is something to skip
 	Skipped     bool
 	SkipNote    string
+	Recorded    bool   // an activity of this session's sport landed on this day
+	Grade       string // the letter, when the day has been graded
+	GradeNote   string // and the reasoning behind it
 	Detail      string
 	Targets     []string
 	GuideID     string
@@ -456,9 +459,47 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	if e, skipped := s.store.SkipOn(iso); skipped {
 		td.Skipped, td.SkipNote = true, e.Note
 	}
+	if g, graded := s.store.Grades()[iso]; graded {
+		td.Grade, td.GradeNote = g.Val, g.Note
+	}
+	// Evidence that the session happened: a recording of its own sport, or a
+	// grade, which is only ever written against a session that was done.
+	// Offering "couldn't do this" against that is offering to contradict the
+	// record. A day already marked not-done keeps its control regardless, or
+	// the mark could never be taken back.
+	if td.Skippable && !td.Skipped {
+		td.Recorded = td.Grade != "" || s.sessionRecorded(iso, td.Session.Kind)
+	}
 
 	td.Issues = s.issueViews(d, blk, weekN, iso)
 	s.render(w, "today.html", td)
+}
+
+// sessionRecorded reports whether the day carries a recording of the session's
+// own sport. The metrics cache is optional — a server built without one simply
+// has no evidence either way, which is the honest answer and not a crash.
+func (s *server) sessionRecorded(iso string, k Kind) bool {
+	if s.metrics == nil {
+		return false
+	}
+	acts, err := s.metrics.byDate(iso)
+	if err != nil {
+		log.Printf("today %s: reading the day's activities: %v", iso, err)
+		return false
+	}
+	return recordedKind(acts, k)
+}
+
+// recordedKind applies the grader's own sport test, so the two can never
+// disagree about whether a bike day was ridden: cycling for a bike session,
+// anything else for everything else.
+func recordedKind(acts []activityMetrics, k Kind) bool {
+	for _, a := range acts {
+		if (a.Sport == "cycling") == k.IsBike() {
+			return true
+		}
+	}
+	return false
 }
 
 // issueViews builds a card per declared issue. An athlete with none simply

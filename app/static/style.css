@@ -267,6 +267,15 @@ button.g:hover,button.g:focus-visible{opacity:1;border-color:var(--accent);color
 .gd{color:var(--caution)}
 .gf{color:var(--stop)}
 td.graded{box-shadow:inset 2.5px 0 0 currentColor}
+/* Today's grade, inline under the session it judges. The calendar's popup
+   markup, reused as-is, so the letter reads identically in both places. */
+.today-grade{border-top:1px solid var(--rule);margin-top:.9rem;padding-top:.7rem}
+.today-grade .g-band{margin:0 0 .4rem}
+.today-grade .gnote{margin:0;font-size:.92rem;line-height:1.5;color:var(--ink-2)}
+/* Said only while a recording exists and no grade does yet, so the missing
+   "couldn't do this" button reads as answered rather than as a bug. */
+.recorded{margin:.9rem 0 0;font:700 .64rem/1 var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3)}
 .legend{font-size:.8rem;color:var(--ink-3);margin-top:.9rem}
 .g-steps .gbtn{width:1.15rem;height:1.15rem;font-size:.62rem;margin-left:.3rem}
 .g-back{display:inline-block;margin:0 0 .7rem;padding:.28rem .6rem;border-radius:3px;

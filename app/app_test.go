@@ -2811,3 +2811,143 @@ func TestMeasuredDistanceKeepsTwoRunsApart(t *testing.T) {
 		t.Errorf("metric = %s, want 16.15 km", got)
 	}
 }
+
+// todayCardFor renders the Today page's session card for one day of the
+// defaults block, with the fields under test set by the caller. It builds from
+// an empty data directory, so it runs in a dataless clone like everything else.
+func todayCardFor(t *testing.T, fill func(*todayData)) string {
+	t.Helper()
+	ts := fitTestMuxServer(t, t.TempDir())
+	d := ts.s.ds()
+	day := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC) // Wed of week 2, an easy run
+	blk := d.Current(day)
+	wk, di, ok := blk.Locate(day)
+	if !ok {
+		t.Fatalf("%s is outside the defaults block", day.Format("2006-01-02"))
+	}
+	sess := wk.Days[di]
+	if sess.Kind == KindRest {
+		t.Fatalf("picked a rest day (%s); the skip control never renders on one", sess.Kind)
+	}
+	td := todayData{
+		Nav: "today", Title: "Today", Today: day, InBlock: true,
+		Week: wk, DayIdx: di, Session: sess, GuideID: sess.GuideID(),
+		Skippable: true,
+	}
+	fill(&td)
+	var b strings.Builder
+	if err := ts.s.tpl.ExecuteTemplate(&b, "today.html", td); err != nil {
+		t.Fatalf("render today.html: %v", err)
+	}
+	return b.String()
+}
+
+// The "couldn't do this" control asserts that the session did not happen. Once
+// a recording of its own sport has landed, or a grade has been written against
+// the day, that assertion contradicts the record — so the control goes and what
+// did happen takes its place. A day already marked not-done is the exception:
+// its control is the only way to take the mark back.
+func TestTodaySkipControlYieldsToTheRecord(t *testing.T) {
+	// The control is one form whose button reads "Couldn't do this" until the
+	// day is marked, and "Undo" after — so its presence is the form, not either
+	// label.
+	const skipForm = `<form class="skip`
+	for _, tc := range []struct {
+		name        string
+		fill        func(*todayData)
+		wantControl bool
+		wants       []string
+		notWants    []string
+	}{
+		{
+			name:        "nothing recorded, the control stands",
+			fill:        func(td *todayData) {},
+			wantControl: true,
+			wants:       []string{"Couldn't do this"},
+			notWants:    []string{"today-grade", ">Recorded<"},
+		},
+		{
+			name:        "recorded but not yet graded",
+			fill:        func(td *todayData) { td.Recorded = true },
+			wantControl: false,
+			wants:       []string{">Recorded<"},
+			notWants:    []string{"today-grade"},
+		},
+		{
+			name: "graded shows the letter and the reasoning",
+			fill: func(td *todayData) {
+				td.Recorded, td.Grade, td.GradeNote = true, "B", "Held the cap for 68% of it."
+			},
+			wantControl: false,
+			wants:       []string{"today-grade", ">B<", "Held the cap for 68% of it."},
+			notWants:    []string{">Recorded<"},
+		},
+		{
+			name: "a day marked not-done keeps its undo, recorded or not",
+			fill: func(td *todayData) { td.Skipped, td.SkipNote = true, "calf" },
+			// Recorded is left false: the handler never sets it on a skipped
+			// day, precisely so this control survives.
+			wantControl: true,
+			wants:       []string{"Undo", "calf"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			html := todayCardFor(t, tc.fill)
+			if got := strings.Contains(html, skipForm); got != tc.wantControl {
+				t.Errorf("skip control present = %v, want %v", got, tc.wantControl)
+			}
+			for _, w := range tc.wants {
+				if !strings.Contains(html, w) {
+					t.Errorf("missing %q", w)
+				}
+			}
+			for _, w := range tc.notWants {
+				if strings.Contains(html, w) {
+					t.Errorf("unexpectedly present: %q", w)
+				}
+			}
+		})
+	}
+}
+
+// The grade note is the LLM's own prose and reaches the page through emph, so
+// a stray angle bracket in it is text and never markup.
+func TestTodayGradeNoteCannotInjectMarkup(t *testing.T) {
+	html := todayCardFor(t, func(td *todayData) {
+		td.Grade, td.GradeNote = "C", "faded <script>alert(1)</script> late"
+	})
+	if strings.Contains(html, "<script>") {
+		t.Error("a grade note put raw markup on the page")
+	}
+	if !strings.Contains(html, "&lt;script&gt;") {
+		t.Error("the note's angle brackets were not escaped into text")
+	}
+}
+
+// recordedKind is the grader's sport test, reused so the page and the grade can
+// never disagree about whether a bike day was ridden.
+func TestRecordedKindMatchesTheSessionsSport(t *testing.T) {
+	run := []activityMetrics{{Name: "a.fit", Sport: "running"}}
+	ride := []activityMetrics{{Name: "b.fit", Sport: "cycling"}}
+	both := []activityMetrics{{Name: "a.fit", Sport: "running"}, {Name: "b.fit", Sport: "cycling"}}
+	for _, tc := range []struct {
+		name string
+		acts []activityMetrics
+		kind Kind
+		want bool
+	}{
+		{"a run answers a run day", run, KindEasy, true},
+		{"a ride does not answer a run day", ride, KindEasy, false},
+		{"a ride answers a bike day", ride, KindBikeEasy, true},
+		{"a run does not answer a bike day", run, KindBikeHard, false},
+		{"a walk counts as the non-cycling sport it is", []activityMetrics{{Sport: "walking"}}, KindLong, true},
+		{"either sport answers when both were recorded", both, KindBikeEasy, true},
+		{"nothing recorded answers nothing", nil, KindEasy, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recordedKind(tc.acts, tc.kind); got != tc.want {
+				t.Errorf("recordedKind = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
