@@ -840,6 +840,146 @@ func TestDayAPIExplicitBlock(t *testing.T) {
 	}
 }
 
+// TestSkippingASession: a session not done is a decision worth recording,
+// and a blank day cannot tell that from one nobody logged. It is written
+// like every other state here — appended, reversible by a later entry,
+// last one wins — and it reaches the grader through the day's prescription.
+func TestSkippingASession(t *testing.T) {
+	ts := fitTestMuxServer(t, t.TempDir())
+	const date = "2026-01-06"
+
+	if _, skipped := ts.s.store.SkipOn(date); skipped {
+		t.Fatal("a day nobody touched reads as skipped")
+	}
+
+	body := []byte(`{"date":"` + date + `","kind":"skip","val":"skipped","note":"no time before work"}`)
+	if rec := post(ts.mux, "/api/entry", body); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST skip = %d: %s", rec.Code, rec.Body)
+	}
+	e, skipped := ts.s.store.SkipOn(date)
+	if !skipped || e.Note != "no time before work" {
+		t.Fatalf("SkipOn = %+v, %v", e, skipped)
+	}
+	if _, ok := ts.s.store.Skips()[date]; !ok {
+		t.Error("Skips() does not carry the day")
+	}
+
+	// It reaches the grader with the reason, on the day's prescription.
+	rec := get(ts.mux, "/api/day?date="+date, nil)
+	var day struct {
+		Skipped  bool   `json:"skipped"`
+		SkipNote string `json:"skip_note"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &day); err != nil {
+		t.Fatal(err)
+	}
+	if !day.Skipped || day.SkipNote != "no time before work" {
+		t.Errorf("/api/day = %+v", day)
+	}
+
+	// Changing his mind is another entry, not an edit: the last one wins
+	// and the fact that he changed it survives.
+	if rec := post(ts.mux, "/api/entry",
+		[]byte(`{"date":"`+date+`","kind":"skip","val":"unskipped"}`)); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST unskip = %d", rec.Code)
+	}
+	if _, skipped := ts.s.store.SkipOn(date); skipped {
+		t.Error("still skipped after unskipping")
+	}
+	if _, ok := ts.s.store.Skips()[date]; ok {
+		t.Error("Skips() still carries an unskipped day")
+	}
+	if n := len(ts.s.store.All()); n != 2 {
+		t.Errorf("%d entries; the log is append-only and must hold both", n)
+	}
+
+	// A state this does not have is refused rather than stored.
+	if rec := post(ts.mux, "/api/entry",
+		[]byte(`{"date":"`+date+`","kind":"skip","val":"maybe"}`)); rec.Code != http.StatusBadRequest {
+		t.Errorf(`val "maybe" = %d, want 400`, rec.Code)
+	}
+}
+
+// TestSkipShowsOnThePages: the control appears on a day with a session and
+// not on a rest day, the state survives a reload rather than living only in
+// the tap that made it, and the calendar marks the day with the reason.
+func TestSkipShowsOnThePages(t *testing.T) {
+	// The today page renders now, so the block has to contain now: the
+	// example one is shifted to this week. Blocks start on a Monday, so
+	// which session today is depends on the day the suite runs — and a rest
+	// day must offer nothing to skip.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "blocks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "library"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyFile(t, "./defaults/athlete.json", filepath.Join(dir, "athlete.json"))
+	for _, f := range []string{"guides.json", "index.json"} {
+		copyFile(t, "./defaults/library/"+f, filepath.Join(dir, "library", f))
+	}
+	raw, err := os.ReadFile("./defaults/blocks/example-base-block.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blk map[string]any
+	if err := json.Unmarshal(raw, &blk); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	monday := now.AddDate(0, 0, -(int(now.Weekday())+6)%7)
+	blk["start"] = monday.Format("2006-01-02")
+	shifted, err := json.Marshal(blk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blocks", "example-base-block.json"), shifted, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := fitTestMuxServer(t, dir)
+	today := ts.s.day(ts.s.ds())
+	iso := today.Format("2006-01-02")
+	wk, di, ok := ts.s.ds().Current(today).Locate(today)
+	if !ok {
+		t.Fatalf("%s is not in the shifted block", iso)
+	}
+	rest := wk.Days[di].Kind == KindRest
+
+	body := get(ts.mux, "/", nil).Body.String()
+	switch {
+	case rest && strings.Contains(body, `class="skipbtn"`):
+		t.Error("a rest day offers a session to skip")
+	case !rest && !strings.Contains(body, `class="skipbtn"`):
+		t.Error("no skip control on a session day")
+	}
+
+	if err := ts.s.store.Append(Entry{
+		Date: iso, Kind: kindSkip, Val: "skipped", Note: "no time before work",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !rest {
+		body = get(ts.mux, "/", nil).Body.String()
+		if !strings.Contains(body, "Not done — no time before work") {
+			t.Error("the skipped state does not survive a reload")
+		}
+		if !strings.Contains(body, "card k-") || !strings.Contains(body, " skipped\">") {
+			t.Error("the session card is not marked skipped")
+		}
+	}
+
+	// The calendar marks the day and carries the reason in the cell's title.
+	cal := get(ts.mux, "/calendar", nil).Body.String()
+	if !strings.Contains(cal, " skipped") {
+		t.Error("the calendar does not mark a skipped day")
+	}
+	if !strings.Contains(cal, "Skipped — no time before work") {
+		t.Error("the calendar cell does not carry the reason")
+	}
+}
+
 // TestDayCarriesTheIssueRatingAndItsAction: what the athlete reported that
 // day reaches the grader with the instruction attached. The number alone
 // is not enough — a session taken easy on an instruction to take it easy

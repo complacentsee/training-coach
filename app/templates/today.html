@@ -15,7 +15,7 @@
 </section>
 
 {{if .InBlock}}
-<section class="card {{kindCls .Session.Kind}}">
+<section class="card {{kindCls .Session.Kind}}{{if .Skipped}} skipped{{end}}">
   <div class="card-hd">
     <span class="amount">{{amount .Session}}</span>
     {{if .Session.Tag}}<span class="tag">{{.Session.Tag}}</span>{{end}}
@@ -23,6 +23,15 @@
   <h2>{{emph .Session.Label}} {{template "guidebtn" .GuideID}}{{if .FitURL}} <a class="fitbtn" href="{{.FitURL}}" download>FIT</a>{{end}}{{if .ZwoURL}} <a class="fitbtn" href="{{.ZwoURL}}" download>ZWO</a>{{end}}</h2>
   {{with .Detail}}<p class="detail">{{emph .}}</p>{{end}}
   {{template "targets" .Targets}}
+  {{if .Skippable}}
+  {{/* Two taps, because the first is easy to hit by accident and the second
+       is not. Armed, it says exactly what it is about to do. */}}
+  <form class="skip{{if .Skipped}} on{{end}}" data-date="{{iso .Today}}">
+    <p class="skip-state">{{if .Skipped}}Not done{{with .SkipNote}} — {{.}}{{end}}{{end}}</p>
+    <input type="text" name="note" placeholder="why (optional)" autocomplete="off" hidden>
+    <button type="button" class="skipbtn">{{if .Skipped}}Undo{{else}}Couldn't do this{{end}}</button>
+  </form>
+  {{end}}
 </section>
 {{end}}
 

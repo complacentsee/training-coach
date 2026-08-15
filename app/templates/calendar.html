@@ -17,7 +17,7 @@
         <span>{{.Volume}}{{if .WeekGrade}} · <b class="g g{{lower .WeekGrade}}" title="{{.WeekNote}}">{{.WeekGrade}}</b>{{end}}</span>
       </th>
       {{range $i, $c := .Cells}}
-        <td class="{{kindCls $c.Session.Kind}}{{if $c.Grade}} graded{{end}}{{if and (eq $w.N $.TodayW) (eq $i $.TodayD)}} now{{end}}"
+        <td class="{{kindCls $c.Session.Kind}}{{if $c.Grade}} graded{{end}}{{if $c.Skipped}} skipped{{end}}{{if and (eq $w.N $.TodayW) (eq $i $.TodayD)}} now{{end}}"
             {{if $c.Guide}}data-guide="{{$c.Guide}}"{{end}}
             {{if $c.Note}}title="{{$c.Note}}"{{end}}>
           {{if $c.Grade}}<span class="g g{{lower $c.Grade}}">{{$c.Grade}}</span>{{end}}
