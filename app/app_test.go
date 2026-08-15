@@ -2784,3 +2784,30 @@ func TestWatchPageRendersForSteplessBlock(t *testing.T) {
 		t.Errorf("unknown block = %d, want 404", rec.Code)
 	}
 }
+
+// TestMeasuredDistanceKeepsTwoRunsApart: a prescription is authored in whole
+// and half miles, so In rounds to a tenth and "10 mi" is right for it. Two
+// RECORDED long runs a hundredth of a mile apart must not both read "10 mi" —
+// a grade compared them at that precision and described the difference
+// backwards, because the coarse number was set against a finer one.
+func TestMeasuredDistanceKeepsTwoRunsApart(t *testing.T) {
+	eighth, fifteenth := Distance(16146.8), Distance(16128.53) // the real pair
+	if a, b := eighth.In(Imperial), fifteenth.In(Imperial); a != b {
+		t.Fatalf("premise changed: In now distinguishes them (%s vs %s)", a, b)
+	}
+	a, b := eighth.InMeasured(Imperial), fifteenth.InMeasured(Imperial)
+	if a == b {
+		t.Errorf("both runs measure %s; the comparison cannot see the difference", a)
+	}
+	if a != "10.03 mi" || b != "10.02 mi" {
+		t.Errorf("got %s and %s, want 10.03 mi and 10.02 mi", a, b)
+	}
+	// The longer run must read longer. This is the property the grade got
+	// wrong, so it is the one worth pinning.
+	if !(a > b) {
+		t.Errorf("%s should sort after %s — the 8th was the longer run", a, b)
+	}
+	if got := Distance(16146.8).InMeasured(Metric); got != "16.15 km" {
+		t.Errorf("metric = %s, want 16.15 km", got)
+	}
+}

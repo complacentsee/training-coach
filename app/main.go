@@ -1847,7 +1847,7 @@ func (s *server) sameKindHistory(d *dataset, blk *Block, before time.Time, kind 
 				sib.Elapsed = fmt.Sprintf("%d:%02d", m.ElapsedS/60, m.ElapsedS%60)
 				if m.DistanceM != nil {
 					sib.Distance = pyRound(*m.DistanceM, 1)
-					sib.Dist = Distance(*m.DistanceM).In(d.Athlete.Units)
+					sib.Dist = Distance(*m.DistanceM).InMeasured(d.Athlete.Units)
 				}
 				if m.AvgHR != nil {
 					v := pyRound(*m.AvgHR, 1)

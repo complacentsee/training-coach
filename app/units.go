@@ -68,6 +68,20 @@ func (d Distance) In(u Units) string {
 	return trimNum(float64(d)/metresPerMile, 1) + " mi"
 }
 
+// InMeasured is In for a RECORDED distance rather than a prescribed one. A
+// plan is authored in whole and half miles, so rounding to a tenth is exactly
+// right for it and "10 mi" is what the calendar should say. A measurement is
+// different: two long runs a hundredth of a mile apart both render "10 mi" at
+// that precision, and a grade comparing them then described the difference in
+// the wrong direction, because the coarse figure was paired against a finer
+// one computed elsewhere.
+func (d Distance) InMeasured(u Units) string {
+	if u == Metric {
+		return trimNum(float64(d)/metresPerKM, 2) + " km"
+	}
+	return trimNum(float64(d)/metresPerMile, 2) + " mi"
+}
+
 // InLong spells the unit out, for prose that reads "27 miles" rather than a
 // table cell that reads "27 mi".
 func (d Distance) InLong(u Units) string {
