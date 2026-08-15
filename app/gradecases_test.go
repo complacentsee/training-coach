@@ -25,6 +25,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -246,6 +247,57 @@ func TestFastestSegmentsRecoverTheReps(t *testing.T) {
 	}
 	if onTarget != 0 {
 		t.Errorf("abandoned session: %d segments read as on target, want none: %+v", onTarget, segs)
+	}
+}
+
+// TestIntegratedDistanceMatchesTheOdometer: the register integrates
+// distance from the speed stream rather than reading the odometer, so the
+// odometer is the independent check on it. These are real recordings and
+// five of them carry a stop the recording did not describe; before those
+// were excluded, four integrated 0.64 to 2.38% long and the stretch the
+// grader was handed as a best effort could be most of the stop — on
+// 2026-01-10-11 the third-fastest "four minutes" was 549 s covering
+// 1,071 m, ranked above the real 240 s at 8:33/mi that replaced it.
+func TestIntegratedDistanceMatchesTheOdometer(t *testing.T) {
+	ents, err := os.ReadDir(committedCases)
+	if err != nil {
+		t.Skipf("committed corpus not present: %v", err)
+	}
+	checked, gapped := 0, 0
+	for _, e := range ents {
+		if filepath.Ext(e.Name()) != ".fit" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(committedCases, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := decodeActivity(b)
+		if err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		if !s.HaveVel || s.DistM == nil || *s.DistM <= 0 {
+			continue
+		}
+		checked++
+		dist, gaps := describedDistance(s)
+		n := len(s.Time) - 1
+		if gaps[n] > 0 {
+			gapped++
+		}
+		// 0.5%: the gap-free files in this corpus integrate within 0.16% of
+		// their own odometers and the gapped ones within 0.21%, so this is
+		// wide enough to be about gaps rather than about sampling.
+		if off := math.Abs(dist[n]-*s.DistM) / *s.DistM; off > 0.005 {
+			t.Errorf("%s: integrated %.1f m against a %.1f m odometer (%.2f%%, %d gaps)",
+				e.Name(), dist[n], *s.DistM, off*100, gaps[n])
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no fixture carried both a speed stream and an odometer")
+	}
+	if gapped == 0 {
+		t.Error("no fixture carries a recording gap any more, so this proves nothing")
 	}
 }
 

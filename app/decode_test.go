@@ -680,6 +680,146 @@ func TestBestRolling(t *testing.T) {
 	}
 }
 
+// gappedRun is a trace with a hole in it: `before` seconds at `slow` m/s,
+// then `hole` seconds nothing describes, then `after` seconds at `fast`,
+// sampled every `every` seconds. The session's odometer states only the
+// ground the records cover, which is what an athlete standing still covers.
+func gappedRun(t *testing.T, every, before, hole, after int, slow, fast float64) *activityStreams {
+	t.Helper()
+	var msgs []proto.Message
+	raw := func(v float64) uint16 { return uint16(v * 1000) }
+	for sec := 0; sec <= before; sec += every {
+		msgs = append(msgs, runRecord(sec, 140, raw(slow), 80))
+	}
+	for sec := before + hole; sec <= before+hole+after; sec += every {
+		msgs = append(msgs, runRecord(sec, 150, raw(fast), 85))
+	}
+	dist := float64(before)*slow + float64(after)*fast
+	msgs = append(msgs, sessionMsg(typedef.SportRunning, uint32(dist*100)))
+	s, err := decodeActivity(encodeActivityFixture(t, msgs...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TestSegmentsRefuseARecordingGap: a stretch that spans a stop is not a best
+// effort. Nothing in the file says how far the athlete travelled while the
+// recording was stopped, and the sample at the far end reports the moment it
+// resumed — integrating that across the gap invents ground nobody covered,
+// and the invention wins the ranking precisely because it is invented.
+// Measured on the 12 Aug 2026 ride before this rule: 9,551 m integrated
+// against a 7,490 m odometer, all of it inside one 296 s stop, and the
+// "fastest mile" it handed the grader was 2,065 m of standing still.
+func TestSegmentsRefuseARecordingGap(t *testing.T) {
+	// Twenty minutes at 3 m/s, a 300 s stop, twenty minutes at 4 m/s.
+	// Nothing on this trace covers ground faster than 4 m/s.
+	s := gappedRun(t, 1, 1200, 300, 1200, 3, 4)
+	// The same shape, five minutes a side: one four-minute stretch fits in
+	// each half and no more.
+	short := gappedRun(t, 1, 300, 300, 300, 3, 4)
+
+	straddle := func(g segment, gapStart, gapEnd int) bool {
+		return g.StartS < gapEnd && g.StartS+int(g.Secs) > gapStart
+	}
+	for _, tc := range []struct {
+		what          string
+		on            *activityStreams
+		gapStart      int
+		meters        float64
+		secs, count   int
+		wantN         int
+		maxM, minSecs float64
+	}{
+		// The fastest four minutes: 240 s of 4 m/s is 960 m, and the stop
+		// offers 1,200 m to anyone willing to count it.
+		{"240 s x3", s, 1200, 0, 240, 3, 3, 960.1, 240},
+		// The fastest 800s: real ones take 200 s at 4 m/s, and a sample's
+		// worth of overshoot; the stop hands over 800 m for nothing.
+		{"800 m x3", s, 1200, 800, 0, 3, 3, 804.1, 199.9},
+		// Asked for more than the trace holds gap-free, it returns what it
+		// has rather than filling the tail with the stop.
+		{"240 s x12", short, 300, 0, 240, 12, 2, 960.1, 240},
+	} {
+		segs := fastestSegments(tc.on, tc.meters, tc.secs, tc.count, Metric)
+		if len(segs) != tc.wantN {
+			t.Errorf("%s: %d segments, want %d: %+v", tc.what, len(segs), tc.wantN, segs)
+		}
+		for _, g := range segs {
+			if straddle(g, tc.gapStart, tc.gapStart+300) {
+				t.Errorf("%s: segment %+v spans the 300 s stop", tc.what, g)
+			}
+			if g.DistM > tc.maxM {
+				t.Errorf("%s: segment %+v covers %.1f m, more than the trace describes", tc.what, g, g.DistM)
+			}
+			if g.Secs < tc.minSecs {
+				t.Errorf("%s: segment %+v is shorter than the ground allows", tc.what, g)
+			}
+		}
+	}
+
+	// The distance the file describes is the ground the records cover; the
+	// stop adds none of its own.
+	dist, gaps := describedDistance(s)
+	if n := len(s.Time) - 1; gaps[n] != 1 {
+		t.Errorf("%d gaps, want exactly the one stop", gaps[n])
+	} else if want := *s.DistM; dist[n] < want-1 || dist[n] > want+1 {
+		t.Errorf("integrated %.1f m against a %.1f m odometer", dist[n], want)
+	}
+}
+
+// TestGapThresholdFollowsTheRecordingRate: what counts as a gap is the
+// file's own recording rate, not a constant. Smart recording writes a sample
+// when something changes, so twelve seconds between samples describes twelve
+// steady seconds; on a 1 Hz file the same twelve are eleven samples that do
+// not exist. A device that records every eight seconds must still be
+// able to report a best effort — measured 15 Aug 2026, archived files whose
+// median interval is 2-4 s reach 17 s between samples with nothing wrong,
+// while every stop measured runs 57 s or longer against a median of 1.
+func TestGapThresholdFollowsTheRecordingRate(t *testing.T) {
+	oneHz := make([]int, 61)
+	for i := range oneHz {
+		oneHz[i] = i
+	}
+	if got := recordingGapS(oneHz); got != gapFloorS {
+		t.Errorf("1 Hz: gap threshold %d s, want the floor %d s", got, gapFloorS)
+	}
+	slow := make([]int, 61)
+	for i := range slow {
+		slow[i] = i * 8
+	}
+	if got, want := recordingGapS(slow), 8*gapCadenceMult; got != want {
+		t.Errorf("8 s cadence: gap threshold %d s, want %d s", got, want)
+	}
+
+	// The same trace sampled every 8 s: no gaps, and the best efforts still
+	// come back. This is the regression a flat threshold would cause.
+	s := gappedRun(t, 8, 800, 8, 800, 3, 4)
+	if _, gaps := describedDistance(s); gaps[len(s.Time)-1] != 0 {
+		t.Errorf("an 8 s recording rate read as %d gaps", gaps[len(s.Time)-1])
+	}
+	segs := fastestSegments(s, 0, 240, 3, Metric)
+	if len(segs) != 3 {
+		t.Fatalf("8 s cadence: %d segments, want 3: %+v", len(segs), segs)
+	}
+	for _, g := range segs {
+		if g.DistM > 960.1 {
+			t.Errorf("8 s cadence: segment %+v covers more than the trace describes", g)
+		}
+	}
+	// Hole one recording rate is not the other: 120 s of nothing is a stop
+	// on the same file.
+	s = gappedRun(t, 8, 800, 120, 800, 3, 4)
+	if _, gaps := describedDistance(s); gaps[len(s.Time)-1] != 1 {
+		t.Errorf("a 120 s stop on an 8 s file read as %d gaps, want 1", gaps[len(s.Time)-1])
+	}
+	for _, g := range fastestSegments(s, 0, 240, 3, Metric) {
+		if g.StartS < 920 && g.StartS+int(g.Secs) > 800 {
+			t.Errorf("segment %+v spans the 120 s stop", g)
+		}
+	}
+}
+
 // TestNonMonotonicTimeKeepsDiffZero: a backwards timestamp (a chained-file
 // seam) contributes nothing anywhere — the histogram and the stream
 // computation must still agree exactly.
