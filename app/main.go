@@ -210,6 +210,7 @@ func (s *server) ds() *dataset { return s.data.Load() }
 // version-bumped DB this is the whole archive.
 func (s *server) startupReconcile() {
 	s.metrics.reconcile(s.activitiesDir(), s.ds().Loc, s.weather)
+	s.backfillWeather()
 	if s.grader != nil {
 		s.grader.reconcile()
 	}

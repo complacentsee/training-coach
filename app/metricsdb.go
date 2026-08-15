@@ -286,6 +286,46 @@ func (m *metricsDB) recent(sinceDate string) ([]activityMetrics, error) {
 	return out, rows.Err()
 }
 
+// weatherlessRow names an activity that carries no conditions.
+type weatherlessRow struct{ Name, Date string }
+
+// weatherless is every activity with no conditions recorded, newest first —
+// the ones imported while the lookup was off, while the provider was
+// unreachable, or (before the horizon clamp) on the day they were run.
+func (m *metricsDB) weatherless() ([]weatherlessRow, error) {
+	rows, err := m.r.Query(`SELECT name, date FROM activities
+		WHERE weather_src IS NULL ORDER BY date DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []weatherlessRow
+	for rows.Next() {
+		var r weatherlessRow
+		if err := rows.Scan(&r.Name, &r.Date); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// setWeather records conditions for a row that had none. It never overwrites:
+// a session that HAS weather keeps what it was imported with, because a grade
+// cites the conditions it was made against and a reanalysis is revised.
+func (m *metricsDB) setWeather(name string, c *conditions) error {
+	if c == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, err := m.w.Exec(`UPDATE activities
+		SET temp_f=?, dew_f=?, humidity_pct=?, wind_mph=?, weather_src=?
+		WHERE name=? AND weather_src IS NULL`,
+		c.TempF, c.DewF, c.RH, c.WindMPH, c.Source, name)
+	return err
+}
+
 func (m *metricsDB) recordFailure(name string, cause error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

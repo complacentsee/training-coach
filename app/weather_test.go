@@ -18,6 +18,8 @@ import (
 	"github.com/muktihari/fit/profile/mesgdef"
 	"github.com/muktihari/fit/profile/typedef"
 	"github.com/muktihari/fit/proto"
+	"os"
+	"path/filepath"
 )
 
 // A position for these tests to carry, and deliberately nowhere anyone
@@ -434,5 +436,83 @@ func TestWeatherForASessionRecordedToday(t *testing.T) {
 		if a > todayISO+".."+todayISO {
 			t.Errorf("asked the archive for %s, beyond the day it can hold", a)
 		}
+	}
+}
+
+// TestWeatherBackfillFillsBlockDaysOnly: frozen-at-import is right for a
+// session that HAS weather, but it must not mean one that never got any can
+// never have it — and until the horizon clamp, every same-day session arrived
+// with none. The catch-up is confined to block dates: the archive holds
+// whatever the watch carried, and an external service should not be asked
+// about hundreds of sessions no plan will ever grade.
+//
+// The row's training day comes from the filename, so these two files carry
+// the same recording under two names — what is being tested is which DATE the
+// backfill will spend a request on.
+func TestWeatherBackfillFillsBlockDaysOnly(t *testing.T) {
+	var hits int32
+	srv := archiveStub(t, &hits, nil)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	acts := filepath.Join(dir, "activities")
+	if err := os.MkdirAll(acts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const inBlock = "2026-01-07-07-00-00.fit" // inside the example block
+	const outside = "2019-05-05-07-00-00.fit" // no block has ever covered this
+	body := runWithPosition(t)
+	for _, n := range []string{inBlock, outside} {
+		if err := os.WriteFile(filepath.Join(acts, n), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Imported with the lookup off, the way a session recorded today arrived.
+	t.Setenv("WEATHER_BASE_URL", srv.URL)
+	t.Setenv("WEATHER_LOOKUP", "off")
+	db, err := openMetricsDB(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.close()
+	s := &server{dataDir: dir, loc: chicago(t), metrics: db}
+	if err := s.reload(); err != nil {
+		t.Fatal(err)
+	}
+	s.weather = newWeatherService(db)
+	db.reconcile(acts, s.ds().Loc, s.weather)
+	for _, n := range []string{inBlock, outside} {
+		if row, err := db.rowByName(n); err != nil || row == nil || row.Weather != nil {
+			t.Fatalf("%s should have imported with no weather: %v %v", n, row, err)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Fatalf("the lookup was off and still called out %d times", n)
+	}
+
+	// Switched on, the next start catches up.
+	t.Setenv("WEATHER_LOOKUP", "on")
+	s.weather = newWeatherService(db)
+	s.backfillWeather()
+
+	row, err := db.rowByName(inBlock)
+	if err != nil || row == nil {
+		t.Fatalf("row: %v", err)
+	}
+	if row.Weather == nil {
+		t.Error("a session inside the block was left without weather")
+	}
+	if row, err := db.rowByName(outside); err != nil || row == nil {
+		t.Fatalf("row: %v", err)
+	} else if row.Weather != nil {
+		t.Errorf("a session outside every block was looked up anyway: %+v", row.Weather)
+	}
+
+	// And a second start does not ask again for what it already has.
+	before := atomic.LoadInt32(&hits)
+	s.backfillWeather()
+	if after := atomic.LoadInt32(&hits); after != before {
+		t.Errorf("the backfill re-fetched on a second run (%d then %d)", before, after)
 	}
 }
