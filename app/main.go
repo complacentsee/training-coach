@@ -194,6 +194,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/activity", s.postActivity)
 	mux.HandleFunc("GET /api/activity-metrics", s.getActivityMetrics)
 	mux.HandleFunc("GET /api/day", s.getDay)
+	mux.HandleFunc("GET /api/session-history", s.getSessionHistory)
 	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
 	return mux
 }
@@ -1651,6 +1652,9 @@ type dayDoc struct {
 	HR       map[string]int `json:"hr,omitempty"`
 	Power    map[string]int `json:"power,omitempty"`
 	Issues   []dayIssue     `json:"issues,omitempty"`
+	// The last time this kind of session was asked for, so a grade is made
+	// against something comparable without having to go looking for it.
+	Previous *daySibling `json:"previous,omitempty"`
 }
 
 // dayPayload builds the response for the handler above and for the grader's
@@ -1699,6 +1703,9 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 	}
 	if e, skipped := s.store.SkipOn(iso); skipped {
 		out.Skipped, out.SkipNote = true, e.Note
+	}
+	if h := s.sameKindHistory(d, blk, date, sess.Kind, 1); len(h) > 0 {
+		out.Previous = &h[0]
 	}
 	return out, http.StatusOK, ""
 }
@@ -1771,6 +1778,169 @@ func (s *server) dayIssues(d *dataset, iso string) []dayIssue {
 		out = append(out, r)
 	}
 	return out
+}
+
+// daySibling is one earlier session of the same kind, measured. A grade is
+// only meaningful against a comparable session: a long run is judged next to
+// the previous long run, not next to whatever happened most recently. The
+// grader had every prior grade in front of it and still compared a 10-mile
+// long run to a 6-mile easy run with strides, because the log records the
+// ENTRY kind — grade, note, issue — and never the SESSION kind. It had to
+// guess from prose. This is the missing fact, stated.
+type daySibling struct {
+	Date     string   `json:"date"`
+	Label    string   `json:"label"`
+	Grade    string   `json:"grade,omitempty"`
+	ElapsedS int      `json:"elapsed_s,omitempty"`
+	Distance float64  `json:"distance_m,omitempty"`
+	AvgHR    *float64 `json:"avg_hr,omitempty"`
+	UnderCap *float64 `json:"under_grade_cap_share,omitempty"`
+	AvgPower *float64 `json:"avg_power,omitempty"`
+	Decoup   *float64 `json:"decoupling_pct,omitempty"`
+	TempF    *float64 `json:"temp_f,omitempty"`
+}
+
+// sameKindHistory walks back through the block for earlier days prescribing
+// the same kind, newest first, and measures each one the way this day will be
+// measured. Strictly BEFORE the given date, so it can never leak the grade of
+// the day under test — blindness costs nothing here because the answer simply
+// does not include today.
+//
+// Confined to this block on purpose: anchors, caps and prescriptions are the
+// block's, so a share from an older block is a different measurement wearing
+// the same name.
+func (s *server) sameKindHistory(d *dataset, blk *Block, before time.Time, kind Kind, limit int) []daySibling {
+	if limit <= 0 {
+		limit = 6
+	}
+	grades := s.store.Grades()
+	// Which anchor the run rubric measures under is THIS block's declaration.
+	// Reaching for "gradeCap" by name works only for an athlete who happens to
+	// declare one — the example athlete grades under easyCap, which is why the
+	// defaults exist.
+	cap, hasCap := d.Athlete.HR[blk.Grading.CapKey()]
+	out := []daySibling{}
+	for wi := len(blk.Weeks) - 1; wi >= 0 && len(out) < limit; wi-- {
+		wk := blk.Weeks[wi]
+		for di := len(wk.Days) - 1; di >= 0 && len(out) < limit; di-- {
+			sess := wk.Days[di]
+			if sess.Kind != kind {
+				continue
+			}
+			dt := blk.DayOf(wi, di)
+			if !dt.Before(before) {
+				continue
+			}
+			iso := dt.Format("2006-01-02")
+			sib := daySibling{Date: iso, Label: stripEmph(sess.Label)}
+			if g, ok := grades[iso]; ok {
+				sib.Grade = g.Val
+			}
+			if m := s.bestActivityOn(iso, kind.IsBike()); m != nil {
+				sib.ElapsedS = m.ElapsedS
+				if m.DistanceM != nil {
+					sib.Distance = pyRound(*m.DistanceM, 1)
+				}
+				if m.AvgHR != nil {
+					v := pyRound(*m.AvgHR, 1)
+					sib.AvgHR = &v
+				}
+				if m.DecouplingPct != nil {
+					v := pyRound(*m.DecouplingPct, 2)
+					sib.Decoup = &v
+				}
+				if m.AvgPower != nil {
+					v := pyRound(*m.AvgPower, 1)
+					sib.AvgPower = &v
+				}
+				if m.Weather != nil {
+					v := m.Weather.TempF
+					sib.TempF = &v
+				}
+				// The rubric's own number, recomputed against the anchors
+				// current now rather than whatever they were then — the same
+				// rule /api/activity-metrics follows, so two readings of the
+				// same session never disagree.
+				if hasCap && !kind.IsBike() {
+					if share, err := s.metrics.underCapShareSQL(m.Name, cap); err == nil && share != nil {
+						v := pyRound(*share, 4)
+						sib.UnderCap = &v
+					}
+				}
+			}
+			out = append(out, sib)
+		}
+	}
+	return out
+}
+
+// bestActivityOn is the day's activity for a sport — the longest, when a day
+// carries more than one recording.
+//
+// byDate answers with name, date and sport only; it is the cheap index the
+// reconcile walks. The measurements come from rowByName, and forgetting that
+// yields a row of zeroes that looks like a session with no duration rather
+// than like a bug.
+func (s *server) bestActivityOn(iso string, bike bool) *activityMetrics {
+	rows, err := s.metrics.byDate(iso)
+	if err != nil {
+		log.Printf("history %s: %v", iso, err)
+		return nil
+	}
+	var best *activityMetrics
+	for i := range rows {
+		if (rows[i].Sport == "cycling") != bike {
+			continue
+		}
+		full, err := s.metrics.rowByName(rows[i].Name)
+		if err != nil || full == nil {
+			continue
+		}
+		if best == nil || full.ElapsedS > best.ElapsedS {
+			best = full
+		}
+	}
+	return best
+}
+
+// sessionHistoryPayload backs GET /api/session-history and the grader's
+// session_history tool — the same handler/builder pair as the day and the
+// activity metrics, so there is one answer to "how has this kind been going".
+func (s *server) sessionHistoryPayload(dateStr, blockID string, limit int) (any, int, string) {
+	d := s.ds()
+	date, err := time.ParseInLocation("2006-01-02", dateStr, d.Loc)
+	if err != nil {
+		return nil, http.StatusBadRequest, "date must be YYYY-MM-DD"
+	}
+	blk, ok := d.blockFor(blockID, s.day(d))
+	if !ok {
+		return nil, http.StatusNotFound, "no such block"
+	}
+	wk, di, ok := blk.Locate(date)
+	if !ok {
+		return nil, http.StatusNotFound, "date is outside the block"
+	}
+	sess := wk.Days[di]
+	out := struct {
+		Date     string       `json:"date"`
+		Kind     string       `json:"kind"`
+		Label    string       `json:"label"`
+		Sessions []daySibling `json:"sessions"`
+	}{date.Format("2006-01-02"), string(sess.Kind), stripEmph(sess.Label),
+		s.sameKindHistory(d, blk, date, sess.Kind, limit)}
+	return out, http.StatusOK, ""
+}
+
+func (s *server) getSessionHistory(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	out, code, msg := s.sessionHistoryPayload(r.URL.Query().Get("date"), r.URL.Query().Get("block"), limit)
+	if code != http.StatusOK {
+		http.Error(w, msg, code)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // dayLegendFor renders the block's grading legend, floors derived from the
