@@ -261,14 +261,21 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		Cap int     `json:"cap_bpm"`
 	}
 	out := struct {
-		Name          string         `json:"name"`
-		Date          string         `json:"date"`
-		Sport         string         `json:"sport"`
-		StartUTC      string         `json:"start_utc"`
-		ElapsedS      int            `json:"elapsed_s"`
-		ElapsedHMS    string         `json:"elapsed_hms"`
-		Records       int            `json:"records"`
-		DistanceM     *float64       `json:"distance_m,omitempty"`
+		Name       string   `json:"name"`
+		Date       string   `json:"date"`
+		Sport      string   `json:"sport"`
+		StartUTC   string   `json:"start_utc"`
+		ElapsedS   int      `json:"elapsed_s"`
+		ElapsedHMS string   `json:"elapsed_hms"`
+		Records    int      `json:"records"`
+		DistanceM  *float64 `json:"distance_m,omitempty"`
+		// Rendered in the athlete's units beside the raw metres, because
+		// these numbers are quoted back to him and because a comparison
+		// against the previous session of this kind carries them that way:
+		// one side in miles and the other in metres is how a grade came to
+		// describe the shorter run as the longer.
+		Dist          string         `json:"dist,omitempty"`
+		Pace          string         `json:"pace,omitempty"`
 		SHA256        string         `json:"sha256"`
 		HR            *hrOut         `json:"hr,omitempty"`
 		Power         *powerOut      `json:"power,omitempty"`
@@ -308,6 +315,13 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		kind = "run"
 	case "cycling":
 		kind = "bike"
+	}
+
+	if row.DistanceM != nil && *row.DistanceM > 0 {
+		out.Dist = Distance(*row.DistanceM).InMeasured(a.Units)
+		if kind == "run" && row.ElapsedS > 0 {
+			out.Pace = Pace(float64(row.ElapsedS) / *row.DistanceM).In(a.Units)
+		}
 	}
 
 	if row.AvgPower != nil {
