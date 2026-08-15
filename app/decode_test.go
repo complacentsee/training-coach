@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -836,6 +837,72 @@ func TestDayAPIExplicitBlock(t *testing.T) {
 	rec = get(mux, "/api/day?date=2026-06-02&block=example-later-block", nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"block":"example-later-block"`) {
 		t.Errorf("explicit later block: %d %.120s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDayCarriesTheIssueRatingAndItsAction: what the athlete reported that
+// day reaches the grader with the instruction attached. The number alone
+// is not enough — a session taken easy on an instruction to take it easy
+// is compliance, and only the band's action says so.
+func TestDayCarriesTheIssueRatingAndItsAction(t *testing.T) {
+	ts := fitTestMuxServer(t, t.TempDir())
+	d := ts.s.ds()
+	if len(d.Athlete.Issues) == 0 {
+		t.Skip("the example athlete declares no issue")
+	}
+	is := d.Athlete.Issues[0]
+	// The top band: whatever "worst" means on this athlete's own scale.
+	worst := is.Scale.Max
+	band := is.BandFor(worst)
+	if band == nil {
+		t.Fatalf("no band covers %d", worst)
+	}
+	if err := ts.s.store.Append(Entry{
+		Date: "2026-01-06", Kind: kindIssue, Key: is.Key,
+		Val: strconv.Itoa(worst), Note: "sore on the warm-up",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := get(ts.mux, "/api/day?date=2026-01-06", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET = %d", rec.Code)
+	}
+	var out struct {
+		Issues []struct {
+			Key, Name, Tone, Label, Action, Note string
+			Rating                               int
+		} `json:"issues"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Issues) != 1 {
+		t.Fatalf("issues = %+v", out.Issues)
+	}
+	got := out.Issues[0]
+	if got.Key != is.Key || got.Rating != worst {
+		t.Errorf("rating: %+v", got)
+	}
+	if got.Action == "" || got.Action != stripEmph(band.Action) {
+		t.Errorf("action = %q, want the band's own %q", got.Action, stripEmph(band.Action))
+	}
+	if got.Tone != band.Tone || got.Label != band.Label {
+		t.Errorf("band: %+v, want tone %q label %q", got, band.Tone, band.Label)
+	}
+	if got.Note != "sore on the warm-up" {
+		t.Errorf("the athlete's own words were dropped: %q", got.Note)
+	}
+
+	// A day with no rating carries none, rather than a zero that reads as
+	// "no pain reported".
+	rec = get(ts.mux, "/api/day?date=2026-01-07", nil)
+	out.Issues = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Issues) != 0 {
+		t.Errorf("unrated day carried %+v", out.Issues)
 	}
 }
 

@@ -119,6 +119,7 @@ func caseServer(t *testing.T, dir string) (*server, []gradeCase) {
 		t.Fatal(err)
 	}
 	s.metrics = metrics
+	s.weather = newWeatherService(metrics)
 	metrics.reconcile(filepath.Join(dataDir, "activities"), s.ds().Loc)
 	return s, cases
 }

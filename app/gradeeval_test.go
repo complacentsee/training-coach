@@ -56,6 +56,7 @@ func TestGradeEvalBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.metrics = metrics
+	s.weather = newWeatherService(metrics)
 	metrics.reconcile(dir+"/activities", s.ds().Loc)
 
 	g := newGrader(s, cfg)
