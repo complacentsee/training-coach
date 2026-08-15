@@ -14,6 +14,11 @@ services:
     restart: unless-stopped
     environment:
       TZ: America/Chicago
+      # This is the stack that grades, so it is the stack that looks up
+      # what the weather was — heat is the loudest uncontrolled variable in
+      # an HR-governed plan. Coarse position only, no account, no key. The
+      # live stack sets nothing and calls nobody.
+      WEATHER_LOOKUP: "on"
     env_file:
       - path: grader.env
         required: false

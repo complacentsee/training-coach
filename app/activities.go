@@ -274,6 +274,7 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		Power         *powerOut      `json:"power,omitempty"`
 		DecouplingPct *float64       `json:"decoupling_pct,omitempty"`
 		Cadence       *float64       `json:"cadence,omitempty"`
+		Weather       *conditions    `json:"weather,omitempty"`
 		GradeInput    map[string]any `json:"grade_input,omitempty"`
 		First20       *first20Out    `json:"first_20min,omitempty"`
 		Profile       []profilePoint `json:"profile,omitempty"`
@@ -351,6 +352,13 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		} else {
 			log.Printf("activity-metrics %s: %v", name, err)
 		}
+	}
+
+	// What it was like out there. Read from the archive's own position and
+	// the session's start hour; a trainer ride has no position and gets
+	// nothing.
+	if streams != nil && streams.StartLat != nil && streams.StartLon != nil {
+		out.Weather = s.weather.at(*streams.StartLat, *streams.StartLon, streams.StartUTC)
 	}
 
 	// How the session was actually ridden or run, minute by minute — capped

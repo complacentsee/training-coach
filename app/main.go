@@ -47,6 +47,7 @@ type server struct {
 	stamp   atomic.Pointer[string]
 	store   *Store
 	metrics *metricsDB
+	weather *weatherService
 	grader  *grader
 	tpl     *template.Template
 	loc     *time.Location // fallback timezone from the flag
@@ -118,6 +119,12 @@ func main() {
 		s.grader = newGrader(s, gcfg)
 		log.Printf("grader: armed  mode=%s dialect=%s model=%s base=%s",
 			gcfg.Mode, gcfg.Dialect, gcfg.Model, gcfg.BaseURL)
+	}
+	// Weather is a lookup the grading stack makes and the recording stack
+	// does not; off unless asked for.
+	s.weather = newWeatherService(s.metrics)
+	if s.weather.enabled {
+		log.Printf("weather:  lookups on (open-meteo, coarse position)")
 	}
 	go s.startupReconcile()
 	tpl, err := template.New("").Funcs(s.makeFuncs()).ParseFS(templateFS, "templates/*.html")
@@ -1679,6 +1686,20 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		HasSteps bool       `json:"has_steps,omitempty"`
 		Steps    []stepView `json:"steps,omitempty"`
 	}
+	// issueView is what the athlete said about an injury that day, and what
+	// the declaration says to do about it. A session run easy because a
+	// rating came back high was not a failed quality day, and the grader
+	// cannot know that without both halves: the number and its instruction.
+	type issueRating struct {
+		Key    string `json:"key"`
+		Name   string `json:"name"`
+		Rating int    `json:"rating"`
+		Scale  string `json:"scale"`
+		Tone   string `json:"tone,omitempty"`
+		Label  string `json:"label,omitempty"`
+		Action string `json:"action,omitempty"`
+		Note   string `json:"note,omitempty"`
+	}
 	out := struct {
 		Date    string         `json:"date"`
 		Block   string         `json:"block"`
@@ -1690,6 +1711,7 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		Weight  float64        `json:"weight_kg,omitempty"`
 		HR      map[string]int `json:"hr,omitempty"`
 		Power   map[string]int `json:"power,omitempty"`
+		Issues  []issueRating  `json:"issues,omitempty"`
 	}{
 		Date: date.Format("2006-01-02"), Block: blk.ID,
 		WeekN: wk.N, Tags: wk.Tags,
@@ -1726,6 +1748,25 @@ func (s *server) dayPayload(dateStr, blockID string) (any, int, string) {
 		}
 		out.Session.Steps = stepViews(rs, d.Athlete.Units)
 	}
+	iso := date.Format("2006-01-02")
+	for i := range d.Athlete.Issues {
+		is := &d.Athlete.Issues[i]
+		e := s.store.RatingOn(is.Key, iso)
+		if e == nil {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(e.Val))
+		if err != nil || !is.Scale.contains(n) {
+			continue
+		}
+		r := issueRating{Key: is.Key, Name: is.Name, Rating: n,
+			Scale: is.Range(), Note: e.Note}
+		if b := is.BandFor(n); b != nil {
+			r.Tone, r.Label, r.Action = b.Tone, b.Label, stripEmph(b.Action)
+		}
+		out.Issues = append(out.Issues, r)
+	}
+
 	if g := resolveGrading(ctx, blk.Grading); g != nil {
 		l := &legend{Note: stripEmph(g.Note), Footer: stripEmph(g.Footer), Bands: []band{}}
 		floors := bandFloors(g.Bands)
