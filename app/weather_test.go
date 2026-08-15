@@ -60,18 +60,32 @@ func TestWeatherReadsTheHourAndCachesIt(t *testing.T) {
 	defer srv.Close()
 	w := weatherUnderTest(t, srv.URL, true)
 
+	// 13:47:38 is 79.4% of the way from the 13:00 reading to the 14:00 one,
+	// and the answer must be that point rather than either end: the hour a
+	// session starts in is up to an hour before it started, always on the
+	// cool side of a warming morning.
 	when := time.Date(2026, 8, 13, 13, 47, 38, 0, time.UTC)
 	c := w.at(44.9778, -93.2650, when)
 	if c == nil {
 		t.Fatal("no conditions")
 	}
-	if c.TempF != 68.4 || c.DewF != 65.6 || c.RH != 91 || c.WindMPH != 7.5 {
-		t.Errorf("read the wrong hour: %+v", c)
+	if c.TempF != 70.5 || c.DewF != 65.9 || c.RH != 85 || c.WindMPH != 8.7 {
+		t.Errorf("not interpolated to the start: %+v (13:00 was 68.4/65.6, 14:00 was 71/66)", c)
 	}
 	// The athlete's own measure, so it must be the sum and not something
 	// re-derived elsewhere.
-	if c.HeatSum != 134.0 {
-		t.Errorf("heat sum = %v, want 134", c.HeatSum)
+	if c.HeatSum != 136.4 {
+		t.Errorf("heat sum = %v, want 136.4", c.HeatSum)
+	}
+	// On the hour exactly, there is nothing to interpolate.
+	if onHour := w.at(44.9778, -93.2650, when.Truncate(time.Hour)); onHour == nil ||
+		onHour.TempF != 68.4 || onHour.DewF != 65.6 {
+		t.Errorf("on the hour = %+v, want the 13:00 reading unchanged", onHour)
+	}
+	// Halfway is the mean of the two.
+	if mid := w.at(44.9778, -93.2650, when.Truncate(time.Hour).Add(30*time.Minute)); mid == nil ||
+		mid.TempF != 69.7 {
+		t.Errorf("halfway = %+v, want 69.7 between 68.4 and 71", mid)
 	}
 
 	// Coarse, before it leaves: a tenth of a degree is about eleven km.
@@ -80,11 +94,10 @@ func TestWeatherReadsTheHourAndCachesIt(t *testing.T) {
 		t.Errorf("position sent as %v,%v — wanted it rounded to 45.0,-93.3", lat, lon)
 	}
 
-	// The same hour, and a different minute of it, must not ask again.
-	if c2 := w.at(44.9778, -93.2650, when.Add(11*time.Minute)); c2 == nil || c2.TempF != c.TempF {
-		t.Errorf("cache miss: %+v", c2)
-	}
-	// A position a few hundred metres away rounds to the same place.
+	// A position a few hundred metres away rounds to the same place, and
+	// every one of these reads the hourly readings already cached — what is
+	// stored is the provider's facts, and the interpolation is derived each
+	// time from them.
 	if c3 := w.at(45.0201, -93.2501, when); c3 == nil || c3.TempF != c.TempF {
 		t.Errorf("nearby position missed the cache: %+v", c3)
 	}
@@ -130,8 +143,9 @@ func TestWeatherCrossesTheDateLine(t *testing.T) {
 	if askedTZ != "UTC" {
 		t.Errorf("timezone = %q; the labels must be the clock the hour is matched in", askedTZ)
 	}
-	if c.TempF != 71.5 || c.DewF != 62.5 || c.HeatSum != 134.0 {
-		t.Errorf("read %+v, wanted the %s reading", c, wantHour)
+	// 00:30 is halfway between the two readings on the next UTC day.
+	if c.TempF != 70.8 || c.DewF != 62.2 || c.HeatSum != 133.0 {
+		t.Errorf("read %+v, wanted %s and 01:00 averaged", c, wantHour)
 	}
 }
 

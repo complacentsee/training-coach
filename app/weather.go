@@ -72,25 +72,61 @@ func newWeatherService(db *metricsDB) *weatherService {
 	}
 }
 
-// at reports the conditions where and when a session started, from the
-// cache when it has them and from the provider otherwise. A miss of any
-// kind returns nil.
+// at reports the conditions where and when a session started.
+//
+// The provider reports on the hour and sessions do not start on the hour,
+// so the two readings either side are interpolated to the actual minute.
+// Truncating to the hour instead is wrong in a consistent direction: on the
+// morning of one measured run the temperature climbed 4.4°F between 08:00
+// and 09:00, and reading 08:00 for an 08:43 start understated the heat by
+// over two degrees — always cooler than it was, on exactly the mornings
+// where heat matters most. What is cached is the provider's hourly
+// readings, which are facts; the interpolation is derived at every use.
+//
+// A miss of any kind returns nil.
 func (w *weatherService) at(lat, lon float64, when time.Time) *conditions {
 	if w == nil || !w.enabled || w.db == nil {
 		return nil
 	}
 	la, lo := coarse(lat), coarse(lon)
-	hour := when.UTC().Truncate(time.Hour)
-	if c := w.cached(la, lo, hour); c != nil {
-		return c
+	t := when.UTC()
+	h0 := t.Truncate(time.Hour)
+	h1 := h0.Add(time.Hour)
+
+	a, b := w.cached(la, lo, h0), w.cached(la, lo, h1)
+	if a == nil || b == nil {
+		if err := w.fetchDay(la, lo, h0); err != nil {
+			log.Printf("weather %.1f,%.1f %s: %v", la, lo, h0.Format(time.RFC3339), err)
+		}
+		a, b = w.cached(la, lo, h0), w.cached(la, lo, h1)
 	}
-	c, err := w.fetch(la, lo, hour)
-	if err != nil {
-		log.Printf("weather %.1f,%.1f %s: %v", la, lo, hour.Format(time.RFC3339), err)
+	if a == nil {
 		return nil
 	}
-	w.store(la, lo, hour, c)
-	return c
+	if b == nil {
+		// The hour after is off the end of the archive; the hour the
+		// session began in is still the honest answer.
+		return finish(a, "open-meteo, hour of the start")
+	}
+	f := float64(t.Sub(h0)) / float64(time.Hour)
+	c := &conditions{
+		TempF:   a.TempF + (b.TempF-a.TempF)*f,
+		DewF:    a.DewF + (b.DewF-a.DewF)*f,
+		WindMPH: a.WindMPH + (b.WindMPH-a.WindMPH)*f,
+		RH:      int(math.Round(float64(a.RH) + float64(b.RH-a.RH)*f)),
+	}
+	return finish(c, "open-meteo, interpolated to the start")
+}
+
+// finish rounds a reading for reporting and states where it came from.
+func finish(c *conditions, source string) *conditions {
+	out := *c
+	out.TempF = pyRound(out.TempF, 1)
+	out.DewF = pyRound(out.DewF, 1)
+	out.WindMPH = pyRound(out.WindMPH, 1)
+	out.HeatSum = pyRound(out.TempF+out.DewF, 1)
+	out.Source = source
+	return &out
 }
 
 func (w *weatherService) cached(la, lo float64, hour time.Time) *conditions {
@@ -105,8 +141,6 @@ func (w *weatherService) cached(la, lo float64, hour time.Time) *conditions {
 		log.Printf("weather cache: %v", err)
 		return nil
 	}
-	c.HeatSum = pyRound(c.TempF+c.DewF, 1)
-	c.Source = "open-meteo (cached)"
 	return &c
 }
 
@@ -120,13 +154,18 @@ func (w *weatherService) store(la, lo float64, hour time.Time, c *conditions) {
 	}
 }
 
-func (w *weatherService) fetch(la, lo float64, hour time.Time) (*conditions, error) {
+// fetchDay reads the hours around a session and caches every one of them.
+// The range runs to the next day because a session late in the UTC day
+// needs the hour after it to interpolate, and because the whole day costs
+// the same one request as a single hour does.
+func (w *weatherService) fetchDay(la, lo float64, hour time.Time) error {
 	day := hour.Format("2006-01-02")
+	next := hour.Add(24 * time.Hour).Format("2006-01-02")
 	q := url.Values{
 		"latitude":         {fmt.Sprintf("%.1f", la)},
 		"longitude":        {fmt.Sprintf("%.1f", lo)},
 		"start_date":       {day},
-		"end_date":         {day},
+		"end_date":         {next},
 		"hourly":           {"temperature_2m,dew_point_2m,relative_humidity_2m,wind_speed_10m"},
 		"temperature_unit": {"fahrenheit"},
 		"wind_speed_unit":  {"mph"},
@@ -137,19 +176,19 @@ func (w *weatherService) fetch(la, lo float64, hour time.Time) (*conditions, err
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", base+"?"+q.Encode(), nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	resp, err := w.http.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: %s", resp.Status, body)
+		return fmt.Errorf("%s: %s", resp.Status, body)
 	}
 	var out struct {
 		Hourly struct {
@@ -161,28 +200,32 @@ func (w *weatherService) fetch(la, lo float64, hour time.Time) (*conditions, err
 		} `json:"hourly"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, err
+		return err
 	}
-	want := hour.Format("2006-01-02T15:04")
-	for i, t := range out.Hourly.Time {
-		if t != want {
-			continue
-		}
+	kept := 0
+	for i, ts := range out.Hourly.Time {
 		if i >= len(out.Hourly.Temp) || i >= len(out.Hourly.Dew) {
 			break
 		}
-		c := &conditions{
-			TempF: out.Hourly.Temp[i], DewF: out.Hourly.Dew[i],
-			Source: "open-meteo",
+		// The provider labels its hours in the zone it was asked for, which
+		// is UTC, so this parses as UTC and the hours line up with the ones
+		// looked up.
+		at, err := time.ParseInLocation("2006-01-02T15:04", ts, time.UTC)
+		if err != nil {
+			continue
 		}
+		c := &conditions{TempF: out.Hourly.Temp[i], DewF: out.Hourly.Dew[i]}
 		if i < len(out.Hourly.RH) {
 			c.RH = int(math.Round(out.Hourly.RH[i]))
 		}
 		if i < len(out.Hourly.Wind) {
 			c.WindMPH = out.Hourly.Wind[i]
 		}
-		c.HeatSum = pyRound(c.TempF+c.DewF, 1)
-		return c, nil
+		w.store(la, lo, at, c)
+		kept++
 	}
-	return nil, fmt.Errorf("no reading for %s", want)
+	if kept == 0 {
+		return fmt.Errorf("no hourly readings returned")
+	}
+	return nil
 }
