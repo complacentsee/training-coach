@@ -1906,6 +1906,53 @@ func fitTestMuxServer(t *testing.T, dataDir string) testServer {
 	return testServer{s: s, mux: s.routes()}
 }
 
+// TestWeekPageResolvesInsideTheBlock: a session's own strings are resolved by
+// the week page, by the day API, by the FIT encoder and by the startup
+// validator, and all four must agree on the context. The week page used to set
+// only the session and not InBlock, so the validator proved a detail resolved
+// one way at startup while the page rendered it the other way — silently,
+// because InBlock is a plain bool and the false branch is a legal answer
+// rather than a missing key. The detail below asks which branch it got.
+func TestWeekPageResolvesInsideTheBlock(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"blocks", "library"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile(t, "./defaults/athlete.json", filepath.Join(dir, "athlete.json"))
+	for _, n := range []string{"guides.json", "index.json"} {
+		copyFile(t, filepath.Join("./defaults/library", n), filepath.Join(dir, "library", n))
+	}
+	raw, err := os.ReadFile("./defaults/blocks/example-base-block.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blk map[string]any
+	if err := json.Unmarshal(raw, &blk); err != nil {
+		t.Fatal(err)
+	}
+	const marker = "resolved-"
+	day := blk["weeks"].([]any)[0].(map[string]any)["days"].([]any)[0].(map[string]any)
+	day["detail"] = marker + "{{if .InBlock}}inside{{else}}outside{{end}}"
+	out, err := json.Marshal(blk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blocks", "b.json"), out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(fitTestMux(t, dir), "/week/1", nil).Body.String()
+	if strings.Contains(body, marker+"outside") {
+		t.Error("the week page resolved a session detail as outside the block; " +
+			"the startup validator had already proved it inside")
+	}
+	if !strings.Contains(body, marker+"inside") {
+		t.Fatalf("the marked detail never reached the page at all")
+	}
+}
+
 // TestEveryRouteIsReachable checks the wiring, not the answers: mux.Handler
 // reports the pattern a request matched, and "" means nothing is registered
 // there. A handler is free to 404 on its own terms — a missing registration is

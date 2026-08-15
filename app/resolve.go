@@ -35,6 +35,22 @@ type Ctx struct {
 	depth int
 }
 
+// forSession narrows the block's context to one of its own days. Both facts
+// have to be set together: a day taken from a week is inside the block by
+// definition, so InBlock is not a question here the way it is for today, which
+// may fall outside one. Written once because it had already been spelled five
+// times and one of them — the week page — set only the session, so the startup
+// validator proved every detail resolved with InBlock true while the page
+// rendered them with it false. Ctx.InBlock is a plain bool, so a
+// {{if .InBlock}} in authored data takes the other branch silently rather than
+// failing under missingkey=error.
+func (c *Ctx) forSession(sess *Session) *Ctx {
+	sc := *c
+	sc.Session = sess
+	sc.InBlock = true
+	return &sc
+}
+
 // Kind, Tag and Resting are nil-safe views of the session, so a checklist
 // predicate can ask about today's work on a day that has none — outside the
 // block there is no session at all, and {{.Session.Kind}} would blow up.

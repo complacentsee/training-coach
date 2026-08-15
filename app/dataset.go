@@ -403,9 +403,7 @@ func (d *dataset) dryRun(b *Block) error {
 			}
 		}
 		for di, sess := range w.Days {
-			sc := *c
-			sc.Session = &sess
-			sc.InBlock = true
+			sc := c.forSession(&sess)
 			if id := sess.GuideID(); id != "" && b.guides[id] == nil {
 				return fmt.Errorf("week %d day %d (%s) needs guide %q, which is not in the library",
 					w.N, di+1, sess.Kind, id)
@@ -417,7 +415,7 @@ func (d *dataset) dryRun(b *Block) error {
 				return fmt.Errorf("week %d day %d: targets%w", w.N, di+1, err)
 			}
 			if len(sess.Steps) > 0 {
-				rs, err := resolveSteps(&sc, sess)
+				rs, err := resolveSteps(sc, sess)
 				if err != nil {
 					return fmt.Errorf("week %d day %d: steps: %w", w.N, di+1, err)
 				}
