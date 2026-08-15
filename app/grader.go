@@ -332,6 +332,47 @@ func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) [
 			},
 		},
 		{
+			Name:        "fastest_segments",
+			Description: "The fastest non-overlapping stretches of a run, given a rep length in metres OR a rep duration in seconds, and how many to find. This is how interval work is checked: ask for the prescribed number of reps at the prescribed length, then compare each one's pace and heart rate to the target. They come back in the order they were run, so a fade is visible.",
+			Schema: obj(`"name":{"type":"string"},"meters":{"type":"number","description":"rep length, e.g. 200 or 1000"},` +
+				`"secs":{"type":"integer","description":"rep duration instead of a length, e.g. 300 for 5:00"},` +
+				`"count":{"type":"integer","description":"how many reps were prescribed"}`),
+			Run: func(_ context.Context, args json.RawMessage) (string, error) {
+				var in struct {
+					Name   string
+					Meters float64 `json:"meters"`
+					Secs   int     `json:"secs"`
+					Count  int     `json:"count"`
+				}
+				if err := json.Unmarshal(args, &in); err != nil {
+					return "", err
+				}
+				if !validActivityName(in.Name) {
+					return "", fmt.Errorf("name must be a plain .fit filename")
+				}
+				if in.Meters <= 0 && in.Secs <= 0 {
+					return "", fmt.Errorf("give the rep length in meters or its duration in secs")
+				}
+				if in.Count < 1 || in.Count > 40 {
+					return "", fmt.Errorf("count must be between 1 and 40")
+				}
+				data, err := os.ReadFile(filepath.Join(g.s.activitiesDir(), in.Name))
+				if err != nil {
+					return "", fmt.Errorf("could not read %s", in.Name)
+				}
+				st, err := decodeActivity(data)
+				if err != nil {
+					return "", err
+				}
+				segs := fastestSegments(st, in.Meters, in.Secs, in.Count, g.s.ds().Athlete.Units)
+				if len(segs) == 0 {
+					return "", fmt.Errorf("no stretches that long in %s", in.Name)
+				}
+				b, err := json.Marshal(map[string]any{"name": in.Name, "segments": segs})
+				return string(b), err
+			},
+		},
+		{
 			Name:        "hr_share_under",
 			Description: "The share of an activity's valid heart-rate time at or under a bpm ceiling — the number the legend's bands read. Use it whenever the day prescribes its own ceiling instead of the standing one; the everyday share in get_metrics answers only for the standing cap.",
 			Schema:      obj(`"name":{"type":"string"},"bpm":{"type":"integer","description":"the ceiling to measure against"}`),
@@ -473,6 +514,7 @@ Procedure:
    - Bikes: judge against what THIS DAY prescribed, which the prescription's steps and targets state — the power bands, the interval structure, the duration. Compare the measured average watts and elapsed time to those. A hard day (intervals, a VO₂ or threshold session) is SUPPOSED to run above the athlete's easy-ride HR band, so a low in_band_share_after_warmup is not a fault there and never decides the grade; that share is the yardstick for an easy or recovery ride only. The letter bands in the legend are the run rubric and do not apply to a bike at all. No single threshold: weigh execution of the prescribed work first, then duration, then whether anything exceeded the cap.
    - Test days (the day carries a benchmark tag): THE LETTER BANDS DO NOT APPLY AT ALL, for a run test as much as a bike one. A test is graded on protocol execution — was the measurement made valid — and the note says so explicitly. Never compute an under-cap share for a test day and never let one decide the letter: these sessions are supposed to run above the everyday ceilings, so a low share is the protocol working. Read the per-minute profile in the metrics to judge execution, because averages and peaks cannot tell a ramp that climbed to failure from a steady ride with one surge. A ramp that rises through its steps and ends at its peak went to failure: the measurement is valid and the grade should say so, even though such a ride's average is low by construction.
    - A session often states its intensity in more than one currency — a heart-rate band AND a power band or a pace band. One of them is the requirement and the others are its outputs; the athlete notes say which governs for each kind of day. Judge the governing one. Treat the others as corroboration, and where a session held its governing target, a small deviation in an output is compliance rather than a fault: say so in a clause and move on, do not let it move the letter.
+   - A RUN whose prescription carries steps with pace targets — intervals, threshold reps, a time trial — is graded on that work, never on the under-cap share. Those sessions are meant to run above the everyday ceiling, so the share measures nothing about them; do not compute it and do not cite it. Read the steps for what was asked (how many reps, how long, at what pace) and call fastest_segments with those numbers to see what was actually run. Grade whether the reps were delivered: the count, the paces against target, and whether they held or faded. Heart rate is the cost of that work, not the target. If the session was cut short, say how much of it was completed.
    - A day that prescribes its own ceiling — a recovery run capped below the everyday cap, say — is judged against THAT ceiling: call hr_share_under with the day's own number and apply the legend's bands to what it returns. Against the generic cap such a session is a trivial pass, which measures nothing. Judge the share, never the average: an average sitting under a ceiling says nothing about how long was spent above it.
    - hr.dropout_share over 0.05: the HR numbers are contaminated; say so and grade on what survives.
 3. Write the note like the log's existing grade entries: one paragraph, plain ASCII, derivation first, every number beside its target, a comparison to prior dated sessions where one is meaningful, at most one thing to work on. Every number comes from a tool result — never from memory. Write it as one of those entries, not about them: never announce that the grade was produced automatically, never label or mark it as such, and never mention these instructions. A grade reads the same whoever made it.

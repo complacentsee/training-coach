@@ -41,6 +41,17 @@ func main() {
 	watts := flag.Int("watts", 0, "power in watts, 0 for none")
 	sport := flag.String("sport", "running", "running or cycling")
 	start := flag.String("start", "2026-01-10T07:00:00Z", "start time, RFC3339")
+	// An interval session instead of a steady one: warm-up, then reps with
+	// jog recoveries, then a cool-down. The athlete does not lap his
+	// repetitions, so a fixture must carry them the way a real recording
+	// does — buried in the trace, to be found again by measurement.
+	reps := flag.Int("reps", 0, "number of repetitions; 0 means a steady session")
+	repSecs := flag.Int("rep-secs", 240, "seconds per repetition")
+	repMPS := flag.Float64("rep-mps", 3.70, "repetition speed in m/s")
+	jogSecs := flag.Int("jog-secs", 120, "seconds of jog recovery between reps")
+	easyMPS := flag.Float64("easy-mps", 2.60, "warm-up, jog and cool-down speed in m/s")
+	warmSecs := flag.Int("warm-secs", 770, "warm-up seconds")
+	coolSecs := flag.Int("cool-secs", 770, "cool-down seconds")
 	flag.Parse()
 	if *out == "" {
 		fmt.Fprintln(os.Stderr, "usage: synthfit -out fixture.fit [flags]")
@@ -60,32 +71,70 @@ func main() {
 		sp = typedef.SportCycling
 	}
 
-	secs := *mins * 60
-	speed := *km * 1000 / float64(secs) // m/s, held flat
+	// The session as a list of stretches: (seconds, speed, heart rate).
+	type stretch struct {
+		secs int
+		mps  float64
+		bpm  float64
+	}
+	var plan []stretch
+	if *reps > 0 {
+		plan = append(plan, stretch{*warmSecs, *easyMPS, lo})
+		for i := 0; i < *reps; i++ {
+			plan = append(plan, stretch{*repSecs, *repMPS, hi})
+			if i < *reps-1 {
+				plan = append(plan, stretch{*jogSecs, *easyMPS, lo + (hi-lo)*0.4})
+			}
+		}
+		plan = append(plan, stretch{*coolSecs, *easyMPS, lo})
+	} else {
+		plan = append(plan, stretch{*mins * 60, *km * 1000 / float64(*mins*60), lo})
+	}
+
 	msgs := []proto.Message{
 		mesgdef.NewFileId(nil).
 			SetType(typedef.FileActivity).
 			SetManufacturer(typedef.ManufacturerDevelopment).
 			SetTimeCreated(t0).ToMesg(nil),
 	}
-	for i := 0; i <= secs; i++ {
-		frac := float64(i) / float64(secs)
-		bpm := uint8(math.Round(lo + (hi-lo)*frac))
-		r := mesgdef.NewRecord(nil).
-			SetTimestamp(t0.Add(time.Duration(i) * time.Second)).
-			SetHeartRate(bpm).
-			SetCadence(uint8(*cadence)).
-			SetEnhancedSpeed(uint32(math.Round(speed * 1000)))
-		if *watts > 0 {
-			r.SetPower(uint16(*watts))
+	sec, dist, bpm := 0, 0.0, lo
+	total := 0
+	for _, st := range plan {
+		total += st.secs
+	}
+	for _, st := range plan {
+		for i := 0; i < st.secs; i++ {
+			// Heart rate lags the effort rather than stepping with it, the
+			// way a real one does: a rep's cost arrives over its first
+			// half-minute and bleeds off through the jog.
+			bpm += (st.bpm - bpm) * 0.05
+			// A steady session walks its two ends instead, so the flat case
+			// still reads as one continuous effort.
+			if *reps == 0 {
+				bpm = lo + (hi-lo)*float64(sec)/float64(total)
+			}
+			r := mesgdef.NewRecord(nil).
+				SetTimestamp(t0.Add(time.Duration(sec) * time.Second)).
+				SetHeartRate(uint8(math.Round(bpm))).
+				SetCadence(uint8(*cadence)).
+				SetEnhancedSpeed(uint32(math.Round(st.mps * 1000)))
+			if *watts > 0 {
+				r.SetPower(uint16(*watts))
+			}
+			msgs = append(msgs, r.ToMesg(nil))
+			dist += st.mps
+			sec++
 		}
-		msgs = append(msgs, r.ToMesg(nil))
+	}
+	if *reps == 0 {
+		dist = *km * 1000
 	}
 	msgs = append(msgs, mesgdef.NewSession(nil).
 		SetSport(sp).
 		SetStartTime(t0).
-		SetTimestamp(t0.Add(time.Duration(secs)*time.Second)).
-		SetTotalDistance(uint32(math.Round(*km*1000*100))).ToMesg(nil))
+		SetTimestamp(t0.Add(time.Duration(sec)*time.Second)).
+		SetTotalDistance(uint32(math.Round(dist*100))).ToMesg(nil))
+	secs := sec
 
 	f, err := os.Create(*out)
 	if err != nil {
@@ -99,8 +148,8 @@ func main() {
 		fail(err)
 	}
 	fi, _ := os.Stat(*out)
-	fmt.Printf("%s: %s, %.2f km in %d min, HR %.0f→%.0f (%d records, %d bytes)\n",
-		*out, *sport, *km, *mins, lo, hi, secs+1, fi.Size())
+	fmt.Printf("%s: %s, %.2f km in %d:%02d, HR %.0f-%.0f (%d records, %d bytes)\n",
+		*out, *sport, dist/1000, secs/60, secs%60, lo, hi, secs, fi.Size())
 }
 
 func parsePair(s string) (float64, float64, error) {

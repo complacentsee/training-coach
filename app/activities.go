@@ -356,7 +356,7 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 	// How the session was actually ridden or run, minute by minute — capped
 	// so an hour and a three-hour ride both cost about the same to read.
 	if streams != nil {
-		out.Profile = sessionProfile(streams, 60)
+		out.Profile = sessionProfile(streams, 60, a.Units)
 	}
 
 	// The peak an average hides. A ramp test's whole result is its best

@@ -44,6 +44,7 @@ package main
 import (
 	"math"
 	"math/big"
+	"sort"
 )
 
 // activityMetrics is one activity's anchor-free aggregate row plus its
@@ -220,9 +221,10 @@ func computeMetrics(name, date string, s *activityStreams) *activityMetrics {
 // profilePoint is one bucket of the session's shape: where the work
 // actually sat over time.
 type profilePoint struct {
-	Min int      `json:"min"`          // minutes from the first sample
-	W   *float64 `json:"w,omitempty"`  // mean watts over the bucket
-	HR  *float64 `json:"hr,omitempty"` // mean valid HR over the bucket
+	Min  int      `json:"min"`            // minutes from the first sample
+	W    *float64 `json:"w,omitempty"`    // mean watts over the bucket
+	HR   *float64 `json:"hr,omitempty"`   // mean valid HR over the bucket
+	Pace string   `json:"pace,omitempty"` // mean pace, athlete's units, runs only
 }
 
 // sessionProfile buckets the ride or run into at most maxPoints even spans
@@ -231,7 +233,7 @@ type profilePoint struct {
 // ride with one surge identically, and the difference is the whole verdict
 // on a test day. The shape is what separates them — and on an interval day
 // it is what shows whether the intervals were ridden at all.
-func sessionProfile(s *activityStreams, maxPoints int) []profilePoint {
+func sessionProfile(s *activityStreams, maxPoints int, u Units) []profilePoint {
 	if len(s.Time) < 2 || maxPoints < 1 {
 		return nil
 	}
@@ -253,11 +255,15 @@ func sessionProfile(s *activityStreams, maxPoints int) []profilePoint {
 	if s.HaveWatts {
 		wF = intsToFloats(s.Watts)
 	}
+	// Pace, not speed, and in the athlete's own units, because that is how
+	// the prescription states its targets — a grader comparing "9:41/mi" to
+	// "9:45/mi" is doing the same arithmetic the athlete does.
+	pacing := s.Sport == "running" && s.HaveVel
 
 	var out []profilePoint
 	for start := 0; start < elapsed; start += span {
 		end := start + span
-		var wSum, wDur, hSum, hDur float64
+		var wSum, wDur, hSum, hDur, vSum, vDur float64
 		for i := 1; i < len(s.Time); i++ {
 			ti := s.Time[i]
 			if ti <= start || ti > end {
@@ -275,6 +281,10 @@ func sessionProfile(s *activityStreams, maxPoints int) []profilePoint {
 				hSum += dt * hrF[i]
 				hDur += dt
 			}
+			if pacing {
+				vSum += dt * s.Vel[i]
+				vDur += dt
+			}
 		}
 		p := profilePoint{Min: start / 60}
 		if wDur > 0 {
@@ -285,10 +295,121 @@ func sessionProfile(s *activityStreams, maxPoints int) []profilePoint {
 			v := pyRound(hSum/hDur, 1)
 			p.HR = &v
 		}
-		if p.W != nil || p.HR != nil {
+		if vDur > 0 && vSum > 0 {
+			p.Pace = Pace(vDur / vSum).In(u)
+		}
+		if p.W != nil || p.HR != nil || p.Pace != "" {
 			out = append(out, p)
 		}
 	}
+	return out
+}
+
+// segment is one measured stretch of a run: what it covered, how long it
+// took, and what it cost.
+type segment struct {
+	StartS int     `json:"start_s"` // seconds from the first sample
+	Secs   float64 `json:"secs"`
+	DistM  float64 `json:"dist_m"`
+	Pace   string  `json:"pace"`
+	AvgHR  float64 `json:"avg_hr,omitempty"`
+}
+
+// fastestSegments finds the count fastest non-overlapping stretches of a
+// given length — the reps, when a session was run as reps.
+//
+// It exists because the athlete does not lap his repetitions: the watch
+// records one auto-lap a mile and nothing else, so a session of eight 200s
+// arrives as a single smooth trace with the reps buried in it, and mile
+// splits average each rep together with its recovery. Asking the stream for
+// the eight fastest 200 m stretches recovers what the laps would have said,
+// from data that is already there.
+//
+// Distance is integrated from the speed stream rather than read from the
+// odometer, so it measures the same thing everything else here does. Either
+// meters or secs is given, never both: reps are prescribed as a distance
+// ("8×200") or as a duration ("4×5:00").
+func fastestSegments(s *activityStreams, meters float64, secs int, count int, u Units) []segment {
+	if count < 1 || len(s.Time) < 2 || !s.HaveVel || (meters <= 0 && secs <= 0) {
+		return nil
+	}
+	// Cumulative distance and, for the HR of a stretch, cumulative HR·time.
+	n := len(s.Time)
+	dist := make([]float64, n)
+	hrSum := make([]float64, n)
+	hrDur := make([]float64, n)
+	for i := 1; i < n; i++ {
+		dt := float64(s.Time[i] - s.Time[i-1])
+		if dt <= 0 {
+			dt = 0
+		}
+		dist[i] = dist[i-1] + s.Vel[i]*dt
+		hrSum[i], hrDur[i] = hrSum[i-1], hrDur[i-1]
+		if s.HaveHR && hrValid(float64(s.HR[i])) {
+			hrSum[i] += dt * float64(s.HR[i])
+			hrDur[i] += dt
+		}
+	}
+
+	type cand struct{ i, j int }
+	var cands []cand
+	j := 0
+	for i := 0; i < n; i++ {
+		if meters > 0 {
+			for j < n && dist[j]-dist[i] < meters {
+				j++
+			}
+		} else {
+			for j < n && s.Time[j]-s.Time[i] < secs {
+				j++
+			}
+		}
+		if j >= n {
+			break
+		}
+		cands = append(cands, cand{i, j})
+	}
+	// Fastest first: least time for the distance, or most distance for the
+	// time.
+	sort.Slice(cands, func(a, b int) bool {
+		ca, cb := cands[a], cands[b]
+		if meters > 0 {
+			return s.Time[ca.j]-s.Time[ca.i] < s.Time[cb.j]-s.Time[cb.i]
+		}
+		return dist[ca.j]-dist[ca.i] > dist[cb.j]-dist[cb.i]
+	})
+
+	var out []segment
+	var taken []cand
+	for _, c := range cands {
+		if len(out) == count {
+			break
+		}
+		overlaps := false
+		for _, t := range taken {
+			if c.i < t.j && t.i < c.j {
+				overlaps = true
+				break
+			}
+		}
+		if overlaps {
+			continue
+		}
+		taken = append(taken, c)
+		d := dist[c.j] - dist[c.i]
+		t := float64(s.Time[c.j] - s.Time[c.i])
+		seg := segment{StartS: s.Time[c.i], Secs: pyRound(t, 1), DistM: pyRound(d, 1)}
+		if d > 0 {
+			seg.Pace = Pace(t / d).In(u)
+		}
+		if hd := hrDur[c.j] - hrDur[c.i]; hd > 0 {
+			seg.AvgHR = pyRound((hrSum[c.j]-hrSum[c.i])/hd, 1)
+		}
+		out = append(out, seg)
+	}
+	// Chronological, so a reader sees them as they were run — whether they
+	// held or faded is the point.
+	sort.Slice(out, func(a, b int) bool { return out[a].StartS < out[b].StartS })
 	return out
 }
 
