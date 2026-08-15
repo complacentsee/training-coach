@@ -93,6 +93,48 @@ func TestWeatherReadsTheHourAndCachesIt(t *testing.T) {
 	}
 }
 
+// TestWeatherCrossesTheDateLine: an evening session is on one calendar day
+// where the athlete lives and the next one in UTC. The day asked for and
+// the hour matched must come off the SAME clock — ask for the local date
+// while matching a UTC label and the reading is simply never found, which
+// looks like a provider with no data rather than a bug here.
+func TestWeatherCrossesTheDateLine(t *testing.T) {
+	chi := chicago(t)
+	// 19:30 on the 13th in Chicago is 00:30 on the 14th in UTC.
+	local := time.Date(2026, 8, 13, 19, 30, 0, 0, chi)
+	wantHour := "2026-08-14T00:00"
+	wantDay := "2026-08-14"
+
+	var askedDay, askedTZ string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		askedDay = r.URL.Query().Get("start_date")
+		askedTZ = r.URL.Query().Get("timezone")
+		_ = json.NewEncoder(w).Encode(map[string]any{"hourly": map[string]any{
+			"time":                 []string{"2026-08-14T00:00", "2026-08-14T01:00"},
+			"temperature_2m":       []float64{71.5, 70.0},
+			"dew_point_2m":         []float64{62.5, 62.0},
+			"relative_humidity_2m": []float64{74, 76},
+			"wind_speed_10m":       []float64{5, 4},
+		}})
+	}))
+	defer srv.Close()
+
+	w := weatherUnderTest(t, srv.URL, true)
+	c := w.at(44.98, -93.27, local)
+	if c == nil {
+		t.Fatal("no conditions for an evening session")
+	}
+	if askedDay != wantDay {
+		t.Errorf("asked for %s, want %s — the date must be the one the hour is on", askedDay, wantDay)
+	}
+	if askedTZ != "UTC" {
+		t.Errorf("timezone = %q; the labels must be the clock the hour is matched in", askedTZ)
+	}
+	if c.TempF != 71.5 || c.DewF != 62.5 || c.HeatSum != 134.0 {
+		t.Errorf("read %+v, wanted the %s reading", c, wantHour)
+	}
+}
+
 func TestWeatherOffMakesNoRequest(t *testing.T) {
 	var hits int32
 	srv := archiveStub(t, &hits, nil)
