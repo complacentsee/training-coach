@@ -200,7 +200,7 @@ func (s *server) ds() *dataset { return s.data.Load() }
 // the idempotency contract. Runs off the request path — on a fresh or
 // version-bumped DB this is the whole archive.
 func (s *server) startupReconcile() {
-	s.metrics.reconcile(s.activitiesDir(), s.ds().Loc)
+	s.metrics.reconcile(s.activitiesDir(), s.ds().Loc, s.weather)
 	if s.grader != nil {
 		s.grader.reconcile()
 	}

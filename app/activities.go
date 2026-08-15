@@ -135,7 +135,7 @@ func (s *server) postActivity(w http.ResponseWriter, r *http.Request) {
 	// Bytes on disk is the contract; metrics are derived. A decode or DB
 	// error lands in the failures table and the log, never in this response
 	// — the import already succeeded.
-	if m, err := s.metrics.importOne(name, body, s.ds().Loc); err != nil {
+	if m, err := s.metrics.importOne(name, body, s.ds().Loc, s.weather); err != nil {
 		log.Printf("metrics %s: %v", name, err)
 	} else if s.grader != nil {
 		// A fresh import is the grading trigger; the grade never blocks
@@ -159,7 +159,7 @@ func (s *server) retryFailedImport(name string) {
 		log.Printf("metrics retry %s: %v", name, err)
 		return
 	}
-	if m, err := s.metrics.importOne(name, data, s.ds().Loc); err != nil {
+	if m, err := s.metrics.importOne(name, data, s.ds().Loc, s.weather); err != nil {
 		log.Printf("metrics retry %s: %v", name, err)
 	} else {
 		log.Printf("metrics retry %s: recovered", name)
@@ -354,12 +354,10 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		}
 	}
 
-	// What it was like out there. Read from the archive's own position and
-	// the session's start hour; a trainer ride has no position and gets
-	// nothing.
-	if streams != nil && streams.StartLat != nil && streams.StartLon != nil {
-		out.Weather = s.weather.at(*streams.StartLat, *streams.StartLon, streams.StartUTC)
-	}
+	// What it was like out there, as read at import and kept since. Not
+	// looked up again here: the conditions of a past moment do not change,
+	// and a grade must go on citing the ones it was made against.
+	out.Weather = row.Weather
 
 	// How the session was actually ridden or run, minute by minute — capped
 	// so an hour and a three-hour ride both cost about the same to read.

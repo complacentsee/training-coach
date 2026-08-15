@@ -14,6 +14,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/muktihari/fit/profile/mesgdef"
+	"github.com/muktihari/fit/profile/typedef"
+	"github.com/muktihari/fit/proto"
 )
 
 // archiveStub answers like the provider and records what it was asked.
@@ -147,6 +151,91 @@ func TestWeatherCrossesTheDateLine(t *testing.T) {
 	if c.TempF != 70.8 || c.DewF != 62.2 || c.HeatSum != 133.0 {
 		t.Errorf("read %+v, wanted %s and 01:00 averaged", c, wantHour)
 	}
+}
+
+// TestWeatherIsFrozenAtImport: the conditions are read once, when the
+// activity is imported, and stored on its row. Reading the metrics again —
+// a month later, after the provider has revised its reanalysis — must
+// return what was captured then, and must not ask anyone anything. A grade
+// has to go on citing the weather it was made against.
+func TestWeatherIsFrozenAtImport(t *testing.T) {
+	var hits int32
+	temp := 70.0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		day := r.URL.Query().Get("start_date")
+		_ = json.NewEncoder(w).Encode(map[string]any{"hourly": map[string]any{
+			"time":                 []string{day + "T12:00", day + "T13:00"},
+			"temperature_2m":       []float64{temp, temp},
+			"dew_point_2m":         []float64{60, 60},
+			"relative_humidity_2m": []float64{70, 70},
+			"wind_speed_10m":       []float64{5, 5},
+		}})
+	}))
+	defer srv.Close()
+	t.Setenv("WEATHER_BASE_URL", srv.URL)
+	t.Setenv("WEATHER_LOOKUP", "on")
+
+	dir := t.TempDir()
+	db, err := openMetricsDB(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.close()
+	wx := newWeatherService(db)
+
+	const name = "2026-08-01-12-00-00.fit"
+	m, err := db.importOne(name, runWithPosition(t), time.UTC, wx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Weather == nil || m.Weather.TempF != 70.0 {
+		t.Fatalf("import did not capture the weather: %+v", m.Weather)
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("%d lookups during import, want 1", n)
+	}
+
+	// The world moves on: the provider now says something else.
+	temp = 99.0
+
+	row, err := db.rowByName(name)
+	if err != nil || row == nil {
+		t.Fatalf("row: %v", err)
+	}
+	if row.Weather == nil || row.Weather.TempF != 70.0 {
+		t.Errorf("reading the row returned %+v, want the 70.0 captured at import", row.Weather)
+	}
+	if row.Weather.HeatSum != 130.0 {
+		t.Errorf("heat sum = %v, want 130 from the stored parts", row.Weather.HeatSum)
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Errorf("reading the row asked the provider again (%d calls)", n)
+	}
+}
+
+// degreesToSemicircles is the inverse of the decoder's conversion.
+func degreesToSemicircles(deg float64) int32 {
+	return int32(deg / (180.0 / 2147483648.0))
+}
+
+// runWithPosition is a short run that knows where it was — the only kind
+// weather can be looked up for.
+func runWithPosition(t *testing.T) []byte {
+	t.Helper()
+	msgs := []proto.Message{}
+	for i := 0; i <= 10; i++ {
+		r := mesgdef.NewRecord(nil).
+			SetTimestamp(fixtureT0.Add(time.Duration(i) * time.Second)).
+			SetHeartRate(uint8(120 + i)).
+			SetEnhancedSpeed(3000).
+			// Semicircles: about 45.0N, 93.3W.
+			SetPositionLat(degreesToSemicircles(44.98)).
+			SetPositionLong(degreesToSemicircles(-93.27))
+		msgs = append(msgs, r.ToMesg(nil))
+	}
+	msgs = append(msgs, sessionMsg(typedef.SportRunning, 100_00))
+	return encodeActivityFixture(t, msgs...)
 }
 
 func TestWeatherOffMakesNoRequest(t *testing.T) {

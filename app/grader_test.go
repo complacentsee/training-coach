@@ -240,7 +240,7 @@ func TestGraderNudgesAStalledModel(t *testing.T) {
 	defer srv.Close()
 	g, ts := graderUnderTest(t, "live", srv.URL)
 
-	m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC)
+	m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestGraderNeverPostsPartially(t *testing.T) {
 	defer srv.Close()
 	g, ts := graderUnderTest(t, "live", srv.URL)
 
-	m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC)
+	m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestGraderEndToEnd(t *testing.T) {
 			defer srv.Close()
 			g, ts := graderUnderTest(t, mode, srv.URL)
 
-			m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC)
+			m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

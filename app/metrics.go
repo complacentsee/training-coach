@@ -69,6 +69,10 @@ type activityMetrics struct {
 	HRHist    map[int]int // bpm → seconds, ALL samples including <50
 	PowerHist map[int]int // exact watts → seconds
 
+	// Weather is frozen at import rather than derived on each read: it is
+	// what the conditions WERE, and the provider's reanalysis is revised.
+	Weather *conditions
+
 	SHA256 string
 }
 
