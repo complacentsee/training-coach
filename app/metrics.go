@@ -319,6 +319,68 @@ type segment struct {
 	AvgHR  float64 `json:"avg_hr,omitempty"`
 }
 
+// A recording gap is an interval no sample describes: the recording
+// stopped — auto-pause, a paused timer, a device that lost the plot — and
+// the sample at the far end reports the moment it resumed, not the minutes
+// in between. The threshold is the file's own, because a device's recording
+// rate is its own: smart recording writes a sample when something changes,
+// so twelve seconds between samples on a file whose median interval is four
+// describes twelve steady seconds, while the same twelve on a 1 Hz file are
+// eleven samples that do not exist.
+// Measured 15 Aug 2026 over twelve archived files and the committed corpus:
+// smart-recording intervals reach 17 s against medians of 2-4 s, while
+// every stop measured runs 57 s or longer against a median of 1.
+const (
+	gapFloorS      = 10 // never call anything shorter a gap
+	gapCadenceMult = 5  // …nor anything this close to the file's own rate
+)
+
+// recordingGapS is the interval at which this file stopped recording rather
+// than merely sampled slowly.
+func recordingGapS(t []int) int {
+	dts := make([]int, 0, len(t))
+	for i := 1; i < len(t); i++ {
+		if dt := t[i] - t[i-1]; dt > 0 {
+			dts = append(dts, dt)
+		}
+	}
+	if len(dts) == 0 {
+		return gapFloorS
+	}
+	sort.Ints(dts)
+	if g := dts[len(dts)/2] * gapCadenceMult; g > gapFloorS {
+		return g
+	}
+	return gapFloorS
+}
+
+// describedDistance integrates the speed stream into cumulative metres and
+// counts recording gaps alongside it: gaps[i] is how many fall at or before
+// sample i, so a window (i, j] spans one exactly when gaps[j] > gaps[i].
+//
+// A gap adds no distance, because none is known. Carrying the far sample's
+// speed across one measured +27.5% on the 12 Aug 2026 ride — 9,551 m
+// integrated against a 7,490 m odometer, all of it inside a single 296 s
+// stop. Dropping the gap lands within 0.07% of that odometer, and the
+// gap-free files stay where they already were, inside 0.15%. A non-positive
+// interval is a gap too: a chained file's seam can step the clock backwards,
+// and whatever ground was covered across it is not in this file either.
+func describedDistance(s *activityStreams) (dist []float64, gaps []int) {
+	n := len(s.Time)
+	dist, gaps = make([]float64, n), make([]int, n)
+	gapS := recordingGapS(s.Time)
+	for i := 1; i < n; i++ {
+		dt := s.Time[i] - s.Time[i-1]
+		dist[i], gaps[i] = dist[i-1], gaps[i-1]
+		if dt <= 0 || dt >= gapS {
+			gaps[i]++
+			continue
+		}
+		dist[i] += s.Vel[i] * float64(dt)
+	}
+	return dist, gaps
+}
+
 // fastestSegments finds the count fastest non-overlapping stretches of a
 // given length — the reps, when a session was run as reps.
 //
@@ -333,13 +395,21 @@ type segment struct {
 // odometer, so it measures the same thing everything else here does. Either
 // meters or secs is given, never both: reps are prescribed as a distance
 // ("8×200") or as a duration ("4×5:00").
+//
+// A stretch spanning a recording gap is never a candidate: how far the
+// athlete travelled while the recording was stopped is not in the file, and
+// a stretch whose distance is unknown cannot be ranked against one whose
+// distance is measured. Asked for more stretches than the trace can offer
+// gap-free, it returns the ones it has.
 func fastestSegments(s *activityStreams, meters float64, secs int, count int, u Units) []segment {
 	if count < 1 || len(s.Time) < 2 || !s.HaveVel || (meters <= 0 && secs <= 0) {
 		return nil
 	}
 	// Cumulative distance and, for the HR of a stretch, cumulative HR·time.
+	// HR keeps counting through a gap, as time-weighting does everywhere in
+	// the register — no stretch that spans one survives to report it.
 	n := len(s.Time)
-	dist := make([]float64, n)
+	dist, gaps := describedDistance(s)
 	hrSum := make([]float64, n)
 	hrDur := make([]float64, n)
 	for i := 1; i < n; i++ {
@@ -347,7 +417,6 @@ func fastestSegments(s *activityStreams, meters float64, secs int, count int, u 
 		if dt <= 0 {
 			dt = 0
 		}
-		dist[i] = dist[i-1] + s.Vel[i]*dt
 		hrSum[i], hrDur[i] = hrSum[i-1], hrDur[i-1]
 		if s.HaveHR && hrValid(float64(s.HR[i])) {
 			hrSum[i] += dt * float64(s.HR[i])
@@ -370,6 +439,9 @@ func fastestSegments(s *activityStreams, meters float64, secs int, count int, u 
 		}
 		if j >= n {
 			break
+		}
+		if gaps[j] > gaps[i] {
+			continue
 		}
 		cands = append(cands, cand{i, j})
 	}

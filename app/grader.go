@@ -373,7 +373,7 @@ func (g *grader) tools(m *activityMetrics, posted *bool, result **gradeResult) [
 		},
 		{
 			Name:        "fastest_segments",
-			Description: "The fastest non-overlapping stretches of a run, given a rep length in metres OR a rep duration in seconds, and how many to find. This is how interval work is checked: ask for the prescribed number of reps at the prescribed length, then compare each one's pace and heart rate to the target. They come back in the order they were run, so a fade is visible.",
+			Description: "The fastest non-overlapping stretches of a run, given a rep length in metres OR a rep duration in seconds, and how many to find. This is how interval work is checked: ask for the prescribed number of reps at the prescribed length, then compare each one's pace and heart rate to the target. They come back in the order they were run, so a fade is visible. A stretch that spans a stop in the recording is never returned, because the file does not say how far the athlete travelled while it was stopped — so fewer stretches than you asked for means the work is not in the trace, gap-free, that many times.",
 			Schema: obj(`"name":{"type":"string"},"meters":{"type":"number","description":"rep length, e.g. 200 or 1000"},` +
 				`"secs":{"type":"integer","description":"rep duration instead of a length, e.g. 300 for 5:00"},` +
 				`"count":{"type":"integer","description":"how many reps were prescribed"}`),
