@@ -23,6 +23,13 @@
 # from whether the prescribed reps were run, which fastest_segments
 # recovers from the trace (the athlete does not lap his repetitions).
 #
+# The abandoned row expects DNF rather than a letter, per Adam's rule of
+# 16 Aug 2026: a session that was not essentially completed — under 90% of
+# the prescribed distance or duration, or a rep short — is DNF whatever the
+# reason, and the note carries why and what the delivered work was worth.
+# One rep of three, then home at 25 of 45 minutes, is not a completed
+# session.
+#
 # fixture	date	letter	share	basis	what it is
 2026-01-10-06-00-00.fit	2026-01-10	A	1.0000	legend	generated: 13 km held at 136-146 bpm, every minute under the cap
 2026-01-10-07-00-00.fit	2026-01-10	B	0.6020	legend	real: 12.19 km, avg 146.6 — on the B floor
@@ -34,4 +41,4 @@
 2026-01-17-07-00-00.fit	2026-01-17	F	0.0228	legend	real: 13.96 km, avg 175.9 — a long run run hard throughout
 2026-01-07-07-00-00.fit	2026-01-07	D	0.2226	legend	real: 8.10 km against an 8 km easy day, avg 158.0
 2026-01-13-06-00-00.fit	2026-01-13	A	0.6496	judgment	generated: the 3x4:00 threshold day delivered - all three reps at 4:30/km, on target
-2026-01-13-07-00-00.fit	2026-01-13	F	0.8343	judgment	generated: the same day abandoned - one rep at 5:28/km, then home at 25 min of 45
+2026-01-13-07-00-00.fit	2026-01-13	DNF	0.8343	judgment	generated: the same day abandoned - one rep at 5:28/km, then home at 25 min of 45 - not essentially completed
