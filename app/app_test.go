@@ -3011,14 +3011,12 @@ func TestModalCloseStaysReachable(t *testing.T) {
 	}
 }
 
-// TestDNFIsAVerdictNotALetter: a session stopped by something outside the
-// training — a chain off the sprocket, an injury, weather — is not the
-// athlete's failure to grade. It posts as DNF, renders as its own chip
-// rather than as a letter, and says "not finished" wherever a letter would
-// say "graded". Adam's rule, 15 Aug 2026, with the boundary that keeps the
-// committed fixtures honest: a session abandoned through fatigue or choice
-// still takes its letter, because doing the work is what puts an athlete
-// over the cap and a verdict that excused quitting would reward it.
+// TestDNFIsAVerdictNotALetter: a session that was not essentially completed
+// posts as DNF — Adam's rule, revised 16 Aug 2026 to a COMPLETION verdict
+// rather than a cause one: a long run four miles short is DNF exactly as a
+// mechanical failure is, and why it stopped lives in the note along with
+// what the delivered work was worth. A letter is for a session that was
+// completed; grading one that was not puts a number on a day that has none.
 func TestDNFIsAVerdictNotALetter(t *testing.T) {
 	srv := fitTestMuxServer(t, "")
 	if err := srv.s.store.Append(Entry{
@@ -3060,7 +3058,7 @@ func TestDNFIsAVerdictNotALetter(t *testing.T) {
 
 	// And the grader has to know when it applies, or nothing will ever post
 	// one. The boundary is the half worth pinning.
-	for _, want := range []string{"DNF", "outside the training", "fatigue or choice"} {
+	for _, want := range []string{"DNF", "not essentially completed", "90%", "every prescribed repetition"} {
 		if !strings.Contains(gradingProcedure, want) {
 			t.Errorf("the embedded procedure does not say %q", want)
 		}
