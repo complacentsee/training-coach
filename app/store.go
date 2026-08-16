@@ -252,6 +252,28 @@ func (s *Store) Notes(limit int) []Entry {
 	return out
 }
 
+// NotesOn is the free text recorded against one training day, oldest first —
+// what the athlete said about the session, which is the half no recording
+// carries. A note attached to another kind of entry counts: the feedback box
+// and a skip's reason are both things said about that day.
+func (s *Store) NotesOn(date string) []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []Entry
+	for _, e := range s.all {
+		if e.Date != date || e.Note == "" {
+			continue
+		}
+		// A grade's note is the verdict, not the athlete's account of the
+		// day, and it already has its own place in the popover.
+		if e.Kind == "grade" {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 // All is the raw export, used by /api/entries so the whole log can be pulled
 // down and read without shell access to the box.
 func (s *Store) All() []Entry {

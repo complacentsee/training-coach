@@ -194,6 +194,15 @@
         (st.note ? '<p class="gnote">' + emph(st.note) + "</p>" : "") + "</div>";
     }
 
+    /* What the athlete said about the day, where anything was said. Nothing
+       is rendered when nothing was — no heading, no empty box: a placeholder
+       claims a note exists. */
+    if (d.notes && d.notes.length) {
+      h += '<div class="dnotes">' + d.notes.map(function (n) {
+        return "<p>" + emph(n.note) + "</p>";
+      }).join("") + "</div>";
+    }
+
     h += '<p class="dsrc">' + esc(d.name) + "</p>";
 
     m.body.innerHTML = h;
@@ -211,7 +220,16 @@
 
   function splits(d, run) {
     var laps = d.laps || [];
-    if (!laps.length) return '<p class="hint">This recording carries no laps.</p>';
+    /* This is NOT the empty-notes case. Nothing said is about the athlete,
+       and a heading over it claims input that does not exist; no laps is a
+       fact about the recording, and saying so stops a reader hunting for
+       splits the file never carried. */
+    /* One session_end lap is the file saying it had no laps at all — four of
+       twelve sampled recordings look like that, and the row would only
+       repeat the summary above it. */
+    if (!laps.length || (laps.length === 1 && laps[0].trigger === "session_end")) {
+      return '<p class="hint">This recording carries no laps.</p>';
+    }
 
     /* Columns follow the data: a column nothing fills is a column nobody
        reads, and at 390px there is room for five. */
