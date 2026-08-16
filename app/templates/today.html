@@ -23,6 +23,14 @@
   <h2>{{emph .Session.Label}} {{template "guidebtn" .GuideID}}{{if .FitURL}} <a class="fitbtn" href="{{.FitURL}}" download>FIT</a>{{end}}{{if .ZwoURL}} <a class="fitbtn" href="{{.ZwoURL}}" download>ZWO</a>{{end}}</h2>
   {{with .Detail}}<p class="detail">{{emph .}}</p>{{end}}
   {{template "targets" .Targets}}
+  {{/* The recording itself, behind one tap: laps, both clocks and the paces
+       the watch measured. It sits between the prescription and the verdict,
+       in the order the day happened — under the grade note it sat below a
+       paragraph nobody scrolls past on a phone. */}}
+  {{if .HasActivity}}
+  <p class="detline"><button type="button" class="detbtn" data-detail="{{iso .Today}}"
+     data-sport="{{.Sport}}" data-grade="{{.Grade}}" data-note="{{.GradeNote}}">View activity</button></p>
+  {{end}}
   {{/* The verdict on today's session, under the session itself. The calendar
        keeps it behind a tap because a cell has no room; here there is room,
        and on the day itself the reasoning is the half worth reading. */}}
@@ -33,12 +41,6 @@
   </div>
   {{else if .Recorded}}
   <p class="recorded">Recorded</p>
-  {{end}}
-  {{/* The recording itself, behind one tap: laps, both clocks and the paces
-       the watch measured, against the prescription above it. */}}
-  {{if .HasActivity}}
-  <p class="detline"><button type="button" class="detbtn" data-detail="{{iso .Today}}"
-     data-sport="{{.Sport}}" data-grade="{{.Grade}}" data-note="{{.GradeNote}}">What you did</button></p>
   {{end}}
   {{if and .Skippable (not .Recorded)}}
   {{/* Two taps, because the first is easy to hit by accident and the second
