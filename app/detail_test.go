@@ -873,3 +873,94 @@ func TestElapsedFallsBackToTheRecords(t *testing.T) {
 		t.Errorf("moving %v — the file states no timer time and none may be invented", d.MovingS)
 	}
 }
+
+// TestChartBucketsMedianAndBreaks: the chart's series is the recording
+// bucketed to about one point per pixel, each point the MEDIAN of its
+// bucket. Median because one dropped heart-rate sample or one GPS spike
+// moves a mean and does not move a median. A bucket with nothing of its own
+// is null so the line breaks where the recording did — a smoothing window is
+// not a licence to draw across a stop — and watts are read from their own
+// bucket alone, because ERG holds a square wave and rounding its corners off
+// would hide the very steps the session was prescribed as.
+func TestChartBucketsMedianAndBreaks(t *testing.T) {
+	var msgs []proto.Message
+	add := func(sec int, hr uint8, speedRaw uint16, watts uint16) {
+		msgs = append(msgs, mesgdef.NewRecord(nil).
+			SetTimestamp(fixtureT0.Add(time.Duration(sec)*time.Second)).
+			SetHeartRate(hr).SetSpeed(speedRaw).SetPower(watts).ToMesg(nil))
+	}
+	// Five minutes at 3 m/s and 140 bpm, 100 W.
+	for sec := 0; sec <= 300; sec++ {
+		add(sec, 140, 3000, 100)
+	}
+	// Five minutes the recording does not describe at all.
+	// Then five more at 5 m/s, a dropout heart rate, and a step to 250 W.
+	for sec := 600; sec <= 900; sec++ {
+		add(sec, 40, 5000, 250)
+	}
+	msgs = append(msgs, mesgdef.NewSession(nil).
+		SetSport(typedef.SportCycling).SetSubSport(typedef.SubSportIndoorCycling).
+		SetStartTime(fixtureT0).SetTimestamp(fixtureT0.Add(time.Minute)).
+		SetTotalElapsedTime(900_000).SetTotalTimerTime(900_000).
+		SetTotalDistance(300_000).ToMesg(nil))
+
+	d := detailOf(t, encodeActivityFixture(t, msgs...))
+	c := d.Chart
+	if c == nil {
+		t.Fatal("no chart series")
+	}
+	if c.Unit != "/km" { // the example athlete is metric
+		t.Errorf("pace unit %q, want the athlete's own", c.Unit)
+	}
+	if len(c.Secs) < 100 {
+		t.Fatalf("%d points for a 900 s recording", len(c.Secs))
+	}
+
+	at := func(sec int) int {
+		best := 0
+		for i, s := range c.Secs {
+			if s <= sec {
+				best = i
+			}
+		}
+		return best
+	}
+	// The gap: nothing was recorded, so nothing is drawn.
+	for _, sec := range []int{420, 480, 540} {
+		i := at(sec)
+		if c.Pace[i] != nil {
+			t.Errorf("%d s sits inside the gap and carries a pace of %v", sec, *c.Pace[i])
+		}
+		if c.HR[i] != nil {
+			t.Errorf("%d s sits inside the gap and carries a heart rate", sec)
+		}
+	}
+	// The first half: 3 m/s is 333.3 s per kilometre.
+	if p := c.Pace[at(150)]; p == nil || math.Abs(*p-333.3) > 1 {
+		t.Errorf("pace at 150 s = %v, want ~333.3 s/km", p)
+	}
+	// The second half: 5 m/s is 200 s per kilometre, and 40 bpm is a dropout
+	// the register excludes everywhere.
+	if p := c.Pace[at(800)]; p == nil || math.Abs(*p-200) > 1 {
+		t.Errorf("pace at 800 s = %v, want ~200 s/km", p)
+	}
+	if hr := c.HR[at(800)]; hr != nil {
+		t.Errorf("a 40 bpm dropout was drawn as a heart rate of %d", *hr)
+	}
+	if hr := c.HR[at(150)]; hr == nil || *hr != 140 {
+		t.Errorf("heart rate at 150 s = %v, want 140", hr)
+	}
+	// The watt step stays square: 100 before the gap, 250 after, with no
+	// bucket carrying a blend of the two.
+	if w := c.Watts[at(150)]; w == nil || *w != 100 {
+		t.Errorf("watts at 150 s = %v, want 100", w)
+	}
+	if w := c.Watts[at(800)]; w == nil || *w != 250 {
+		t.Errorf("watts at 800 s = %v, want 250", w)
+	}
+	for i, w := range c.Watts {
+		if w != nil && *w != 100 && *w != 250 {
+			t.Errorf("bucket %d carries %d W, which is neither step — the square wave was smoothed", i, *w)
+		}
+	}
+}

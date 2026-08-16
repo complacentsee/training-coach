@@ -64,6 +64,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -123,6 +124,16 @@ type activityDetail struct {
 	Laps            []detailLap
 	Splits          []detailSplit
 	Track           []trackPoint
+	Series          []sample // per record, for the chart only
+}
+
+// sample is one record's worth of what a chart draws: the clock, the heart,
+// the speed and the watts, exactly as recorded.
+type sample struct {
+	t     time.Time
+	hr    int
+	watts int
+	vel   float64 // m/s; 0 when the record carries none
 }
 
 type trackPoint struct{ Lat, Lon float64 }
@@ -187,6 +198,12 @@ func decodeDetailOpt(data []byte, skipCRC bool) (*activityDetail, error) {
 	var fixes []fix
 	var t0, tLast time.Time
 	var haveT0 bool
+	// The chart's raw material, read in the same pass. This is DISPLAY
+	// velocity: it takes whatever the record carries and does not re-read the
+	// file with expansion off the way the register does, because an ulp of
+	// speed is invisible on a 360-pixel chart and a second decode is not
+	// free. Nothing here is measured against a target.
+	var series []sample
 
 	for dec.Next() {
 		fit, err := dec.Decode()
@@ -212,6 +229,20 @@ func decodeDetailOpt(data []byte, skipCRC bool) (*activityDetail, error) {
 					fixes = append(fixes, fix{r.Timestamp,
 						semicirclesToDegrees(r.PositionLat), semicirclesToDegrees(r.PositionLong)})
 				}
+				sm := sample{t: r.Timestamp}
+				if r.HeartRate != basetype.Uint8Invalid {
+					sm.hr = int(r.HeartRate)
+				}
+				if r.Power != basetype.Uint16Invalid {
+					sm.watts = int(r.Power)
+				}
+				switch {
+				case r.EnhancedSpeed != basetype.Uint32Invalid:
+					sm.vel = float64(r.EnhancedSpeed) / 1000
+				case r.Speed != basetype.Uint16Invalid:
+					sm.vel = float64(r.Speed) / 1000
+				}
+				series = append(series, sm)
 			case mesgnum.Lap:
 				laps = append(laps, mesgdef.NewLap(m))
 			case mesgnum.Session:
@@ -261,6 +292,7 @@ func decodeDetailOpt(data []byte, skipCRC bool) (*activityDetail, error) {
 	}
 	out.StartUTC = t0.UTC()
 	out.Indoor = indoors(out.SubSport)
+	out.Series = series
 
 	for _, l := range laps {
 		dl := detailLap{Trigger: l.LapTrigger.String()}
@@ -432,6 +464,7 @@ type detailOut struct {
 	Splits     []splitOut  `json:"splits,omitempty"`
 	Track      *trackOut   `json:"track,omitempty"`
 	Session    *sessionOut `json:"session,omitempty"`
+	Chart      *chartOut   `json:"chart,omitempty"`
 	Notes      []noteOut   `json:"notes,omitempty"`
 	SHA256     string      `json:"sha256"`
 }
@@ -563,6 +596,7 @@ func (s *server) detailPayload(name, blockID string) (*detailOut, int, string) {
 	if len(d.Track) > 0 {
 		out.Track = &trackOut{Points: len(d.Track), Polyline: encodePolyline(d.Track)}
 	}
+	out.Chart = buildChart(d, u)
 	s.joinPrescription(out, d, blockID)
 	// What the athlete said about the day. On 12 Aug 2026 the recording shows
 	// two of four reps and a 296 s stop inside the second; only the note says
@@ -836,4 +870,153 @@ func stepVerdict(st resolvedStep, l lapOut, run bool) string {
 		return band(float64(*l.AvgHR), float64(st.HRLo), float64(st.HRHi))
 	}
 	return ""
+}
+
+/* ── the chart's series ────────────────────────────────────────────────────
+
+A recording is thousands of samples and a phone is 390 pixels wide, so the
+series a chart reads is bucketed to about one point per pixel and each point
+is the MEDIAN of its bucket. Median rather than mean because a single dropped
+heart-rate sample or a GPS speed spike moves a mean and does not move a
+median, and because the smoothing and the decimation are then the same
+operation rather than two.
+
+A bucket with nothing in it is null, not zero, so the line breaks where the
+recording did. Pace is null where the athlete was not moving: a stopped
+sample is not a slow pace, it is no pace, and drawing it as one puts a spike
+through the axis. That is a drawing rule and it produces no number anyone
+reads — the moving-time rule the register refuses to invent stays refused.
+*/
+
+// chartPoints is roughly one point per pixel of a phone-width chart.
+const chartPoints = 200
+
+type chartOut struct {
+	// Unit is what a pace value counts: seconds per mile or per kilometre,
+	// in the athlete's own units, so the drawing needs no conversion table.
+	Unit  string     `json:"unit,omitempty"`
+	Secs  []int      `json:"secs"`
+	HR    []*int     `json:"hr,omitempty"`
+	Pace  []*float64 `json:"pace,omitempty"` // seconds per Unit
+	Watts []*int     `json:"watts,omitempty"`
+}
+
+func medianInts(xs []int) *int {
+	if len(xs) == 0 {
+		return nil
+	}
+	s := append([]int(nil), xs...)
+	sort.Ints(s)
+	v := s[len(s)/2]
+	return &v
+}
+
+func medianFloats(xs []float64) *float64 {
+	if len(xs) == 0 {
+		return nil
+	}
+	s := append([]float64(nil), xs...)
+	sort.Float64s(s)
+	v := s[len(s)/2]
+	return &v
+}
+
+// paceMedianWindowS is how wide the rolling median over speed is. GPS speed
+// is jittery in a way heart rate and a trainer's watts are not: at a
+// nine-second bucket a steady run draws as a picket fence, and the eye reads
+// noise where the athlete held a pace. Thirty seconds is the smallest window
+// that renders his 15 Aug long run as the steady effort the mile splits say
+// it was — 9:26 to 10:20 across ten miles.
+//
+// Watts get no window at all, deliberately: ERG holds a square wave, and a
+// rolling median would round the corners off the very steps the session was
+// prescribed as. The smoothing matches each sensor's noise rather than
+// blurring everything equally.
+const paceMedianWindowS = 30
+
+// buildChart buckets the samples into an even grid and takes each bucket's
+// median, widening the window for speed alone. Heart rate keeps the
+// register's dropout rule — under 50 bpm is a dropout everywhere in this
+// app, and a chart that drew them would show a heart stopping.
+func buildChart(d *activityDetail, u Units) *chartOut {
+	if len(d.Series) < 2 {
+		return nil
+	}
+	t0 := d.Series[0].t
+	span := d.Series[len(d.Series)-1].t.Sub(t0).Seconds()
+	if span <= 0 {
+		return nil
+	}
+	n := chartPoints
+	if int(span) < n {
+		n = int(span)
+	}
+	if n < 2 {
+		return nil
+	}
+	width := span / float64(n)
+
+	hrB := make([][]int, n)
+	wB := make([][]int, n)
+	vB := make([][]float64, n)
+	occupied := make([]bool, n) // a bucket with samples of its own
+	var haveHR, haveW, haveV bool
+	// The speed window reaches beyond its bucket; everything else is read
+	// from the bucket it landed in.
+	reach := int(math.Ceil(paceMedianWindowS / 2 / width))
+	for _, sm := range d.Series {
+		at := sm.t.Sub(t0).Seconds()
+		i := int(at / width)
+		if i < 0 || i >= n {
+			continue
+		}
+		occupied[i] = true
+		if hrValid(float64(sm.hr)) {
+			hrB[i] = append(hrB[i], sm.hr)
+			haveHR = true
+		}
+		if sm.watts > 0 {
+			wB[i] = append(wB[i], sm.watts)
+			haveW = true
+		}
+		if sm.vel > 0 {
+			haveV = true
+			for j := i - reach; j <= i+reach; j++ {
+				if j >= 0 && j < n {
+					vB[j] = append(vB[j], sm.vel)
+				}
+			}
+		}
+	}
+
+	out := &chartOut{Secs: make([]int, n)}
+	per := metresPerMile
+	out.Unit = "/mi"
+	if u == Metric {
+		per, out.Unit = metresPerKM, "/km"
+	}
+	for i := 0; i < n; i++ {
+		out.Secs[i] = int(float64(i) * width)
+		if haveHR {
+			out.HR = append(out.HR, medianInts(hrB[i]))
+		}
+		if haveW {
+			out.Watts = append(out.Watts, medianInts(wB[i]))
+		}
+		if haveV {
+			var p *float64
+			// A bucket with no samples of its own is null however far the
+			// window reaches: the line breaks where the recording did, and a
+			// smoothing window is not a licence to draw across a stop.
+			if v := medianFloats(vB[i]); v != nil && *v > 0 && occupied[i] {
+				secs := pyRound(per / *v, 1)
+				p = &secs
+			}
+			out.Pace = append(out.Pace, p)
+		}
+	}
+	if !haveV {
+		out.Unit = ""
+	}
+	return out
 }
