@@ -92,3 +92,14 @@ network only you are on.
 3. For a server: put host/ssh coordinates in `app/local.mk`, then
    `make deploy` — builds for arm64, ships over ssh, restarts, and
    verifies the live site serves this build and this plan.
+
+## Licence
+
+Apache 2.0 — see `LICENSE`. It prescribes physical exercise and is not
+medical advice; the warranty and liability disclaimers are meant literally.
+
+Leaflet is vendored in `app/static/vendor/` under its own BSD 2-Clause
+licence (`LICENSES/leaflet.txt`). Everything else is a Go module fetched at
+build time; `NOTICE` lists them. Reading or writing `.fit` files is subject
+to Garmin's FIT Protocol Licence Agreement, which travels with
+`github.com/muktihari/fit`.
