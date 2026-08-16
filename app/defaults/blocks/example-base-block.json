@@ -94,7 +94,7 @@
     "range": "under 20%"
    }
   ],
-  "footer": "A session that was not essentially completed reads *DNF* rather than a letter, and the note says what stopped it and what the delivered work was worth. Hover a graded cell for the reasoning.",
+  "footer": "Hover a graded cell for the reasoning.",
   "cap": "easyCap"
  },
  "weeks": [
