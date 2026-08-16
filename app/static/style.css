@@ -487,6 +487,22 @@ td .rec:hover,td .rec:focus-visible{border-color:var(--accent);color:var(--accen
 .dnotes p{margin:0 0 .5rem;font-size:.92rem;line-height:1.5;color:var(--ink-2)}
 .dnotes p:last-child{margin-bottom:0}
 .dsrc{margin:.2rem 0 0;font:.62rem/1.3 var(--mono);color:var(--ink-3)}
+/* The route, first in the popover. Leaflet's own stylesheet is vendored and
+   loaded with the library; this is only the box it draws into. */
+.dmap{height:200px;margin:0 0 .9rem;border:1px solid var(--rule);border-radius:3px;
+  background:var(--sunk)}
+.dmap-off{margin:0 0 .9rem;font-size:.85rem;color:var(--ink-3)}
+.leaflet-container{background:var(--sunk);font:inherit}
+.leaflet-control-attribution{font:.6rem/1.4 var(--mono);background:var(--surface);color:var(--ink-3)}
+.leaflet-control-attribution a{color:var(--ink-2)}
+/* No official dark OSM raster exists, so the tiles are inverted back to a
+   dark basemap in CSS. Hue rotation puts greens and blues back where the eye
+   expects them after the inversion; the route strokes are drawn on top and
+   untouched by it. */
+@media (prefers-color-scheme:dark){
+  .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
+}
+
 /* Pace or watts against heart rate, with the day's cap drawn where the eye
    should find time spent above it. */
 .dchart{margin:0 0 .8rem}

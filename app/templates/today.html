@@ -96,7 +96,7 @@
 {{end}}
 
 <script src="{{asset "trend.js"}}" defer></script>
-{{if .HasActivity}}<script src="{{asset "detail.js"}}" defer></script>{{end}}
+{{if .HasActivity}}<script src="{{asset "detail.js"}}" data-leaflet="{{asset "vendor/leaflet.js"}}" data-leaflet-css="{{asset "vendor/leaflet.css"}}" defer></script>{{end}}
 
 <section class="card">
   <h2 class="sec">Feedback</h2>

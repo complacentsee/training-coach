@@ -44,5 +44,5 @@
 {{range $i, $b := .Bands}}{{if $i}} · {{end}}<b class="g g{{lower $b.Grade}}">{{$b.Grade}}</b> {{$b.Range}}{{end}}.{{if .Footer}}
 {{emph .Footer}}{{end}}</p>
 {{end}}
-{{if .AnyRecorded}}<script src="{{asset "detail.js"}}" defer></script>{{end}}
+{{if .AnyRecorded}}<script src="{{asset "detail.js"}}" data-leaflet="{{asset "vendor/leaflet.js"}}" data-leaflet-css="{{asset "vendor/leaflet.css"}}" defer></script>{{end}}
 {{template "foot" .}}{{end}}
