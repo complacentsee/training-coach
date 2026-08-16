@@ -642,12 +642,21 @@ func (s *server) detailPayload(name, blockID string) (*detailOut, int, string) {
 	return out, http.StatusOK, ""
 }
 
-// getActivityDetail serves one activity's shape for the page. The stored
-// bytes are immutable, so the response is a pure function of (file, plan,
-// build) — all three go into the validator, because flipping athlete.json to
-// metric re-renders every string in here and a file hash alone would serve
-// the old units from a cache. Gzipped when asked for: the origin compresses
-// nothing, and the polyline is the first response where that shows.
+// getActivityDetail serves one activity's shape for the page. Gzipped when
+// asked for: the origin compresses nothing, and the polyline is the first
+// response where that shows.
+//
+// The validator hashes the RESPONSE, not its inputs. It used to hash
+// (file, plan, build) on the reasoning that the stored bytes are immutable
+// so the response is a pure function of those three — true when it was
+// written, false the moment this payload gained the day's grade, which
+// changes when neither the file nor the plan nor the build has. The cost
+// was invisible and total: the popover polls this endpoint to show a
+// re-grade the moment it lands, every poll revalidated to 304, the browser
+// handed back the cached body, and graded_at never moved. Measured 16 Aug
+// 2026 — the polls ran the full two minutes past a grade that had already
+// posted. Hashing the bytes being sent cannot rot this way, and the work it
+// would have saved was already done by the time we get here.
 func (s *server) getActivityDetail(w http.ResponseWriter, r *http.Request) {
 	out, code, msg := s.detailPayload(r.URL.Query().Get("name"), r.URL.Query().Get("block"))
 	if code != http.StatusOK {
@@ -660,7 +669,7 @@ func (s *server) getActivityDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not encode", http.StatusInternalServerError)
 		return
 	}
-	etag := etagFor([]byte(out.SHA256 + s.ds().Rev + buildHash))
+	etag := etagFor(body)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
 	w.Header().Set("Vary", "Accept-Encoding")

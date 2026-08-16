@@ -13,6 +13,8 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -1101,5 +1103,69 @@ func TestGraderLapsCarryTheirProvenance(t *testing.T) {
 	// The button press: it keeps its clock and it is visibly not a rep.
 	if b := got.Laps[2]; b.Trigger != "manual" || b.TimerS != 1.1 || b.Pace != "" {
 		t.Errorf("the button press reads as something else: %+v", b)
+	}
+}
+
+// TestTheDetailValidatorCoversTheGrade: the ETag has to change when
+// anything in the response does. It used to hash (file, plan, build) —
+// correct while the payload was a pure function of those, and silently
+// wrong the moment it carried the day's grade, which moves when none of
+// them do. The failure was total and invisible: the popover polls this
+// endpoint to show a re-grade as it lands, every poll revalidated to 304,
+// and the browser handed back a body from before the grade existed.
+func TestTheDetailValidatorCoversTheGrade(t *testing.T) {
+	ts := fitTestMuxServer(t, t.TempDir())
+	const name, date = "2026-01-13-12-00-00.fit", "2026-01-13"
+	body := week2Run(t, 13)
+	if _, err := ts.s.metrics.importOne(name, body, time.UTC, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ts.s.activitiesDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ts.s.activitiesDir(), name), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	url := "/api/activity-detail?name=" + name
+
+	first := get(ts.mux, url, nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first GET = %d", first.Code)
+	}
+	tag := first.Header().Get("ETag")
+	if tag == "" {
+		t.Fatal("no validator at all")
+	}
+	// Unchanged: the conditional request must still be cheap.
+	if rec := get(ts.mux, url, map[string]string{"If-None-Match": tag}); rec.Code != http.StatusNotModified {
+		t.Errorf("an unchanged response did not revalidate: %d", rec.Code)
+	}
+
+	// Now the day gets a grade. Nothing about the FILE, the plan or the
+	// build has changed.
+	if err := ts.s.store.Append(Entry{Date: date, Kind: "grade", Val: "B", Note: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := get(ts.mux, url, map[string]string{"If-None-Match": tag})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a graded day still revalidated to %d — the page can never see a new grade", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"grade":"B"`) {
+		t.Errorf("the fresh body carries no grade: %.200s", rec.Body.String())
+	}
+	second := rec.Header().Get("ETag")
+	if second == tag {
+		t.Error("the validator did not move when the response did")
+	}
+
+	// And a re-grade to the SAME letter must move it too, or a supersede is
+	// invisible.
+	time.Sleep(1100 * time.Millisecond) // the log stamps whole seconds
+	if err := ts.s.store.Append(Entry{Date: date, Kind: "grade", Val: "B", Note: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	rec = get(ts.mux, url, map[string]string{"If-None-Match": second})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "second") {
+		t.Errorf("a same-letter re-grade was invisible: %d", rec.Code)
 	}
 }
