@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -59,12 +60,46 @@ func (s *server) activitiesDir() string {
 type activityInfo struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
+	// Sport is filled only for a ?date= listing, and only from the metrics
+	// row: an unimported file has none, and guessing one from the bytes here
+	// would be a second decode to answer a question the import already did.
+	Sport string `json:"sport,omitempty"`
 }
+
+// isoDatePattern is the shape of a training day everywhere in this app.
+var isoDatePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 // getActivities lists the stored files, newest first — device names are
 // timestamps, so descending name order is descending time. A store that does
 // not exist yet is an empty list, never an error and never null.
+//
+// ?date=YYYY-MM-DD narrows it to one training day and names each file's
+// sport, which is what lets a page pick the recording matching the day's
+// session out of the 121 archive dates that carry more than one. The
+// unfiltered listing is byte-for-byte what it always was — the watch page
+// reads it — because a filter nobody asked for is a different endpoint.
 func (s *server) getActivities(w http.ResponseWriter, r *http.Request) {
+	date := r.URL.Query().Get("date")
+	if date != "" && !isoDatePattern.MatchString(date) {
+		http.Error(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	// The training day is the DB's, not the filename's — they agree on this
+	// archive, but the import owns that judgement and a page must not make
+	// it a second time. A file whose import failed has no row, so the name
+	// prefix is the fallback and such a day still lists its recording.
+	var sports map[string]string
+	if date != "" && s.metrics != nil {
+		if rows, err := s.metrics.byDate(date); err != nil {
+			log.Printf("activities %s: %v", date, err)
+		} else {
+			sports = map[string]string{}
+			for _, a := range rows {
+				sports[a.Name] = a.Sport
+			}
+		}
+	}
+
 	ents, err := os.ReadDir(s.activitiesDir())
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		log.Printf("activities: %v", err)
@@ -76,11 +111,16 @@ func (s *server) getActivities(w http.ResponseWriter, r *http.Request) {
 		if e.IsDir() || !validActivityName(e.Name()) {
 			continue // an in-flight .tmp is not a stored activity
 		}
+		if date != "" {
+			if _, known := sports[e.Name()]; !known && !strings.HasPrefix(e.Name(), date) {
+				continue
+			}
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		list = append(list, activityInfo{Name: e.Name(), Size: info.Size()})
+		list = append(list, activityInfo{Name: e.Name(), Size: info.Size(), Sport: sports[e.Name()]})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name > list[j].Name })
 	w.Header().Set("Content-Type", "application/json")

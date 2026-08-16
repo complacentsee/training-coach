@@ -306,7 +306,17 @@ type todayData struct {
 	Skippable   bool // an actual session, so there is something to skip
 	Skipped     bool
 	SkipNote    string
-	Recorded    bool   // an activity of this session's sport landed on this day
+	Recorded    bool // an activity of this session's sport landed on this day
+	// HasActivity is any recording at all on the day, whatever its sport —
+	// what decides whether there is a session to open, where Recorded
+	// decides whether offering "couldn't do this" would contradict the
+	// record. A cross-training ride on a run day is worth reading and is
+	// not evidence the run happened.
+	HasActivity bool
+	// Sport is the sport the day's session is, so a date carrying both a
+	// ride and a run opens the one the session was about — the grader's own
+	// test, applied on the page.
+	Sport       string
 	Grade       string // the letter, when the day has been graded
 	GradeNote   string // and the reasoning behind it
 	Detail      string
@@ -471,6 +481,8 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	if td.Skippable && !td.Skipped {
 		td.Recorded = td.Grade != "" || s.sessionRecorded(iso, td.Session.Kind)
 	}
+	td.HasActivity = s.anyRecorded(iso)
+	td.Sport = sportOf(td.Session.Kind)
 
 	td.Issues = s.issueViews(d, blk, weekN, iso)
 	s.render(w, "today.html", td)
@@ -489,6 +501,31 @@ func (s *server) sessionRecorded(iso string, k Kind) bool {
 		return false
 	}
 	return recordedKind(acts, k)
+}
+
+// anyRecorded reports whether the day carries a recording of any sport. The
+// metrics cache is optional, and without one there is no evidence either way
+// — the honest answer, and not a crash.
+func (s *server) anyRecorded(iso string) bool {
+	if s.metrics == nil {
+		return false
+	}
+	acts, err := s.metrics.byDate(iso)
+	if err != nil {
+		log.Printf("today %s: reading the day's activities: %v", iso, err)
+		return false
+	}
+	return len(acts) > 0
+}
+
+// sportOf names the sport a session is done in, in the vocabulary the FIT
+// files and the metrics rows use. Bike or not-bike is the whole distinction
+// the archive supports, which is the same one recordedKind applies.
+func sportOf(k Kind) string {
+	if k.IsBike() {
+		return "cycling"
+	}
+	return "running"
 }
 
 // recordedKind applies the grader's own sport test, so the two can never
@@ -551,6 +588,9 @@ type calendarData struct {
 	Grading   *Grading
 	FitZipURL string // set only when the block has at least one steps day
 	ZwoZipURL string // set only when the block has at least one bike steps day
+	// AnyRecorded decides whether the page loads detail.js at all: a block
+	// with nothing recorded renders no trigger and pays for no script.
+	AnyRecorded bool
 }
 
 // archiveBanner appears on any page showing a block that is not the one being
@@ -588,8 +628,12 @@ type calCell struct {
 	Note    string
 	Range   string // the legend's range for Grade, so the popup can say what the letter meant
 	Skipped bool
-	FitURL  string // set only when the session carries steps
-	ZwoURL  string // bike steps days only
+	// Recorded is any activity on this day, whatever its sport: the cell's
+	// affordance for opening what was actually done.
+	Recorded bool
+	Sport    string // what the session was, for picking among a day's files
+	FitURL   string // set only when the session carries steps
+	ZwoURL   string // bike steps days only
 }
 
 func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
@@ -621,6 +665,18 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 	}
 	grades, weekGrades := s.store.Grades(), s.store.WeekGrades()
 	skips := s.store.Skips()
+	// One query for the whole grid rather than one per cell: a 16-week block
+	// is 112 days, and the answer is a set of dates.
+	recorded := map[string]bool{}
+	if s.metrics != nil && len(blk.Weeks) > 0 {
+		last := blk.DayOf(len(blk.Weeks)-1, 6)
+		if set, err := s.metrics.datesWithActivity(blk.DayOf(0, 0).Format("2006-01-02"),
+			last.Format("2006-01-02")); err != nil {
+			log.Printf("calendar: reading recorded days: %v", err)
+		} else {
+			recorded = set
+		}
+	}
 	for wi, wk := range blk.Weeks {
 		row := calRow{Week: wk, Volume: wk.Volume().In(s.units())}
 		if g, ok := weekGrades[wk.StartISO()]; ok {
@@ -653,6 +709,11 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 						cd.FitZipURL += cd.Archive.Query
 					}
 				}
+			}
+			c.Recorded = recorded[dt.Format("2006-01-02")]
+			c.Sport = sportOf(sess.Kind)
+			if c.Recorded {
+				cd.AnyRecorded = true
 			}
 			if g, ok := grades[dt.Format("2006-01-02")]; ok {
 				c.Grade, c.Note = g.Val, g.Note

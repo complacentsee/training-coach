@@ -266,6 +266,27 @@ func (m *metricsDB) byDate(date string) ([]activityMetrics, error) {
 	return out, rows.Err()
 }
 
+// datesWithActivity is the set of training days in [from, to] that carry a
+// recording — one query per calendar render rather than one per cell, which
+// is what keeps a 16-week grid at a single round trip.
+func (m *metricsDB) datesWithActivity(from, to string) (map[string]bool, error) {
+	rows, err := m.r.Query(`SELECT DISTINCT date FROM activities
+		WHERE date >= ? AND date <= ?`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out[d] = true
+	}
+	return out, rows.Err()
+}
+
 // recent lists stored activities on or after a date, oldest first — the
 // grader's startup reconcile walks these looking for ungraded days.
 func (m *metricsDB) recent(sinceDate string) ([]activityMetrics, error) {
