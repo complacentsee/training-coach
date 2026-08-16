@@ -369,6 +369,12 @@ func (m *metricsDB) has(name string) (bool, error) {
 // fresh or version-bumped DB is the entire archive: the initial backfill IS
 // the reconcile. Permanent decode failures retry each pass (12 ms a piece)
 // and stay visible in the failures table rather than wedging anything.
+//
+// It also PRUNES: a row whose file has left the archive describes an
+// activity that no longer exists, and leaving it behind puts a session on
+// the calendar that opens to a 404. The archive is the authority in both
+// directions. Deleting the whole cache would prune too, but it would take
+// the weather table with it and refetch a thousand lookups for nothing.
 func (m *metricsDB) reconcile(dir string, loc *time.Location, wx *weatherService) {
 	ents, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -380,10 +386,12 @@ func (m *metricsDB) reconcile(dir string, loc *time.Location, wx *weatherService
 	}
 	start := time.Now()
 	imported, failed, present := 0, 0, 0
+	onDisk := make(map[string]bool, len(ents))
 	for _, e := range ents {
 		if e.IsDir() || !validActivityName(e.Name()) {
 			continue
 		}
+		onDisk[e.Name()] = true
 		ok, err := m.has(e.Name())
 		if err != nil {
 			log.Printf("metrics reconcile: %s: %v", e.Name(), err)
@@ -407,10 +415,62 @@ func (m *metricsDB) reconcile(dir string, loc *time.Location, wx *weatherService
 		}
 		imported++
 	}
-	if imported > 0 || failed > 0 {
-		log.Printf("metrics reconcile: %d imported, %d failed, %d already present in %v",
-			imported, failed, present, time.Since(start).Round(time.Millisecond))
+	pruned, err := m.prune(onDisk)
+	if err != nil {
+		log.Printf("metrics reconcile: prune: %v", err)
 	}
+	if imported > 0 || failed > 0 || pruned > 0 {
+		log.Printf("metrics reconcile: %d imported, %d pruned, %d failed, %d already present in %v",
+			imported, pruned, failed, present, time.Since(start).Round(time.Millisecond))
+	}
+}
+
+// prune drops every row for a file no longer in the archive. It refuses to
+// run on an EMPTY listing: a volume that failed to mount reads exactly like
+// an archive someone emptied, and the two want opposite answers. With at
+// least one file present the directory is demonstrably the archive, and
+// anything it does not name is gone.
+func (m *metricsDB) prune(onDisk map[string]bool) (int, error) {
+	if len(onDisk) == 0 {
+		return 0, nil
+	}
+	stale := map[string]bool{} // a name can sit in both tables; prune it once
+	for _, table := range []string{"activities", "failures"} {
+		rows, err := m.r.Query(`SELECT name FROM ` + table)
+		if err != nil {
+			return 0, err
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return 0, err
+			}
+			if !onDisk[name] {
+				stale[name] = true
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+	}
+	if len(stale) == 0 {
+		return 0, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for name := range stale {
+		for _, table := range []string{"activities", "hr_hist", "power_hist", "failures"} {
+			if _, err := m.w.Exec(`DELETE FROM `+table+` WHERE name=?`, name); err != nil {
+				return n, err
+			}
+		}
+		log.Printf("metrics: pruned %s — no longer in the archive", name)
+		n++
+	}
+	return n, nil
 }
 
 /* ── queries ───────────────────────────────────────────────────────────── */

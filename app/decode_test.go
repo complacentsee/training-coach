@@ -452,6 +452,80 @@ func TestReconcileImportsTheArchive(t *testing.T) {
 	}
 }
 
+// TestReconcilePrunesWhatLeftTheArchive: the archive is the authority in
+// both directions. A file that is gone loses its rows — otherwise the
+// calendar keeps offering a session that opens to a 404 — but an archive
+// directory that reads EMPTY prunes nothing, because an unmounted volume
+// and an emptied archive are indistinguishable and want opposite answers.
+func TestReconcilePrunesWhatLeftTheArchive(t *testing.T) {
+	dir := t.TempDir()
+	actDir := filepath.Join(dir, "activities")
+	if err := os.MkdirAll(actDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const kept, gone = "2026-08-01-12-00-00.fit", "2026-08-02-12-00-00.fit"
+	good := tenSecondRun(t)
+	for _, n := range []string{kept, gone} {
+		if err := os.WriteFile(filepath.Join(actDir, n), good, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A file that fails to import leaves a failures row keyed by the same
+	// name; deleting it must take that row too.
+	const bad = "2026-08-03-12-00-00.fit"
+	if err := os.WriteFile(filepath.Join(actDir, bad), fitBytes("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := openMetricsDB(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.close()
+	db.reconcile(actDir, time.UTC, nil)
+
+	hist := func(name string) int {
+		var n int
+		if err := db.r.QueryRow(`SELECT count(*) FROM hr_hist WHERE name=?`, name).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if hist(gone) == 0 {
+		t.Fatal("fixture: no histogram rows to prune")
+	}
+
+	for _, n := range []string{gone, bad} {
+		if err := os.Remove(filepath.Join(actDir, n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.reconcile(actDir, time.UTC, nil)
+
+	if ok, _ := db.has(gone); ok {
+		t.Error("a deleted file kept its activities row")
+	}
+	if n := hist(gone); n != 0 {
+		t.Errorf("a deleted file kept %d histogram rows", n)
+	}
+	if msg, _ := db.failureFor(bad); msg != "" {
+		t.Errorf("a deleted file kept its failure row: %q", msg)
+	}
+	if ok, err := db.has(kept); err != nil || !ok {
+		t.Errorf("the surviving file lost its row (ok=%v err=%v)", ok, err)
+	}
+
+	// Now the dangerous case: every file gone. That reads exactly like a
+	// volume that failed to mount, so nothing is pruned.
+	if err := os.Remove(filepath.Join(actDir, kept)); err != nil {
+		t.Fatal(err)
+	}
+	db.reconcile(actDir, time.UTC, nil)
+	if ok, err := db.has(kept); err != nil || !ok {
+		t.Errorf("an empty archive pruned the cache (ok=%v err=%v)", ok, err)
+	}
+}
+
 // TestSchemaVersionBumpRebuilds: a version mismatch drops the derived
 // tables on open — the migration story is a rebuild, never a script.
 func TestSchemaVersionBumpRebuilds(t *testing.T) {
