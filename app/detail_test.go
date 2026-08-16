@@ -349,8 +349,9 @@ func TestGraderPayloadIsNotThePagePayload(t *testing.T) {
 		"hr": true, "cadence": true, "profile": true, "grade_input": true,
 		"decoupling_pct": true, "power": true, "weather": true,
 		// Added deliberately 16 Aug 2026: where the clock stopped and for
-		// how long, so a note stops guessing at it from the profile.
-		"stops": true, "stopped_s": true,
+		// how long, so a note stops guessing at it from the profile; and the
+		// laps WITH their trigger, so a button press is not read as a rep.
+		"stops": true, "stopped_s": true, "laps": true, "lap_count": true,
 		"first_20min": true,
 	}
 	for k := range got {
@@ -358,9 +359,26 @@ func TestGraderPayloadIsNotThePagePayload(t *testing.T) {
 			t.Errorf("the grader's payload gained %q — the page's builder is detailPayload", k)
 		}
 	}
-	for _, forbidden := range []string{"laps", "track", "polyline", "splits", "paces", "moving_s", "ascent_m"} {
+	// The route NEVER goes: 9 KB of polyline is about 4k tokens of
+	// high-entropy noise per turn for a small model on modest hardware, and
+	// nothing about a grade depends on where the athlete was standing.
+	// "laps" left this list on 16 Aug 2026, deliberately — a grade does
+	// depend on them, and on the trigger that says what each one was.
+	for _, forbidden := range []string{"track", "polyline", "splits", "paces", "moving_s", "ascent_m"} {
 		if _, ok := got[forbidden]; ok {
 			t.Errorf("%q reached the grader", forbidden)
+		}
+	}
+	// And a lap the grader gets carries no position, for the same reason.
+	if laps, ok := got["laps"].([]any); ok && len(laps) > 0 {
+		first, _ := laps[0].(map[string]any)
+		for _, k := range []string{"start", "end", "start_lat", "end_lat"} {
+			if _, bad := first[k]; bad {
+				t.Errorf("a lap carried %q into the grader's context", k)
+			}
+		}
+		if _, ok := first["trigger"]; !ok {
+			t.Error("a lap reached the grader without its trigger, which is the half that says what it was")
 		}
 	}
 }
@@ -1030,5 +1048,58 @@ func TestRouteIsCutAtLapBoundaries(t *testing.T) {
 	// Lap numbers travel so a segment can say which mile it was.
 	if d.Track.Segments[len(d.Track.Segments)-1].Lap == 0 {
 		t.Error("no segment carries a lap number")
+	}
+}
+
+// TestGraderLapsCarryTheirProvenance: a lap means nothing without the
+// trigger that made it. The watch's own auto-lap is a mile split, a manual
+// lap is the athlete pressing the button — twice in two seconds, on
+// 12 Aug 2026 — and a lap driven by a pushed workout carries the index of
+// the step it was. Without that, a 2.4-second press reads as a
+// catastrophically failed rep.
+func TestGraderLapsCarryTheirProvenance(t *testing.T) {
+	dir := t.TempDir()
+	srv := fitTestMuxServer(t, "")
+	srv.s.dataDir = dir
+	const name = "2026-01-13-06-30-00.fit"
+	if rec := post(srv.mux, "/api/activity?name="+name, gpsRun(t, typedef.SubSportGeneric)); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d: %s", rec.Code, rec.Body)
+	}
+	out, code, msg := srv.s.activityMetricsPayload(name)
+	if code != http.StatusOK {
+		t.Fatalf("payload = %d %s", code, msg)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Laps []struct {
+			N        int     `json:"n"`
+			Trigger  string  `json:"trigger"`
+			Step     *int    `json:"step"`
+			Dist     string  `json:"dist"`
+			TimerS   float64 `json:"timer_s"`
+			ElapsedS float64 `json:"elapsed_s"`
+			Pace     string  `json:"pace"`
+			AvgHR    *int    `json:"avg_hr"`
+		} `json:"laps"`
+		LapCount int `json:"lap_count"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.LapCount != 3 || len(got.Laps) != 3 {
+		t.Fatalf("%d laps (count %d), want 3", len(got.Laps), got.LapCount)
+	}
+	if got.Laps[0].Trigger != "distance" || got.Laps[0].Pace == "" {
+		t.Errorf("the auto-lap lost its trigger or its pace: %+v", got.Laps[0])
+	}
+	if s := got.Laps[1].Step; s == nil || *s != 3 {
+		t.Errorf("the pushed workout's lap lost its step index: %v", s)
+	}
+	// The button press: it keeps its clock and it is visibly not a rep.
+	if b := got.Laps[2]; b.Trigger != "manual" || b.TimerS != 1.1 || b.Pace != "" {
+		t.Errorf("the button press reads as something else: %+v", b)
 	}
 }

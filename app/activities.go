@@ -255,6 +255,34 @@ func (s *server) getActivityMetrics(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+// graderLap is one lap as the grader sees it. Deliberately not the page's
+// lapOut: no positions, because a coordinate is noise in a prompt and a
+// precise one is worse than noise; no polyline, ever, because 9 KB is about
+// 4k tokens of high-entropy nothing per turn.
+//
+// Laps are READ fields — the device's own totals — rather than arithmetic
+// this app performs, so they carry no mirror obligation and no gate run:
+// there is no computation here for a second implementation to disagree
+// with. They come from detail.go's decode, which already documents the
+// conventions, rather than from a second implementation of the same walk.
+type graderLap struct {
+	N        int     `json:"n"`
+	Trigger  string  `json:"trigger"`        // distance | manual | time | session_end
+	Step     *int    `json:"step,omitempty"` // the prescribed step, when a pushed workout drove it
+	DistM    float64 `json:"dist_m,omitempty"`
+	Dist     string  `json:"dist,omitempty"`
+	TimerS   float64 `json:"timer_s"`
+	ElapsedS float64 `json:"elapsed_s,omitempty"` // only when it differs: a stop inside the lap
+	Pace     string  `json:"pace,omitempty"`      // runs only
+	AvgHR    *int    `json:"avg_hr,omitempty"`
+	AvgPower *int    `json:"avg_power,omitempty"`
+}
+
+// maxGraderLaps bounds the list. A session with more laps than this is one
+// the count describes better than the enumeration, and the payload has a
+// small model'"'"'s context to sit in.
+const maxGraderLaps = 40
+
 // activityMetricsPayload builds the response for the handler above and for
 // the grader's get_metrics tool — one builder, so the two consumers can
 // never disagree about what an activity measured.
@@ -331,6 +359,11 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		// miles, off by eight minutes and a mile and a half.
 		Stops    []stop `json:"stops,omitempty"`
 		StoppedS int    `json:"stopped_s,omitempty"`
+		// The laps the device recorded, WITH their trigger. Without the
+		// trigger a 2.4-second button press reads as a catastrophically
+		// failed rep — 12 Aug 2026 carries two of them.
+		Laps     []graderLap `json:"laps,omitempty"`
+		LapCount int         `json:"lap_count,omitempty"`
 	}{Name: row.Name, Date: row.Date, Sport: row.Sport, StartUTC: row.StartUTC,
 		ElapsedS: row.ElapsedS, Records: row.Records, DistanceM: row.DistanceM,
 		SHA256:     row.SHA256,
@@ -424,6 +457,39 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 	if streams != nil {
 		out.Profile = sessionProfile(streams, 60, a.Units)
 		out.Stops, out.StoppedS = stopsIn(streams, a.Units)
+	}
+
+	// The laps, from the same bytes. A second decode costs about the time
+	// one LLM turn spends on its first token, and it buys the grader the
+	// difference between a rep and a button press.
+	if kind != "" {
+		if b, err := os.ReadFile(filepath.Join(s.activitiesDir(), name)); err == nil {
+			if d, err := decodeDetail(b); err == nil {
+				out.LapCount = len(d.Laps)
+				for i, l := range d.Laps {
+					if i >= maxGraderLaps {
+						break
+					}
+					gl := graderLap{N: i + 1, Trigger: l.Trigger, Step: l.Step,
+						DistM: pyRound(l.DistM, 1), TimerS: l.TimerS,
+						AvgHR: l.AvgHR, AvgPower: l.AvgPower}
+					if l.DistM > 0 {
+						gl.Dist = Distance(l.DistM).InMeasured(a.Units)
+						if kind == "run" && l.TimerS >= lapPaceFloorS && l.DistM >= lapPaceFloorM {
+							gl.Pace = Pace(l.TimerS / l.DistM).In(a.Units)
+						}
+					}
+					// Elapsed only where it differs from the timer, which is
+					// the whole tell: a stop inside the lap.
+					if l.ElapsedS-l.TimerS > 2 {
+						gl.ElapsedS = l.ElapsedS
+					}
+					out.Laps = append(out.Laps, gl)
+				}
+			} else {
+				log.Printf("activity-metrics %s: laps: %v", name, err)
+			}
+		}
 	}
 
 	// The peak an average hides. A ramp test's whole result is its best
