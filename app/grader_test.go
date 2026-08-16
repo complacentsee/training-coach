@@ -602,6 +602,7 @@ func TestRegradeSupersedesAStaleVerdict(t *testing.T) {
 	if grade.Val == "" {
 		t.Fatal("the re-grade never posted")
 	}
+	awaitIdle(t, g, date)
 	// Append-only: the stale verdict is still in the log, just no longer
 	// the answer.
 	var grades int
@@ -655,6 +656,8 @@ func TestRegradeRefusesWhatItCannotGrade(t *testing.T) {
 		}
 	}
 
+	awaitIdle(t, g, "2026-01-13")
+
 	// Grading switched off is not a client error, and the page must not
 	// offer a button that can only fail.
 	g.cfg.Mode = "off"
@@ -672,6 +675,32 @@ func TestRegradeRefusesWhatItCannotGrade(t *testing.T) {
 	out, _, _ = ts.s.detailPayload(name, "")
 	if !out.CanRegrade {
 		t.Error("the page was not offered a re-grade with grading on")
+	}
+}
+
+// awaitIdle waits for any background grading of these dates to finish. A
+// re-grade returns 202 and runs on, so a test that returns without waiting
+// races its own cleanup: the scripted provider closes, the run's next turn
+// is refused, and TempDir removal trips over a store still being written.
+// Measured as a flake under parallel load, 16 Aug 2026.
+func awaitIdle(t *testing.T, g *grader, dates ...string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for _, date := range dates {
+		started := false
+		for time.Now().Before(deadline) {
+			g.mu.Lock()
+			busy := g.inFlight[date]
+			g.mu.Unlock()
+			if busy {
+				started = true
+			} else if started {
+				break
+			} else if _, done := g.s.store.Grades()[date]; done {
+				break // it ran and finished between two looks
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
 	}
 }
 
@@ -705,6 +734,7 @@ func TestWhatTheAthleteSaysIsRecorded(t *testing.T) {
 			found = true
 		}
 	}
+	awaitIdle(t, g, date)
 	if !found {
 		t.Error("what the athlete said was never recorded")
 	}
