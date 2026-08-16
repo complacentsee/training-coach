@@ -196,7 +196,17 @@ func (s *server) postActivity(w http.ResponseWriter, r *http.Request) {
 	} else if s.grader != nil {
 		// A fresh import is the grading trigger; the grade never blocks
 		// the import, and every skip rule lives with the grader.
-		go s.grader.maybeGrade(m)
+		//
+		// ?now=1 says this is the LAST file of its training day in this
+		// transfer, so there is nothing left to wait for. Only the sender
+		// knows that — the server sees one POST at a time and cannot tell a
+		// finished day from a pause — which is why the settle window exists
+		// at all and why a sender that does know gets to skip it.
+		if q := r.URL.Query().Get("now"); q == "1" || q == "true" {
+			go s.grader.gradeDay(m, 0, false, "")
+		} else {
+			go s.grader.maybeGrade(m)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

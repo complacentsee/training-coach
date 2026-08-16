@@ -130,6 +130,10 @@ const gradeRecentDays = 2
 // the warm-up would be graded and posted before the effort had finished
 // uploading. Three minutes is far longer than a transfer and costs only
 // lateness on a page nobody is watching at that moment.
+//
+// It is a fallback for a sender that cannot say when a day is complete.
+// One that can — the watch page, sending a known list in order — marks the
+// last file of each day with ?now=1 and skips the wait entirely.
 const gradeSettle = 3 * time.Minute
 
 // defaultNotesMax bounds data/grading-notes.md, the athlete-specific overlay

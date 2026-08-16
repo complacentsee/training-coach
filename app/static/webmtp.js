@@ -638,6 +638,15 @@
     sendBtn.disabled = true;
     connectBtn.disabled = true; // no disconnecting mid-transfer
     var pulled = 0, failed = 0, acked = [];
+    /* The server sees one upload at a time and cannot tell a finished
+       training day from a pause between files, so it waits before grading.
+       This page DOES know: it is sending a known list, in order. Mark the
+       last file of each day and that day is graded the moment it lands. */
+    var lastOfDay = {};
+    for (var k = 0; k < pullRows.length; k++) {
+      if (pullRows[k].box.disabled || !pullRows[k].box.checked) continue;
+      lastOfDay[(pullRows[k].act.name || "").slice(0, 10)] = k;
+    }
     for (var i = 0; i < pullRows.length; i++) {
       var pr = pullRows[i];
       if (pr.box.disabled || !pr.box.checked) continue;
@@ -654,7 +663,9 @@
           failed++;
           continue;
         }
-        var resp = await fetch("/api/activity?name=" + encodeURIComponent(pr.act.name), { method: "POST", body: bytes });
+        var complete = lastOfDay[(pr.act.name || "").slice(0, 10)] === i;
+        var resp = await fetch("/api/activity?name=" + encodeURIComponent(pr.act.name) +
+          (complete ? "&now=1" : ""), { method: "POST", body: bytes });
         if (resp.status === 204) {
           rowState(pr.tr, "sent", "saved");
           pulled++;

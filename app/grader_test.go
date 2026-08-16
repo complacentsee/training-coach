@@ -814,3 +814,49 @@ func TestTheDayCarriesItsCurrentGrade(t *testing.T) {
 		t.Error("graded_at did not move, so the page cannot see a same-letter re-grade")
 	}
 }
+
+// TestASenderThatKnowsSkipsTheWait: the settle window exists because the
+// server sees one upload at a time and cannot tell a finished training day
+// from a pause between files. A sender that IS sending a known list in
+// order does know, and says so with ?now=1 — which must grade immediately
+// rather than three minutes later.
+func TestASenderThatKnowsSkipsTheWait(t *testing.T) {
+	const name, date = "2026-01-13-12-00-00.fit", "2026-01-13"
+	srv := scriptedProvider(t, date, name)
+	defer srv.Close()
+	g, ts := graderUnderTest(t, "live", srv.URL)
+	ts.s.grader = g
+	// A settle window long enough that waiting it out would fail the test.
+	g.settle = time.Hour
+
+	rec := post(ts.mux, "/api/activity?name="+name+"&now=1", week2Run(t, 13))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("import = %d %q", rec.Code, rec.Body.String())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := ts.s.store.Grades()[date]; ok {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, ok := ts.s.store.Grades()[date]; !ok {
+		t.Fatal("?now=1 still waited out the settle window")
+	}
+	awaitIdle(t, g, date)
+
+	// And without it, the same import waits: the day stays ungraded.
+	ts2 := fitTestMuxServer(t, t.TempDir())
+	g2 := newGrader(ts2.s, graderConfig{Mode: "live", Provider: "anthropic", Dialect: "anthropic",
+		Model: "m", BaseURL: srv.URL})
+	g2.today = func() time.Time { return time.Date(2026, 1, 14, 0, 0, 0, 0, time.UTC) }
+	g2.settle = time.Hour
+	ts2.s.grader = g2
+	if rec := post(ts2.mux, "/api/activity?name="+name, week2Run(t, 13)); rec.Code != http.StatusNoContent {
+		t.Fatalf("plain import = %d", rec.Code)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if _, ok := ts2.s.store.Grades()[date]; ok {
+		t.Error("a plain import graded without waiting for the rest of the day")
+	}
+}
