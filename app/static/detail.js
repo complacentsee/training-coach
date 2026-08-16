@@ -187,6 +187,7 @@
        and a grade note runs to a paragraph that would push them off a
        phone screen. */
     h += splits(d, run);
+    h += chartSVG(d, mt, run);
 
     if (st.grade) {
       h += '<div class="dgrade"><p class="g-band"><b class="g g' + esc(st.grade.toLowerCase()) +
@@ -217,6 +218,135 @@
     if (full.length < 2) return false;
     var first = full[0].dist_m;
     return full.every(function (l) { return Math.abs(l.dist_m - first) / first < 0.01; });
+  }
+
+  /* The chart, in the trend.js idiom: an SVG built by string concatenation
+     with CSS custom properties for every colour, so it is theme-aware for
+     free and costs no library. Pace and heart rate on a run, watts and heart
+     rate on a ride — the two currencies each kind of session is actually
+     judged in.
+
+     No linked hover: Dreeve gets lap-to-chart linkage cheaply because
+     ECharts emits an index against a parallel array, and here it would be
+     hand-rolled maths against hand-rolled SVG plus a tap gesture designed
+     for a phone. Cut deliberately, per the plan.
+
+     Colours are existing tokens (--accent for the effort, --hard for the
+     heart), not a new ramp: the palette validator this repo used was retired
+     with the documents, and inventing a pair without it is exactly what that
+     rule forbids. */
+  function pct(sorted, p) {
+    if (!sorted.length) return 0;
+    var i = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * p)));
+    return sorted[i];
+  }
+
+  function rangeOf(vals) {
+    var ok = vals.filter(function (v) { return v != null; }).sort(function (a, b) { return a - b; });
+    if (ok.length < 2) return null;
+    var lo = pct(ok, 0.05), hi = pct(ok, 0.95);
+    if (hi <= lo) { lo = ok[0]; hi = ok[ok.length - 1]; }
+    if (hi <= lo) return null;
+    var pad = (hi - lo) * 0.08;
+    return { lo: lo - pad, hi: hi + pad };
+  }
+
+  /* One polyline per unbroken run of samples: a null is where the recording
+     stopped or the athlete did, and a line drawn through it would invent a
+     value nobody recorded. */
+  function segments(secs, vals, x, y) {
+    var out = [], cur = [];
+    for (var i = 0; i < vals.length; i++) {
+      if (vals[i] == null) {
+        if (cur.length > 1) out.push(cur.join(" "));
+        cur = [];
+        continue;
+      }
+      cur.push(x(secs[i]).toFixed(1) + "," + y(vals[i]).toFixed(1));
+    }
+    if (cur.length > 1) out.push(cur.join(" "));
+    return out;
+  }
+
+  function mmss(secs) {
+    var s = Math.round(secs);
+    return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + (s % 60);
+  }
+
+  function chartSVG(d, mt, run) {
+    var c = d.chart;
+    if (!c || !c.secs || c.secs.length < 2) return "";
+    var prim = run ? c.pace : c.watts;
+    var hr = c.hr;
+    var pr = prim && prim.length ? rangeOf(prim) : null;
+    var hrr = hr && hr.length ? rangeOf(hr) : null;
+    if (!pr && !hrr) return "";
+
+    /* Two panels stacked on one clock rather than two lines in one box. On
+       a run they crossed constantly and read as a tangle — and the crossings
+       are not noise, they are his walk breaks, which is exactly the thing
+       worth being able to see. */
+    var W = 360, L = 36, R = 26, T = 8, GAP = 14, BOT = 16;
+    var pw = W - L - R;
+    var panels = [];
+    if (pr) panels.push({ vals: prim, range: pr, colour: "var(--accent)", invert: run,
+                          label: run ? "pace" + (c.unit || "") : "watts", fmt: run ? mmss : Math.round });
+    if (hrr) panels.push({ vals: hr, range: hrr, colour: "var(--hard)", invert: false,
+                           label: "heart rate", fmt: Math.round, hr: true });
+    var ph = panels.length > 1 ? 72 : 110;
+    var H = T + panels.length * ph + (panels.length - 1) * GAP + BOT;
+
+    var span = c.secs[c.secs.length - 1] || 1;
+    var x = function (s) { return L + pw * (s / span); };
+
+    /* The cap the day is judged against, drawn where the heart rate is read
+       and taken from the metrics payload, which resolves it against the
+       anchors as they stand now — the same number the grade quotes. */
+    var cap = null;
+    if (mt && mt.grade_input) cap = mt.grade_input.grade_cap_bpm || mt.grade_input.hr_cap_bpm || null;
+    if (cap && hrr) { hrr.lo = Math.min(hrr.lo, cap - 2); hrr.hi = Math.max(hrr.hi, cap + 2); }
+
+    var g = [];
+    panels.forEach(function (p, i) {
+      var top = T + i * (ph + GAP);
+      var y = function (v) {
+        var f = (v - p.range.lo) / (p.range.hi - p.range.lo);
+        return top + ph * (p.invert ? f : 1 - f);
+      };
+      if (p.hr && cap) {
+        /* Time above the cap is what costs the grade, so that is the region
+           the eye should find first. */
+        var yc = y(cap);
+        g.push('<rect x="' + L + '" y="' + top + '" width="' + pw + '" height="' + Math.max(0, yc - top).toFixed(1) +
+          '" fill="var(--hard)" opacity="0.10"/>');
+        g.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + yc.toFixed(1) + '" y2="' + yc.toFixed(1) +
+          '" stroke="var(--hard)" stroke-width="1" stroke-dasharray="3 3" opacity="0.75"/>');
+        g.push('<text x="' + (L + 3) + '" y="' + (yc - 3).toFixed(1) + '" font-size="9" fill="var(--ink-3)">cap ' + cap + "</text>");
+      }
+      segments(c.secs, p.vals, x, y).forEach(function (pts) {
+        g.push('<polyline points="' + pts + '" fill="none" stroke="' + p.colour +
+          '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>');
+      });
+      [p.range.hi, p.range.lo].forEach(function (v) {
+        g.push('<text x="' + (L - 4) + '" y="' + (y(v) + (v === p.range.hi ? 7 : 0)).toFixed(1) +
+          '" text-anchor="end" font-size="9" fill="var(--ink-3)">' + p.fmt(v) + "</text>");
+      });
+      g.push('<text x="' + (L + pw) + '" y="' + (top - 1) + '" text-anchor="end" font-size="8.5" letter-spacing="0.08em" fill="' + p.colour +
+        '" opacity="0.85">' + esc(p.label.toUpperCase()) + "</text>");
+    });
+
+    // The clock, in the minutes the prescription is written in.
+    var step = span > 3600 ? 900 : span > 1800 ? 600 : 300;
+    for (var s2 = 0; s2 <= span; s2 += step) {
+      if (x(s2) > L + pw - 34) break; // the MINUTES label owns that corner
+      g.push('<text x="' + x(s2).toFixed(1) + '" y="' + (H - 4) + '" text-anchor="middle" font-size="9" fill="var(--ink-3)">' +
+        Math.round(s2 / 60) + "</text>");
+    }
+    g.push('<text x="' + (L + pw) + '" y="' + (H - 4) + '" text-anchor="end" font-size="8.5" fill="var(--ink-3)">MINUTES</text>');
+
+    return '<div class="dchart"><svg viewBox="0 0 ' + W + " " + H + '" width="100%" role="img" aria-label="' +
+      esc(panels.map(function (p) { return p.label; }).join(" and ") + " over the session") + '">' +
+      g.join("") + "</svg></div>";
   }
 
   function splits(d, run) {
