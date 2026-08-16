@@ -244,7 +244,7 @@ func TestTimerMayExceedElapsed(t *testing.T) {
 // simplification, ~1 m worst error.
 func TestPolylineMatchesTheAlgorithm(t *testing.T) {
 	const wantEnc = `_p~iF~ps|U_ulLnnqC_mqNvxq` + "`" + `@`
-	pts := []trackPoint{{38.5, -120.2}, {40.7, -120.95}, {43.252, -126.453}}
+	pts := []trackPoint{{Lat: 38.5, Lon: -120.2}, {Lat: 40.7, Lon: -120.95}, {Lat: 43.252, Lon: -126.453}}
 	if got := encodePolyline(pts); got != wantEnc {
 		t.Fatalf("encodePolyline = %q, want the published example %q", got, wantEnc)
 	}
@@ -253,7 +253,7 @@ func TestPolylineMatchesTheAlgorithm(t *testing.T) {
 	// than the encoding's own resolution.
 	var route []trackPoint
 	for i := 0; i < 500; i++ {
-		route = append(route, trackPoint{44.9484 + float64(i)*0.000173, -93.3405 - float64(i)*0.000211})
+		route = append(route, trackPoint{Lat: 44.9484 + float64(i)*0.000173, Lon: -93.3405 - float64(i)*0.000211})
 	}
 	back := decodePolylineForTest(t, encodePolyline(route))
 	if len(back) != len(route) {
@@ -298,7 +298,7 @@ func decodePolylineForTest(t *testing.T, s string) []trackPoint {
 	for i < len(s) {
 		lat += read()
 		lon += read()
-		out = append(out, trackPoint{float64(lat) / 1e5, float64(lon) / 1e5})
+		out = append(out, trackPoint{Lat: float64(lat) / 1e5, Lon: float64(lon) / 1e5})
 	}
 	return out
 }
@@ -962,5 +962,60 @@ func TestChartBucketsMedianAndBreaks(t *testing.T) {
 		if w != nil && *w != 100 && *w != 250 {
 			t.Errorf("bucket %d carries %d W, which is neither step — the square wave was smoothed", i, *w)
 		}
+	}
+}
+
+// TestRouteIsCutAtLapBoundaries: his outdoor runs are out-and-backs — 57 to
+// 87% of their points retrace themselves within 15 m — so a single stroke
+// says nothing about which stretch was which. The route is served cut at the
+// laps the watch recorded, each segment repeating its predecessor's last
+// point so the drawn line has no hole at the seam.
+func TestRouteIsCutAtLapBoundaries(t *testing.T) {
+	// Half an hour of positions walking north, lapped every ten minutes.
+	var msgs []proto.Message
+	for sec := 0; sec <= 1800; sec += 10 {
+		msgs = append(msgs, mesgdef.NewRecord(nil).
+			SetTimestamp(fixtureT0.Add(time.Duration(sec)*time.Second)).
+			SetHeartRate(150).SetSpeed(3000).
+			SetPositionLat(semicircles(44.9484+float64(sec)*0.00002)).
+			SetPositionLong(semicircles(-93.3405)).ToMesg(nil))
+	}
+	for i, start := range []int{0, 600, 1200} {
+		msgs = append(msgs, lapMsg(start, 600_000, 600_000, 160_934, typedef.LapTriggerDistance).
+			SetMessageIndex(typedef.MessageIndex(i)).ToMesg(nil))
+	}
+	msgs = append(msgs, mesgdef.NewSession(nil).
+		SetSport(typedef.SportRunning).SetStartTime(fixtureT0).
+		SetTimestamp(fixtureT0.Add(time.Minute)).
+		SetTotalElapsedTime(1_800_000).SetTotalTimerTime(1_800_000).
+		SetTotalDistance(482_802).ToMesg(nil))
+
+	d := detailOf(t, encodeActivityFixture(t, msgs...))
+	if len(d.Track.Segments) != 3 {
+		t.Fatalf("%d segments for three laps: %+v", len(d.Track.Segments), d.Track.Segments)
+	}
+	if d.Track == nil || len(d.Track.Segments) < 2 {
+		t.Fatalf("track: %+v", d.Track)
+	}
+	var prevEnd []float64
+	for i, seg := range d.Track.Segments {
+		pts := decodePolylineForTest(t, seg.Polyline)
+		if len(pts) < 2 {
+			t.Errorf("segment %d carries %d points", i, len(pts))
+			continue
+		}
+		if i > 0 {
+			first := []float64{pts[0].Lat, pts[0].Lon}
+			if math.Abs(first[0]-prevEnd[0]) > 1e-5 || math.Abs(first[1]-prevEnd[1]) > 1e-5 {
+				t.Errorf("segment %d starts at %v, not where segment %d ended (%v) — the line has a hole",
+					i, first, i-1, prevEnd)
+			}
+		}
+		last := pts[len(pts)-1]
+		prevEnd = []float64{last.Lat, last.Lon}
+	}
+	// Lap numbers travel so a segment can say which mile it was.
+	if d.Track.Segments[len(d.Track.Segments)-1].Lap == 0 {
+		t.Error("no segment carries a lap number")
 	}
 }

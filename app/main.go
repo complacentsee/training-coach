@@ -53,6 +53,7 @@ type server struct {
 	metrics   *metricsDB
 	weather   *weatherService
 	grader    *grader
+	tiles     *tileService
 	tpl       *template.Template
 	loc       *time.Location // fallback timezone from the flag
 	assets    *assets
@@ -127,6 +128,7 @@ func main() {
 	// Weather is a lookup the grading stack makes and the recording stack
 	// does not; off unless asked for.
 	s.weather = newWeatherService(s.metrics)
+	s.tiles = newTileService(*dataDir)
 	if s.weather.enabled {
 		log.Printf("weather:  lookups on (open-meteo, coarse position)")
 	}
@@ -139,7 +141,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           logging(s.routes()),
+		Handler:           logging(secured(s.routes())),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
@@ -198,6 +200,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/activity", s.postActivity)
 	mux.HandleFunc("GET /api/activity-metrics", s.getActivityMetrics)
 	mux.HandleFunc("GET /api/activity-detail", s.getActivityDetail)
+	mux.HandleFunc("GET /tiles/{z}/{x}/{y}", s.getTile)
 	mux.HandleFunc("GET /api/day", s.getDay)
 	mux.HandleFunc("GET /api/session-history", s.getSessionHistory)
 	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)
@@ -2269,6 +2272,30 @@ func (s *server) render(w http.ResponseWriter, page string, data any) {
 	if err := s.tpl.ExecuteTemplate(w, page, data); err != nil {
 		log.Printf("render %s: %v", page, err)
 	}
+}
+
+// contentPolicy is the browser's own promise that this app talks to nobody
+// else. It was true by construction and enforced by nothing until the map
+// arrived and the temptation to load a tile provider's script became real;
+// now it is a header. Everything the pages need is same-origin — Leaflet is
+// vendored, tiles come through this server, and there is not one inline
+// script or style in the templates, which is what lets the policy stay this
+// tight.
+//
+// frame-ancestors is 'self' rather than 'none' deliberately: the 390px
+// layout harness frames the app in a same-origin iframe to measure it, and a
+// rule that broke the measurement would be a rule nobody could check.
+const contentPolicy = "default-src 'self'; img-src 'self' data:; script-src 'self'; " +
+	"style-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; " +
+	"base-uri 'none'; form-action 'self'; frame-ancestors 'self'"
+
+func secured(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", contentPolicy)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		h.ServeHTTP(w, r)
+	})
 }
 
 func logging(h http.Handler) http.Handler {

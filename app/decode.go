@@ -78,9 +78,18 @@ type activityStreams struct {
 	StartUTC time.Time
 	DistM    *float64 // session total, else the last record's odometer
 
-	// StartLat/StartLon are the first fixed position, in degrees. The only
-	// use is asking what the weather was there: they are read, rounded
-	// coarse, and never stored or served. A trainer ride has none.
+	// StartLat/StartLon are the first fixed position, in degrees. The
+	// REGISTER's only use is asking what the weather was there: rounded to a
+	// tenth of a degree, never stored at full precision, never served from
+	// here. A trainer ride has none.
+	//
+	// The wider promise that once sat here — that this app never serves a
+	// position — was retired on 15 Aug 2026, deliberately and by Adam's
+	// decision: detail.go serves the full track to the activity popover, and
+	// the map draws it. What replaced the promise is the deployment: an
+	// identity-aware tunnel in front, since the app itself authenticates
+	// nobody and the README now says so plainly. The register's own handling
+	// is unchanged — coarse, and only for the weather.
 	StartLat, StartLon *float64
 }
 

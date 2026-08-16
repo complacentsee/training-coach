@@ -37,6 +37,14 @@ Works in Chrome/Edge over USB — no vendor software.
   Zwift `.zwo` for trainer rides); recorded activities pull back into an
   archive on your server. `tools/fit_streams.py` converts an activity for
   analysis.
+- **Activity detail** — one tap on a day opens what you actually did:
+  mile splits, three paces (elapsed, moving, running-only), pace/power/heart
+  rate against the day's cap, and the route on a map. Where the workout was
+  pushed to the watch, each lap is matched to the step it was meant to be.
+- **No third-party requests** — map tiles are fetched by the server and
+  cached on its volume, the map library is vendored, and a Content-Security
+  policy says so. Set `TILE_CONTACT` to a contact string; OpenStreetMap's
+  tile policy asks for one.
 - **Small and self-contained** — one Go binary (standard library only),
   ~18 MB image. The plan lives on a mounted volume, so plan edits go live
   with a file copy and a reload — no rebuild.

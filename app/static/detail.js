@@ -7,6 +7,14 @@
 (function () {
   "use strict";
 
+  /* Leaflet is vendored and lazily loaded — a popover for an indoor ride
+     never pays for it — and its URLs come from the script tag that loaded
+     this file, because assets are content-hashed and only the template knows
+     the hash. */
+  var here = document.currentScript;
+  var vendor = { js: here && here.dataset.leaflet, css: here && here.dataset.leafletCss };
+  var leafletLoading = null;
+
   function esc(s) { return window.AppModal.esc(s); }
   function emph(s) { return window.AppModal.emph(s); }
 
@@ -157,6 +165,12 @@
       h += line + "</p>";
     }
 
+    /* The route, first in the stack. An indoor session has none by
+       construction — the gate is server-side — so this is simply absent
+       there rather than an empty box. */
+    var mapped = d.track && d.track.segments && d.track.segments.length;
+    if (mapped) h += '<div class="dmap"></div>';
+
     /* What it was. Distance and both clocks always; the rest only where the
        file and the register have something to say. */
     var cells = stat("Distance", d.dist) +
@@ -209,6 +223,15 @@
 
     m.body.innerHTML = h;
     bindPicker(m, st);
+    if (mapped) {
+      var el = m.body.querySelector(".dmap");
+      loadLeaflet()
+        .then(function () { drawMap(el, d.track); })
+        .catch(function (e) {
+          el.className = "dmap-off";
+          el.textContent = "The map did not load: " + e.message;
+        });
+    }
   }
 
   /* Uniform means the auto-lap did the lapping: every full lap the same
@@ -371,6 +394,83 @@
     return '<div class="dchart"><svg viewBox="0 0 ' + W + " " + H + '" width="100%" role="img" aria-label="' +
       esc(panels.map(function (p) { return p.label; }).join(" and ") + " over the session") + '">' +
       g.join("") + "</svg></div>";
+  }
+
+  function loadLeaflet() {
+    if (window.L) return Promise.resolve();
+    if (leafletLoading) return leafletLoading;
+    if (!vendor.js) return Promise.reject(new Error("no map library"));
+    leafletLoading = new Promise(function (resolve, reject) {
+      if (vendor.css) {
+        var link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = vendor.css;
+        document.head.appendChild(link);
+      }
+      var el = document.createElement("script");
+      el.src = vendor.js;
+      el.onload = function () { resolve(); };
+      el.onerror = function () { reject(new Error("map library did not load")); };
+      document.head.appendChild(el);
+    });
+    return leafletLoading;
+  }
+
+  /* Google's polyline algorithm, the decoding half. The encoder is in Go and
+     a fixture test pins it against the published example, so this only has
+     to be its inverse. */
+  function decodePolyline(str) {
+    var out = [], lat = 0, lon = 0, i = 0;
+    function read() {
+      var shift = 0, result = 0, b;
+      do {
+        b = str.charCodeAt(i++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20 && i < str.length);
+      return (result & 1) ? ~(result >> 1) : (result >> 1);
+    }
+    while (i < str.length) {
+      lat += read();
+      lon += read();
+      out.push([lat / 1e5, lon / 1e5]);
+    }
+    return out;
+  }
+
+  function token(name, fallback) {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+
+  function drawMap(el, track) {
+    /* Leaflet writes the stroke as an SVG attribute, where a CSS var() does
+       not resolve, so the tokens are read now and baked in. The popover is
+       transient; a theme flipped underneath it is redrawn on the next open. */
+    var colours = [token("--accent", "#3D4B96"), token("--easy", "#00819B")];
+    var map = L.map(el, {
+      zoomControl: true, scrollWheelZoom: false, attributionControl: true,
+    });
+    map.attributionControl.setPrefix("");
+    L.tileLayer("/tiles/{z}/{x}/{y}", {
+      minZoom: 3, maxZoom: 17,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(map);
+
+    var all = [];
+    (track.segments || []).forEach(function (seg, i) {
+      var pts = decodePolyline(seg.polyline);
+      if (pts.length < 2) return;
+      all = all.concat(pts);
+      /* Alternating per lap, because his routes are out-and-backs and an
+         undifferentiated stroke over a line that retraces itself says
+         nothing about which mile is which. */
+      L.polyline(pts, { color: colours[i % colours.length], weight: 3, opacity: 0.9 })
+        .addTo(map)
+        .bindTooltip(seg.lap ? "Lap " + seg.lap : "Before lap 1", { sticky: true });
+    });
+    if (all.length) map.fitBounds(all, { padding: [12, 12] });
+    setTimeout(function () { map.invalidateSize(); }, 60);
   }
 
   function splits(d, run) {

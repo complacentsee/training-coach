@@ -136,7 +136,12 @@ type sample struct {
 	vel   float64 // m/s; 0 when the record carries none
 }
 
-type trackPoint struct{ Lat, Lon float64 }
+// trackPoint carries its clock so the route can be cut at the lap
+// boundaries the watch recorded, rather than guessed at by distance.
+type trackPoint struct {
+	Lat, Lon float64
+	S        int // seconds from the first record
+}
 
 // scaled turns a FIT integer at a given scale into a float, reporting
 // whether the field was present at all.
@@ -326,7 +331,7 @@ func decodeDetailOpt(data []byte, skipCRC bool) (*activityDetail, error) {
 	// The route, and only where the sky reaches.
 	if !out.Indoor {
 		for _, f := range fixes {
-			out.Track = append(out.Track, trackPoint{f.lat, f.lon})
+			out.Track = append(out.Track, trackPoint{f.lat, f.lon, int(math.Round(f.t.Sub(t0).Seconds()))})
 		}
 	}
 	// A file whose session carries no total_elapsed_time still has records:
@@ -439,9 +444,19 @@ type noteOut struct {
 	Note string `json:"note"`
 }
 
-type trackOut struct {
-	Points   int    `json:"points"`
+// trackSeg is one lap's worth of route. The route is served cut at the lap
+// boundaries because his outdoor runs are out-and-backs — measured, 57 to
+// 87% of their points retrace themselves within 15 m — and one
+// undifferentiated stroke over a line that doubles back says nothing about
+// which stretch was which.
+type trackSeg struct {
+	Lap      int    `json:"lap"` // 1-based; 0 is ground covered before lap 1
 	Polyline string `json:"polyline"`
+}
+
+type trackOut struct {
+	Points   int        `json:"points"`
+	Segments []trackSeg `json:"segments"`
 }
 
 type detailOut struct {
@@ -594,7 +609,7 @@ func (s *server) detailPayload(name, blockID string) (*detailOut, int, string) {
 	}
 
 	if len(d.Track) > 0 {
-		out.Track = &trackOut{Points: len(d.Track), Polyline: encodePolyline(d.Track)}
+		out.Track = &trackOut{Points: len(d.Track), Segments: cutByLap(d.Track, d.Laps)}
 	}
 	out.Chart = buildChart(d, u)
 	s.joinPrescription(out, d, blockID)
@@ -645,6 +660,48 @@ func (s *server) getActivityDetail(w http.ResponseWriter, r *http.Request) {
 		log.Printf("activity-detail %s: gzip: %v", out.Name, err)
 	}
 	_ = gz.Close()
+}
+
+// cutByLap splits the route at the lap boundaries the watch recorded. Each
+// segment repeats its predecessor's last point, so the drawn line has no
+// holes at the seams; a recording with no laps comes back as one segment.
+func cutByLap(track []trackPoint, laps []detailLap) []trackSeg {
+	// Boundaries in seconds, from the laps that carry a start.
+	var starts []int
+	for _, l := range laps {
+		if l.DistM > 0 || l.TimerS > 0 {
+			starts = append(starts, l.StartS)
+		}
+	}
+	lapOf := func(sec int) int {
+		n := 0
+		for i, st := range starts {
+			if sec >= st {
+				n = i + 1
+			}
+		}
+		return n
+	}
+
+	var out []trackSeg
+	cur := trackSeg{Lap: lapOf(track[0].S)}
+	var pts []trackPoint
+	for _, p := range track {
+		n := lapOf(p.S)
+		if n != cur.Lap && len(pts) > 0 {
+			pts = append(pts, p) // the seam belongs to both sides
+			cur.Polyline = encodePolyline(pts)
+			out = append(out, cur)
+			cur = trackSeg{Lap: n}
+			pts = []trackPoint{pts[len(pts)-1]}
+		}
+		pts = append(pts, p)
+	}
+	if len(pts) > 1 {
+		cur.Polyline = encodePolyline(pts)
+		out = append(out, cur)
+	}
+	return out
 }
 
 // encodePolyline is Google's polyline algorithm at five decimal places —
