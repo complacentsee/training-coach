@@ -24,7 +24,7 @@
             {{if $c.Note}}title="{{$c.Note}}"{{end}}>
           {{if $c.Grade}}<button type="button" class="g g{{lower $c.Grade}}"
               data-note="{{$c.Note}}" data-grade="{{$c.Grade}}" data-range="{{$c.Range}}"
-              data-when="{{date $c.Date}}" aria-label="Graded {{$c.Grade}} — read why">{{$c.Grade}}</button>{{end}}
+              data-when="{{date $c.Date}}" aria-label="{{if eq (lower $c.Grade) "dnf"}}Not finished — read why{{else}}Graded {{$c.Grade}} — read why{{end}}">{{$c.Grade}}</button>{{end}}
           {{if $c.Session.Tag}}<span class="tag">{{$c.Session.Tag}}</span>{{end}}
           <span class="amt">{{amount $c.Session}}</span>
           <span class="lbl">{{emph $c.Session.Label}}</span>

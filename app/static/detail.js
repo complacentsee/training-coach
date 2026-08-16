@@ -190,7 +190,8 @@
 
     if (st.grade) {
       h += '<div class="dgrade"><p class="g-band"><b class="g g' + esc(st.grade.toLowerCase()) +
-        '">' + esc(st.grade) + "</b> <span>Graded</span></p>" +
+        '">' + esc(st.grade) + "</b> <span>" +
+        (st.grade.toUpperCase() === "DNF" ? "Not finished" : "Graded") + "</span></p>" +
         (st.note ? '<p class="gnote">' + emph(st.note) + "</p>" : "") + "</div>";
     }
 

@@ -36,7 +36,7 @@
        and on the day itself the reasoning is the half worth reading. */}}
   {{if .Grade}}
   <div class="today-grade">
-    <p class="g-band"><b class="g g{{lower .Grade}}">{{.Grade}}</b> <span>Graded</span></p>
+    <p class="g-band"><b class="g g{{lower .Grade}}">{{.Grade}}</b> <span>{{if eq (lower .Grade) "dnf"}}Not finished{{else}}Graded{{end}}</span></p>
     {{if .GradeNote}}<p class="gnote">{{emph .GradeNote}}</p>{{end}}
   </div>
   {{else if .Recorded}}
