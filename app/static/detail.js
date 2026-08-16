@@ -77,7 +77,7 @@
       grade: btn.getAttribute("data-grade") || "",
       note: btn.getAttribute("data-note") || "",
     };
-    var m = window.AppModal.show(longDate(st.date));
+    var m = window.AppModal.show("Activity overview");
     m.body.innerHTML = '<p class="hint">Reading the recording…</p>';
     getJSON("/api/activities?date=" + encodeURIComponent(st.date))
       .then(function (list) {
@@ -146,6 +146,7 @@
     var h = picker(st);
 
     var chips = [];
+    if (st.date) chips.push(esc(longDate(st.date)));
     if (d.sport) chips.push(esc(d.sport));
     if (d.indoor) chips.push("indoor");
     var when = clockOf(d.start_utc);

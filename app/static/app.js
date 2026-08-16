@@ -490,6 +490,11 @@
     /* A real link inside a guide-opening cell — the calendar's FIT download
        — must navigate, not open the popup. */
     if (e.target.closest("a[href]")) return;
+    /* The activity popover owns its own trigger. It sits inside a cell that
+       opens a guide and carries the day's grade note for its own use, so
+       without this both handlers ran: the popover drew itself and the grade
+       popup then overwrote its title with "Grade". */
+    if (e.target.closest("[data-detail]")) return;
     /* A grade letter sits inside a cell that opens a guide, so it is checked
        first: clicking the letter is asking about the grade, not the workout. */
     var gn = e.target.closest("[data-note]");
