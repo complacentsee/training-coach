@@ -113,7 +113,7 @@ func TestGradeEvalBatch(t *testing.T) {
 		// surrounding week is real context a live grade would also have.
 		g.blindDate = date
 		start := time.Now()
-		got, err := g.grade(pick)
+		got, err := g.grade(pick, "")
 		took := time.Since(start).Round(time.Second)
 		run++
 

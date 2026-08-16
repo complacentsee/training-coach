@@ -353,7 +353,7 @@ func TestGradeCases(t *testing.T) {
 		}
 		m := &activityMetrics{Name: c.activity, Date: c.date, Sport: row.Sport}
 		g.blindDate = c.date
-		got, err := g.grade(m)
+		got, err := g.grade(m, "")
 
 		switch {
 		case err != nil:

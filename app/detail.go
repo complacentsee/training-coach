@@ -485,8 +485,17 @@ type detailOut struct {
 	// is what decides whether the page offers one. A button that is always
 	// there and always fails is worse than no button, and grading is off in
 	// a clone with no key. PAGE ONLY — see the payload split above.
-	CanRegrade bool   `json:"can_regrade,omitempty"`
-	SHA256     string `json:"sha256"`
+	CanRegrade bool `json:"can_regrade,omitempty"`
+	// The day's grade as it stands RIGHT NOW. The page reads it from the
+	// calendar cell it was opened from, which is as old as the page; a
+	// re-grade lands seconds later and the popover has to be able to see
+	// that without a reload. GradedAt is what makes the change detectable —
+	// a re-grade can land on the same letter, and only the timestamp says
+	// it is a different verdict. PAGE ONLY.
+	Grade     string `json:"grade,omitempty"`
+	GradeNote string `json:"grade_note,omitempty"`
+	GradedAt  string `json:"graded_at,omitempty"`
+	SHA256    string `json:"sha256"`
 }
 
 // hms is the register's own spelling of a duration, minutes and seconds with
@@ -541,6 +550,10 @@ func (s *server) detailPayload(name, blockID string) (*detailOut, int, string) {
 		SHA256: hex.EncodeToString(sum[:]),
 	}
 	out.CanRegrade = s.grader != nil && s.grader.cfg.Mode != "off"
+	if g, ok := s.store.Grades()[out.Date]; ok {
+		out.Grade, out.GradeNote = g.Val, g.Note
+		out.GradedAt = g.TS.UTC().Format(time.RFC3339)
+	}
 	if d.TimerS > 0 {
 		out.MovingS, out.MovingHMS = d.TimerS, hms(d.TimerS)
 	}

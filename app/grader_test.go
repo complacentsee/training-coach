@@ -273,7 +273,7 @@ func TestGraderNeverPostsPartially(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.grade(m); err == nil || !strings.Contains(err.Error(), "without posting") {
+	if _, err := g.grade(m, ""); err == nil || !strings.Contains(err.Error(), "without posting") {
 		t.Fatalf("err = %v, want a refusal naming the missing post", err)
 	}
 	if _, ok := ts.s.store.Grades()[date]; ok {
@@ -429,7 +429,7 @@ func TestSplitSessionIsGradedAsOneDay(t *testing.T) {
 	g, ts := graderUnderTest(t, "dry", "http://unused.invalid")
 	parts := splitDay(t, ts)
 
-	prompt := g.gradePrompt(parts[0])
+	prompt := g.gradePrompt(parts[0], "")
 	for _, name := range []string{
 		"2026-01-13-08-00-00.fit", "2026-01-13-08-30-00.fit", "2026-01-13-09-30-00.fit",
 	} {
@@ -471,7 +471,7 @@ func TestOneRecordingKeepsItsOldPrompt(t *testing.T) {
 	}
 	want := `Grade the recorded activity "2026-01-13-12-00-00.fit" for 2026-01-13. ` +
 		`Read the prescription and the metrics with the tools, then post exactly one grade.`
-	if got := g.gradePrompt(m); got != want {
+	if got := g.gradePrompt(m, ""); got != want {
 		t.Errorf("single-recording prompt drifted:\n got %q\nwant %q", got, want)
 	}
 }
@@ -672,5 +672,115 @@ func TestRegradeRefusesWhatItCannotGrade(t *testing.T) {
 	out, _, _ = ts.s.detailPayload(name, "")
 	if !out.CanRegrade {
 		t.Error("the page was not offered a re-grade with grading on")
+	}
+}
+
+// TestWhatTheAthleteSaysIsRecorded: a re-grade may carry the athlete's own
+// account of the day, and it goes in the LOG rather than into a prompt and
+// out of existence — "note" is already the kind for free text addressed to
+// the coach, so every later reading of that day sees it, including a human
+// one. The run is also told directly, because a re-grade is usually asked
+// for BECAUSE the last grade missed something.
+func TestWhatTheAthleteSaysIsRecorded(t *testing.T) {
+	const name, date = "2026-01-13-12-00-00.fit", "2026-01-13"
+	const said = "The chain came off at mile 3 and the trainer would not re-engage."
+	srv := scriptedProvider(t, date, name)
+	defer srv.Close()
+	g, ts := graderUnderTest(t, "live", srv.URL)
+	ts.s.grader = g
+	m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"note": said})
+	if rec := post(ts.mux, "/api/regrade?date="+date, body); rec.Code != http.StatusAccepted {
+		t.Fatalf("regrade = %d %q", rec.Code, rec.Body.String())
+	}
+
+	// In the log, immediately — before the grade it informs.
+	var found bool
+	for _, e := range ts.s.store.All() {
+		if e.Kind == "note" && e.Date == date && e.Note == said {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("what the athlete said was never recorded")
+	}
+	// And in the run's own prompt, quoted, not paraphrased.
+	prompt := g.gradePrompt(m, said)
+	if !strings.Contains(prompt, said) {
+		t.Errorf("the run was never told:\n%s", prompt)
+	}
+	// Testimony, not instruction: it must not be handed over as a verdict.
+	if !strings.Contains(prompt, "does not decide the grade by itself") {
+		t.Errorf("the note was passed without its framing:\n%s", prompt)
+	}
+	// A day with one recording and nothing said keeps the byte-identical
+	// prompt the corpus is measured against.
+	if strings.Contains(g.gradePrompt(m, ""), "athlete asked") {
+		t.Error("an empty note still changed the prompt")
+	}
+
+	// Too long is refused before anything is written.
+	long, _ := json.Marshal(map[string]string{"note": strings.Repeat("x", regradeNoteMax+1)})
+	rec := post(ts.mux, "/api/regrade?date="+date, long)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("an oversized note = %d %q", rec.Code, rec.Body.String())
+	}
+	for _, e := range ts.s.store.All() {
+		if e.Kind == "note" && strings.Contains(e.Note, "xxxx") {
+			t.Error("a refused note was written to the log anyway")
+		}
+	}
+}
+
+// TestTheDayCarriesItsCurrentGrade: the popover is opened from a calendar
+// cell rendered whenever the page loaded, so the payload has to carry the
+// verdict as it stands NOW — and graded_at with it, because a re-grade can
+// land on the same letter and only the timestamp says it is a new one.
+func TestTheDayCarriesItsCurrentGrade(t *testing.T) {
+	ts := fitTestMuxServer(t, t.TempDir())
+	const name, date = "2026-01-13-12-00-00.fit", "2026-01-13"
+	body := week2Run(t, 13)
+	if _, err := ts.s.metrics.importOne(name, body, time.UTC, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ts.s.activitiesDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ts.s.activitiesDir(), name), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code, _ := ts.s.detailPayload(name, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail: %d", code)
+	}
+	if out.Grade != "" || out.GradedAt != "" {
+		t.Errorf("an ungraded day claimed a grade: %q at %q", out.Grade, out.GradedAt)
+	}
+
+	if err := ts.s.store.Append(Entry{Date: date, Kind: "grade", Val: "B", Note: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = ts.s.detailPayload(name, "")
+	first := out.GradedAt
+	if out.Grade != "B" || out.GradeNote != "first" || first == "" {
+		t.Fatalf("grade not served: %+v", out)
+	}
+
+	// A re-grade to the SAME letter must still be detectable.
+	time.Sleep(1100 * time.Millisecond) // the log stamps whole seconds
+	if err := ts.s.store.Append(Entry{Date: date, Kind: "grade", Val: "B", Note: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = ts.s.detailPayload(name, "")
+	if out.GradeNote != "second" {
+		t.Errorf("the superseding grade was not served: %q", out.GradeNote)
+	}
+	if out.GradedAt == first {
+		t.Error("graded_at did not move, so the page cannot see a same-letter re-grade")
 	}
 }

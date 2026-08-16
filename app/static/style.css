@@ -461,7 +461,22 @@ td .rec:hover,td .rec:focus-visible{border-color:var(--accent);color:var(--accen
 .dregrade:hover{color:var(--ink-2);border-color:var(--ink-3)}
 .dregrade.arm{border-color:var(--caution);color:var(--caution)}
 .dregrade[disabled]{opacity:.6;cursor:default}
-.dfail{font:700 .62rem/1 var(--mono);color:var(--stop)}
+.dfail{font:700 .62rem/1 var(--mono);color:var(--stop);margin:.4rem 0 0}
+/* The say-something step. It is the pause before an override, so it is
+   allowed to take room; the label says plainly that it is optional. */
+.dsay label{display:block;font:700 .58rem/1.2 var(--mono);letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3);margin:0 0 .3rem}
+.dsay label span{opacity:.7}
+.dsay textarea{width:100%;box-sizing:border-box;padding:.4rem .5rem;
+  border:1px solid var(--rule);border-radius:3px;background:var(--bg);
+  color:var(--ink);font:.8rem/1.4 inherit;resize:vertical}
+.dsay-go{display:flex;gap:.4rem;margin:.4rem 0 0}
+.dgo,.dcancel{padding:.3rem .7rem;border-radius:3px;border:1px solid var(--rule);
+  background:transparent;cursor:pointer;
+  font:700 .62rem/1 var(--mono);letter-spacing:.07em;text-transform:uppercase}
+.dgo{border-color:var(--caution);color:var(--caution)}
+.dcancel{color:var(--ink-3)}
+.dgo[disabled],.dcancel[disabled]{opacity:.6;cursor:default}
 .dchips{margin:0 0 .8rem;font:700 .64rem/1 var(--mono);letter-spacing:.09em;
   text-transform:uppercase;color:var(--ink-3)}
 /* Auto-fit rather than a fixed column count: four stats on a phone, six on a

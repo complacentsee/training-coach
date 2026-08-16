@@ -71,6 +71,7 @@
   function open(btn) {
     if (!window.AppModal) return;
     var st = {
+      trigger: btn,
       date: btn.getAttribute("data-detail") || "",
       sport: btn.getAttribute("data-sport") || "",
       block: btn.getAttribute("data-block") || "",
@@ -148,44 +149,129 @@
     return ((h % 12) || 12) + ":" + m[2] + suffix;
   }
 
-  /* Two clicks, because one click spends real money and overwrites a
-     verdict. The second click starts a run that outlives this popover, so
-     the button becomes a sentence about what is happening rather than a
-     spinner waiting on a request that has already been answered. */
+  /* The re-grade control. A first click opens the form rather than firing:
+     a grade costs money and supersedes a verdict, and the pause is also
+     where the athlete gets to say what the numbers cannot — "the chain came
+     off" is the difference between a DNF and an F, and only he knows it. */
   function bindRegrade(m, st) {
-    var btn = m.body.querySelector(".dregrade");
-    if (!btn) return;
-    var armed = false;
+    var wrap = m.body.querySelector(".dact");
+    if (!wrap) return;
+    var btn = wrap.querySelector(".dregrade");
+    var form = wrap.querySelector(".dsay");
+    var box = wrap.querySelector("textarea");
+    var go = wrap.querySelector(".dgo");
+    var cancel = wrap.querySelector(".dcancel");
+
     btn.addEventListener("click", function () {
-      if (!armed) {
-        armed = true;
-        btn.classList.add("arm");
-        btn.textContent = "Confirm — grade it again";
-        return;
-      }
-      btn.disabled = true;
-      btn.textContent = "Starting…";
-      fetch("/api/regrade?date=" + encodeURIComponent(st.date), { method: "POST" })
+      btn.hidden = true;
+      form.hidden = false;
+      box.focus();
+    });
+    cancel.addEventListener("click", function () {
+      form.hidden = true;
+      btn.hidden = false;
+    });
+
+    go.addEventListener("click", function () {
+      go.disabled = cancel.disabled = box.disabled = true;
+      go.textContent = "Starting…";
+      var before = st.gradedAt || "";
+      fetch("/api/regrade?date=" + encodeURIComponent(st.date), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: box.value }),
+      })
         .then(function (r) {
           if (r.ok) return;
           return r.text().then(function (t) { throw new Error(t.trim() || r.status); });
         })
         .then(function () {
-          btn.parentNode.className = "hint";
-          btn.parentNode.textContent =
-            "Grading. It posts when it finishes — reload the page in a minute to read it.";
+          wrap.className = "dact dwait";
+          wrap.innerHTML = '<p class="hint">Grading…</p>';
+          awaitGrade(m, st, before, wrap);
         })
         .catch(function (e) {
-          btn.disabled = false;
-          btn.classList.remove("arm");
-          btn.textContent = "Re-grade this day";
-          armed = false;
-          var p = document.createElement("span");
+          go.disabled = cancel.disabled = box.disabled = false;
+          go.textContent = "Grade it again";
+          var p = wrap.querySelector(".dfail") || document.createElement("p");
           p.className = "dfail";
-          p.textContent = " " + e.message;
-          btn.parentNode.appendChild(p);
+          p.textContent = e.message;
+          wrap.appendChild(p);
         });
     });
+  }
+
+  /* A grade takes seconds, so the popover waits for it rather than asking
+     for a reload. It polls the detail payload because that is where the
+     day's CURRENT verdict lives; graded_at is what makes the change
+     detectable, since a re-grade may land on the same letter. */
+  function awaitGrade(m, st, before, wrap) {
+    var tries = 0;
+    (function poll() {
+      if (++tries > 60) {                       // two minutes, then say so
+        wrap.innerHTML = '<p class="hint">Still grading. It will be here when you next open this.</p>';
+        return;
+      }
+      setTimeout(function () {
+        getJSON("/api/activity-detail?name=" + encodeURIComponent(st.name) +
+          (st.block ? "&block=" + encodeURIComponent(st.block) : ""))
+          .then(function (d) {
+            if (!d.graded_at || d.graded_at === before) { poll(); return; }
+            st.grade = d.grade || "";
+            st.note = d.grade_note || "";
+            st.gradedAt = d.graded_at;
+            showGrade(m, st);
+            publishGrade(st);
+            wrap.innerHTML = "";
+            wrap.className = "dact";
+          })
+          .catch(function () { poll(); });
+      }, 2000);
+    })();
+  }
+
+  /* Replace the verdict in place, inserting the block when the day had no
+     grade at all before. */
+  function showGrade(m, st) {
+    var html = '<p class="g-band"><b class="g g' + esc(st.grade.toLowerCase()) + '">' +
+      esc(st.grade) + "</b> <span>" +
+      (st.grade.toUpperCase() === "DNF" ? "Not finished" : "Graded") + "</span></p>" +
+      (st.note ? '<p class="gnote">' + emph(st.note) + "</p>" : "");
+    var block = m.body.querySelector(".dgrade");
+    if (!block) {
+      block = document.createElement("div");
+      block.className = "dgrade";
+      var act = m.body.querySelector(".dact");
+      act.parentNode.insertBefore(block, act);
+    }
+    block.innerHTML = html;
+  }
+
+  /* The page behind the popover was rendered before this grade existed.
+     Update the cell it was opened from so closing the popover does not
+     reveal the old verdict — the same markup calendar.html writes. */
+  function publishGrade(st) {
+    var btn = st.trigger;
+    if (!btn) return;
+    btn.setAttribute("data-grade", st.grade);
+    btn.setAttribute("data-note", st.note);
+    var cell = btn.closest ? btn.closest("td") : null;
+    if (!cell) return;
+    cell.classList.add("graded");
+    if (st.note) cell.setAttribute("title", st.note);
+    var chip = cell.querySelector("button.g");
+    if (!chip) {
+      chip = document.createElement("button");
+      chip.type = "button";
+      chip.setAttribute("data-when", longDate(st.date));
+      cell.insertBefore(chip, cell.firstChild);
+    }
+    chip.className = "g g" + st.grade.toLowerCase();
+    chip.textContent = st.grade;
+    chip.setAttribute("data-grade", st.grade);
+    chip.setAttribute("data-note", st.note);
+    chip.setAttribute("aria-label", st.grade.toUpperCase() === "DNF"
+      ? "Not finished — read why" : "Graded " + st.grade + " — read why");
   }
 
   function bindPicker(m, st) {
@@ -205,6 +291,14 @@
 
   function draw(m, st, d, mt) {
     var run = d.sport === "running";
+    /* The payload's grade is CURRENT; st.grade came from a calendar cell
+       rendered whenever the page was loaded. A re-grade lands seconds later
+       and must be visible without one. */
+    if (d.graded_at || d.grade) {
+      st.grade = d.grade || "";
+      st.note = d.grade_note || "";
+      st.gradedAt = d.graded_at || "";
+    }
     var h = picker(st);
 
     var chips = [];
@@ -287,8 +381,14 @@
        prescription was edited, or the day was graded before the rest of it
        had been recorded. Offered only where the server would accept it. */
     if (d.can_regrade && st.date) {
-      h += '<p class="dact"><button type="button" class="dregrade">' +
-        (st.grade ? "Re-grade this day" : "Grade this day") + "</button></p>";
+      h += '<div class="dact"><button type="button" class="dregrade">' +
+        (st.grade ? "Re-grade this day" : "Grade this day") + "</button>" +
+        '<div class="dsay" hidden><label for="dsay">Anything the grader should know?' +
+        ' <span>optional</span></label>' +
+        '<textarea id="dsay" rows="3" maxlength="2000" placeholder="' +
+        'e.g. the chain came off at mile 3 and the trainer would not re-engage"></textarea>' +
+        '<p class="dsay-go"><button type="button" class="dgo">Grade it again</button>' +
+        '<button type="button" class="dcancel">Cancel</button></p></div></div>';
     }
 
     /* What the athlete said about the day, where anything was said. Nothing
