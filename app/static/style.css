@@ -393,10 +393,11 @@ td.graded{box-shadow:inset 2.5px 0 0 currentColor}
 td.skipped .lbl{color:var(--ink-3);text-decoration:line-through}
 td.skipped .amt{color:var(--ink-3)}
 
-/* ── what you did: the recording behind one tap ────────── */
+/* ── view activity: the recording behind one tap ────────── */
 /* The today card's trigger sits where the verdict is, because the verdict is
    what it answers: the letter says how it went, this says what happened. */
 .detline{margin:.9rem 0 0}
+.detline + .today-grade{margin-top:.9rem}
 .detbtn{display:inline-block;padding:.32rem .7rem;border-radius:3px;
   border:1px solid var(--rule);background:transparent;color:var(--ink-2);
   font:700 .64rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}

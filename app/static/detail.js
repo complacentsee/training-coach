@@ -1,4 +1,4 @@
-/* What you actually did, in the shared modal. Reads /api/activity-detail
+/* The recorded activity, in the shared modal. Reads /api/activity-detail
    for the shape of the recording and /api/activity-metrics for the measured
    numbers — the same two payloads a grade is written from, so the page and
    the grade cannot quote different figures. Loaded only by pages that render
