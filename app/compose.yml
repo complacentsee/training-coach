@@ -20,11 +20,24 @@ services:
       # still holds no secret, and what leaves is the position rounded to a
       # tenth of a degree — about eleven km — for the hour a session started.
       WEATHER_LOOKUP: "on"
-    # No env_file, deliberately. This stack does not grade and does not
-    # talk to a model provider: it records what the athlete did and serves
-    # the plan, and it holds no API key to be spent or leaked. Grading runs
-    # on the dev stack, which has its own compose file and its own key.
-    # Restoring that here is a deliberate edit, not a dropped-in file.
+    # This stack grades, as of 16 Aug 2026. It did not before: grading ran on
+    # dev so that live held no key to be spent or leaked, and turning it on
+    # here was always meant to be a deliberate edit rather than a file that
+    # appeared beside the compose one day. This is that edit.
+    #
+    # grader.env is NEVER in the repo. It is created on the server, holds the
+    # GRADER_* config including the API key, and required:false means a clone
+    # without one starts fine with grading simply off — which is what every
+    # test and every dataless checkout depends on.
+    #
+    # What this costs: a real session now posts a real grade to the real log
+    # by itself. That is recoverable by construction — a grade is a later
+    # entry in an append-only log, and the re-grade control supersedes it —
+    # but GRADER_MODE=dry in that file is the setting that watches without
+    # writing, and it is one line away.
+    env_file:
+      - path: grader.env
+        required: false
     ports:
       - "0.0.0.0:9999:8080"
     volumes:
