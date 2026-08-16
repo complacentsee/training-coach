@@ -14,6 +14,11 @@ Calendar: the whole block, weekly volume, and grades as they land.
 
 ![Calendar](docs/calendar.png)
 
+Activity: one tap on a day opens what you actually did — splits, three
+paces, the route, and the day's heart-rate cap drawn on the chart.
+
+![Activity overview](docs/activity.png)
+
 Workouts: everything the plan prescribes, each with a how-to guide.
 
 ![Workouts](docs/workouts.png)
