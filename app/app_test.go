@@ -2956,9 +2956,13 @@ func TestRecordedKindMatchesTheSessionsSport(t *testing.T) {
 // so an absolutely positioned close button scrolls away with the content —
 // on a long popup (a lap table and a grade note) it ends up above the top of
 // the scroll port with no way back. Adam hit exactly that on 15 Aug 2026.
-// The header is sticky and holds the button, and the box carries no top
-// padding of its own, which is what makes the sticky edge line up with the
-// scroll port instead of sitting 1.1rem below it.
+// The header holds the button and sits OUTSIDE the scroller: the box is a
+// flex column that does not scroll, and #modal-body is what scrolls. The box
+// is also clamped to the height of the backdrop, because iOS measures vh
+// against the viewport with the toolbars HIDDEN — a box sized 86vh stands
+// taller than the visible window while the URL bar is up, and a
+// bottom-aligned box then pushes its own header off the top of the screen.
+// Measured in WebKit with the backdrop shortened to stand in for that.
 func TestModalCloseStaysReachable(t *testing.T) {
 	mux := fitTestMux(t, "")
 	body := get(mux, "/", nil).Body.String()
@@ -2978,14 +2982,31 @@ func TestModalCloseStaysReachable(t *testing.T) {
 	if rule == nil {
 		t.Fatal("no .modal-hd rule in the stylesheet")
 	}
-	if !strings.Contains(string(rule), "position:sticky") {
-		t.Errorf(".modal-hd is not sticky, so the close button scrolls away again: %s", rule)
+	if !strings.Contains(string(rule), "flex:none") {
+		t.Errorf(".modal-hd is not a fixed-size flex item, so it can scroll or shrink: %s", rule)
 	}
 	boxRule := regexp.MustCompile(`(?s)\.modal-box\{[^}]*\}`).Find(css)
 	if boxRule == nil {
 		t.Fatal("no .modal-box rule in the stylesheet")
 	}
-	if !strings.Contains(string(boxRule), "padding:0 ") {
-		t.Errorf(".modal-box carries a top padding again, which pins the sticky header below the scroll port and shows a strip of content above it: %s", boxRule)
+	// The scroller must be the BODY, not the box. A sticky header inside the
+	// box satisfied Chrome and did nothing on iOS, where a container with
+	// -webkit-overflow-scrolling:touch carries its sticky children along.
+	if !strings.Contains(string(boxRule), "overflow:hidden") ||
+		strings.Contains(string(boxRule), "overflow-y:auto") {
+		t.Errorf(".modal-box scrolls again, which puts the header back inside the scroller: %s", boxRule)
+	}
+	// The clamp is the half that was actually reported: measured in WebKit
+	// with the backdrop shortened to 600 px against a 726 px box, the close
+	// button sat at -113 px and no tap could reach it.
+	if !strings.Contains(string(boxRule), "min(86dvh,100%)") {
+		t.Errorf(".modal-box is not clamped to the visible window, so on iOS it can stand taller than the screen and push its own header off the top: %s", boxRule)
+	}
+	bodyRule := regexp.MustCompile(`(?s)#modal-body\{[^}]*\}`).Find(css)
+	if bodyRule == nil || !strings.Contains(string(bodyRule), "overflow-y:auto") {
+		t.Errorf("#modal-body is not the scroll container: %s", bodyRule)
+	}
+	if bodyRule != nil && !strings.Contains(string(bodyRule), "min-height:0") {
+		t.Errorf("#modal-body has no min-height:0, so it will grow past the box instead of scrolling: %s", bodyRule)
 	}
 }
