@@ -248,9 +248,14 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location, wx *
 	return a, tx.Commit()
 }
 
-// byDate lists the activities recorded on one training day, in name order.
+// byDate lists the activities recorded on one training day, in name order —
+// which is start-time order, because a device name is a timestamp. It
+// carries distance and elapsed as well as sport: a day is often several
+// recordings (121 dates in this archive), and naming them to the grader
+// means saying how big each one was.
 func (m *metricsDB) byDate(date string) ([]activityMetrics, error) {
-	rows, err := m.r.Query(`SELECT name, date, sport FROM activities WHERE date = ? ORDER BY name`, date)
+	rows, err := m.r.Query(`SELECT name, date, sport, elapsed_s, distance_m
+		FROM activities WHERE date = ? ORDER BY name`, date)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +263,7 @@ func (m *metricsDB) byDate(date string) ([]activityMetrics, error) {
 	var out []activityMetrics
 	for rows.Next() {
 		var a activityMetrics
-		if err := rows.Scan(&a.Name, &a.Date, &a.Sport); err != nil {
+		if err := rows.Scan(&a.Name, &a.Date, &a.Sport, &a.ElapsedS, &a.DistanceM); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

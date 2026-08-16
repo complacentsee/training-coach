@@ -8,9 +8,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,6 +107,10 @@ func graderUnderTest(t *testing.T, mode, baseURL string) (*grader, testServer) {
 		Mode: mode, Provider: "anthropic", Dialect: "anthropic",
 		Model: "m", BaseURL: baseURL,
 	})
+	// No settle window: a test must not sleep out the wait for a split
+	// session's other recordings, and every fixture here is one day's
+	// worth already on disk.
+	g.settle = 0
 	// Pin "today" to Wed 14 Jan 2026, inside the defaults block's week 2 —
 	// in UTC, because that is the defaults athlete's declared timezone and
 	// the frame the grader parses dates in.
@@ -129,7 +135,7 @@ func TestGraderSkipRules(t *testing.T) {
 		{activityMetrics{Name: "a.fit", Date: "2026-03-01", Sport: "running"}, "outside"},
 	}
 	for _, c := range cases {
-		got := g.skipReason(&c.m)
+		got := g.skipReason(&c.m, false)
 		if c.want == "" && got != "" {
 			t.Errorf("%s %s: want eligible, got %q", c.m.Date, c.m.Sport, got)
 		}
@@ -142,7 +148,7 @@ func TestGraderSkipRules(t *testing.T) {
 	if err := ts.s.store.Append(Entry{Date: "2026-01-13", Kind: "grade", Val: "A"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := g.skipReason(&activityMetrics{Name: "a.fit", Date: "2026-01-13", Sport: "running"}); !strings.Contains(got, "already graded") {
+	if got := g.skipReason(&activityMetrics{Name: "a.fit", Date: "2026-01-13", Sport: "running"}, false); !strings.Contains(got, "already graded") {
 		t.Errorf("graded day: %q", got)
 	}
 }
@@ -373,5 +379,298 @@ func TestGradingNotesAreBounded(t *testing.T) {
 		if _, err := graderConfigFromEnv(); err == nil {
 			t.Errorf("GRADER_NOTES_MAX=%q was accepted", bad)
 		}
+	}
+}
+
+/* ── the day, not the file ──────────────────────────────────────────────── */
+
+// runPart is one recording of a split session: a run of secs seconds and
+// distM metres, started at the given hour on 13 Jan 2026.
+func runPart(t *testing.T, hour, secs int, distM float64) []byte {
+	t.Helper()
+	t0 := time.Date(2026, 1, 13, hour, 0, 0, 0, time.UTC)
+	msgs := []proto.Message{mesgdefFileID(t0)}
+	for i := 0; i <= secs; i++ {
+		msgs = append(msgs, recordAt(t0, i, 130, 3000, 80))
+	}
+	msgs = append(msgs, sessionMsg(typedef.SportRunning, uint32(distM*100)))
+	return encodeRaw(t, msgs)
+}
+
+// splitDay imports a warm-up, an effort and a cool-down as three separate
+// recordings of one training day, and returns them oldest first.
+func splitDay(t *testing.T, ts testServer) []*activityMetrics {
+	t.Helper()
+	parts := []struct {
+		name       string
+		hour, secs int
+		distM      float64
+	}{
+		{"2026-01-13-08-00-00.fit", 8, 600, 3200},  // warm-up
+		{"2026-01-13-08-30-00.fit", 8, 1200, 5000}, // the effort
+		{"2026-01-13-09-30-00.fit", 9, 500, 2400},  // cool-down
+	}
+	var out []*activityMetrics
+	for _, p := range parts {
+		m, err := ts.s.metrics.importOne(p.name, runPart(t, p.hour, p.secs, p.distM), time.UTC, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", p.name, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// TestSplitSessionIsGradedAsOneDay: a warm-up, an effort and a cool-down
+// recorded separately are ONE session. The prompt has to name all three, in
+// the order they were run, with the day's totals — the tools can already
+// answer for any filename, so naming them is the whole of what was missing.
+func TestSplitSessionIsGradedAsOneDay(t *testing.T) {
+	g, ts := graderUnderTest(t, "dry", "http://unused.invalid")
+	parts := splitDay(t, ts)
+
+	prompt := g.gradePrompt(parts[0])
+	for _, name := range []string{
+		"2026-01-13-08-00-00.fit", "2026-01-13-08-30-00.fit", "2026-01-13-09-30-00.fit",
+	} {
+		if !strings.Contains(prompt, name) {
+			t.Errorf("prompt never names %s:\n%s", name, prompt)
+		}
+	}
+	// Chronological, because "the first one" and "the last one" are how the
+	// procedure tells a warm-up from an effort.
+	iWarm := strings.Index(prompt, "2026-01-13-08-00-00.fit")
+	iWork := strings.Index(prompt, "2026-01-13-08-30-00.fit")
+	iCool := strings.Index(prompt, "2026-01-13-09-30-00.fit")
+	if !(iWarm < iWork && iWork < iCool) {
+		t.Errorf("recordings out of order (%d, %d, %d):\n%s", iWarm, iWork, iCool, prompt)
+	}
+	// The day's totals are computed here, not left to a language model
+	// adding up miles to decide whether the session was completed.
+	// In the ATHLETE's units — the defaults athlete is metric, and a day
+	// total spelled in miles for someone who thinks in kilometres is the
+	// same bug as hand-copying a figure.
+	if !strings.Contains(prompt, "10.6 km") { // 3200 + 5000 + 2400 m
+		t.Errorf("prompt carries no day total:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "38:20") { // 600 + 1200 + 500 s, plus a second each
+		t.Errorf("prompt carries no total duration:\n%s", prompt)
+	}
+}
+
+// TestOneRecordingKeepsItsOldPrompt: the corpus is graded against that
+// sentence. A day with a single recording must be handed in with the
+// wording it has always had, to the byte — a prompt change is a behaviour
+// change even when it reads like a synonym.
+func TestOneRecordingKeepsItsOldPrompt(t *testing.T) {
+	g, ts := graderUnderTest(t, "dry", "http://unused.invalid")
+	const name = "2026-01-13-12-00-00.fit"
+	m, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `Grade the recorded activity "2026-01-13-12-00-00.fit" for 2026-01-13. ` +
+		`Read the prescription and the metrics with the tools, then post exactly one grade.`
+	if got := g.gradePrompt(m); got != want {
+		t.Errorf("single-recording prompt drifted:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestAWalkIsNotPartOfTheRun: "every appropriate recording" means the ones
+// belonging to the day's session. A walk on a run day is a walk.
+func TestAWalkIsNotPartOfTheRun(t *testing.T) {
+	g, ts := graderUnderTest(t, "dry", "http://unused.invalid")
+	if _, err := ts.s.metrics.importOne("2026-01-13-08-00-00.fit", runPart(t, 8, 600, 3200), time.UTC, nil); err != nil {
+		t.Fatal(err)
+	}
+	walk := encodeRaw(t, append(
+		[]proto.Message{mesgdefFileID(time.Date(2026, 1, 13, 17, 0, 0, 0, time.UTC))},
+		recordAt(time.Date(2026, 1, 13, 17, 0, 0, 0, time.UTC), 0, 90, 500, 50),
+		sessionMsg(typedef.SportWalking, 200_000)))
+	if _, err := ts.s.metrics.importOne("2026-01-13-17-00-00.fit", walk, time.UTC, nil); err != nil {
+		t.Fatal(err)
+	}
+	sess, ok := g.sessionOn("2026-01-13")
+	if !ok {
+		t.Fatal("no session on the pinned day")
+	}
+	acts, err := g.dayRecordings("2026-01-13", sess.Kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acts) != 1 || acts[0].Name != "2026-01-13-08-00-00.fit" {
+		t.Errorf("the walk was counted as part of the run: %+v", acts)
+	}
+}
+
+// TestTheLastRecordingGradesTheDay: the settle window. The warm-up lands
+// first and must stand down — grading on arrival would judge a whole time
+// trial by its warm-up and then lock the effort out, because the posted
+// grade is the idempotency marker.
+func TestTheLastRecordingGradesTheDay(t *testing.T) {
+	const date = "2026-01-13"
+	var mu sync.Mutex
+	var graded []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		// A RUN is a conversation that starts with one message. Counting
+		// requests would count the loop's later turns as extra runs.
+		var turn struct {
+			Messages []struct {
+				Content any `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(body, &turn)
+		if len(turn.Messages) == 1 {
+			mu.Lock()
+			graded = append(graded, string(body))
+			mu.Unlock()
+		}
+		// End the loop: this test is about WHICH import grades the day, not
+		// about the conversation.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"no"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	g, ts := graderUnderTest(t, "dry", srv.URL)
+	g.settle = 150 * time.Millisecond
+	parts := splitDay(t, ts)
+
+	var wg sync.WaitGroup
+	for _, m := range parts {
+		wg.Add(1)
+		go func(m *activityMetrics) { defer wg.Done(); g.maybeGrade(m) }(m)
+		time.Sleep(20 * time.Millisecond) // a transfer delivers them in order
+	}
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(graded) != 1 {
+		t.Fatalf("want exactly one grading run for %s, got %d", date, len(graded))
+	}
+	// And it is the run that knows about all three recordings.
+	for _, name := range []string{"08-00-00", "08-30-00", "09-30-00"} {
+		if !strings.Contains(graded[0], name) {
+			t.Errorf("the surviving run never saw %s", name)
+		}
+	}
+}
+
+// TestRegradeSupersedesAStaleVerdict: the human override. A day that is
+// already graded, and old enough that no import would ever trigger it
+// again, is exactly what a re-grade is for — so force waives those two
+// rules and only those two. The new grade is a LATER entry: the log is
+// append-only, and the earlier verdict stays in the record.
+func TestRegradeSupersedesAStaleVerdict(t *testing.T) {
+	const name, date = "2026-01-13-12-00-00.fit", "2026-01-13"
+	srv := scriptedProvider(t, date, name)
+	defer srv.Close()
+	g, ts := graderUnderTest(t, "live", srv.URL)
+	ts.s.grader = g
+
+	if _, err := ts.s.metrics.importOne(name, week2Run(t, 13), time.UTC, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.s.store.Append(Entry{Date: date, Kind: "grade", Val: "F", Note: "the stale one"}); err != nil {
+		t.Fatal(err)
+	}
+	// The automatic path is now closed for this day, twice over.
+	m := &activityMetrics{Name: name, Date: date, Sport: "running"}
+	if got := g.skipReason(m, false); !strings.Contains(got, "already graded") {
+		t.Fatalf("fixture: want the day closed, got %q", got)
+	}
+	if got := g.skipReason(&activityMetrics{Name: name, Date: "2026-01-10", Sport: "running"}, true); got != "" {
+		t.Errorf("force did not waive the backfill rule: %q", got)
+	}
+
+	rec := post(ts.mux, "/api/regrade?date="+date, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("regrade = %d %q", rec.Code, rec.Body.String())
+	}
+	// It runs in the background; wait for the superseding entry.
+	deadline := time.Now().Add(3 * time.Second)
+	var grade Entry
+	for time.Now().Before(deadline) {
+		if gr, ok := ts.s.store.Grades()[date]; ok && gr.Val != "F" {
+			grade = gr
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if grade.Val == "" {
+		t.Fatal("the re-grade never posted")
+	}
+	// Append-only: the stale verdict is still in the log, just no longer
+	// the answer.
+	var grades int
+	for _, e := range ts.s.store.All() {
+		if e.Kind == "grade" && e.Date == date {
+			grades++
+		}
+	}
+	if grades != 2 {
+		t.Errorf("want the old grade kept and a new one appended, got %d grade entries", grades)
+	}
+}
+
+// TestRegradeRefusesWhatItCannotGrade: force waives the rules that exist to
+// hold the AUTOMATIC path back. It does not invent a session where there is
+// none, and each refusal carries a status that says which kind it is.
+func TestRegradeRefusesWhatItCannotGrade(t *testing.T) {
+	g, ts := graderUnderTest(t, "dry", "http://unused.invalid")
+	ts.s.grader = g
+	const name = "2026-01-13-12-00-00.fit"
+	body := week2Run(t, 13)
+	if _, err := ts.s.metrics.importOne(name, body, time.UTC, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The page payload reads the archived bytes, not the metrics row.
+	if err := os.MkdirAll(ts.s.activitiesDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ts.s.activitiesDir(), name), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		date string
+		code int
+		want string
+	}{
+		{"2026-01-13", http.StatusAccepted, ""},
+		{"2026-01-12", http.StatusBadRequest, "rest day"},         // rest day, nothing recorded
+		{"2026-01-14", http.StatusBadRequest, "nothing matching"}, // a session, no recording
+		{"2026-03-01", http.StatusNotFound, "outside"},            // no such day in the block
+		{"not-a-date", http.StatusBadRequest, "YYYY-MM-DD"},
+	}
+	for _, c := range cases {
+		rec := post(ts.mux, "/api/regrade?date="+c.date, nil)
+		if rec.Code != c.code {
+			t.Errorf("%s: %d %q, want %d", c.date, rec.Code, rec.Body.String(), c.code)
+		}
+		if c.want != "" && !strings.Contains(rec.Body.String(), c.want) {
+			t.Errorf("%s: %q, want ~%q", c.date, rec.Body.String(), c.want)
+		}
+	}
+
+	// Grading switched off is not a client error, and the page must not
+	// offer a button that can only fail.
+	g.cfg.Mode = "off"
+	if rec := post(ts.mux, "/api/regrade?date=2026-01-13", nil); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("mode=off: %d %q", rec.Code, rec.Body.String())
+	}
+	out, code, _ := ts.s.detailPayload(name, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail payload: %d", code)
+	}
+	if out.CanRegrade {
+		t.Error("the page was offered a re-grade with grading switched off")
+	}
+	g.cfg.Mode = "dry"
+	out, _, _ = ts.s.detailPayload(name, "")
+	if !out.CanRegrade {
+		t.Error("the page was not offered a re-grade with grading on")
 	}
 }

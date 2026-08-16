@@ -64,6 +64,13 @@ type activityInfo struct {
 	// row: an unimported file has none, and guessing one from the bytes here
 	// would be a second decode to answer a question the import already did.
 	Sport string `json:"sport,omitempty"`
+	// Dist and Elapsed come with a ?date= listing so a day of several
+	// recordings can be told apart. Sport alone cannot do it: on 51 of this
+	// archive's multi-recording days every file is the same sport, which is
+	// exactly the warm-up / effort / cool-down shape, and three buttons all
+	// reading "running" name nothing.
+	Dist    string `json:"dist,omitempty"`
+	Elapsed string `json:"elapsed_hms,omitempty"`
 }
 
 // isoDatePattern is the shape of a training day everywhere in this app.
@@ -89,13 +96,20 @@ func (s *server) getActivities(w http.ResponseWriter, r *http.Request) {
 	// it a second time. A file whose import failed has no row, so the name
 	// prefix is the fallback and such a day still lists its recording.
 	var sports map[string]string
+	var sizes map[string]activityInfo
 	if date != "" && s.metrics != nil {
 		if rows, err := s.metrics.byDate(date); err != nil {
 			log.Printf("activities %s: %v", date, err)
 		} else {
-			sports = map[string]string{}
+			u := s.ds().Athlete.Units
+			sports, sizes = map[string]string{}, map[string]activityInfo{}
 			for _, a := range rows {
 				sports[a.Name] = a.Sport
+				i := activityInfo{Elapsed: hms(float64(a.ElapsedS))}
+				if a.DistanceM != nil && *a.DistanceM > 0 {
+					i.Dist = Distance(*a.DistanceM).InMeasured(u)
+				}
+				sizes[a.Name] = i
 			}
 		}
 	}
@@ -120,7 +134,9 @@ func (s *server) getActivities(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		list = append(list, activityInfo{Name: e.Name(), Size: info.Size(), Sport: sports[e.Name()]})
+		row := activityInfo{Name: e.Name(), Size: info.Size(), Sport: sports[e.Name()]}
+		row.Dist, row.Elapsed = sizes[e.Name()].Dist, sizes[e.Name()].Elapsed
+		list = append(list, row)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name > list[j].Name })
 	w.Header().Set("Content-Type", "application/json")

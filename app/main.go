@@ -201,6 +201,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/activity-metrics", s.getActivityMetrics)
 	mux.HandleFunc("GET /api/activity-detail", s.getActivityDetail)
 	mux.HandleFunc("GET /tiles/{z}/{x}/{y}", s.getTile)
+	mux.HandleFunc("POST /api/regrade", s.postRegrade)
 	mux.HandleFunc("GET /api/day", s.getDay)
 	mux.HandleFunc("GET /api/session-history", s.getSessionHistory)
 	mux.HandleFunc("GET /api/issue-trend", s.getIssueTrend)

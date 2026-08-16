@@ -117,13 +117,75 @@
     });
   }
 
+  /* One button per recording the day holds. The label has to say WHICH: a
+     split session is three files of the same sport, so the sport names
+     nothing and the start time and the size name everything. Device names
+     are local time, so the clock comes off the name itself. */
   function picker(st) {
     if (st.list.length < 2) return "";
-    return '<div class="dpick">' + st.list.map(function (a) {
-      var lab = (a.sport || "activity") + (a.size ? "" : "");
+    var chronological = st.list.slice().sort(function (a, b) {
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    });
+    return '<div class="dpick">' + chronological.map(function (a) {
+      var bits = [];
+      var t = clockOfName(a.name);
+      if (t) bits.push(t);
+      if (a.dist) bits.push(a.dist);
+      else if (a.elapsed_hms) bits.push(a.elapsed_hms);
+      if (!bits.length) bits.push(a.sport || "activity");
       return '<button type="button" class="dpill' + (a.name === st.name ? " on" : "") +
-        '" data-pick="' + esc(a.name) + '">' + esc(lab) + "</button>";
+        '" data-pick="' + esc(a.name) + '">' + esc(bits.join(" · ")) + "</button>";
     }).join("") + "</div>";
+  }
+
+  /* A device filename is the athlete's local time: 2026-09-26-08-12-04.fit
+     started at 8:12 am. No timezone maths, and correct for a session
+     recorded away from home, which a UTC conversion would not be. */
+  function clockOfName(name) {
+    var m = /^\d{4}-\d{2}-\d{2}-(\d{2})-(\d{2})-\d{2}/.exec(name || "");
+    if (!m) return "";
+    var h = +m[1], suffix = h < 12 ? "a" : "p";
+    return ((h % 12) || 12) + ":" + m[2] + suffix;
+  }
+
+  /* Two clicks, because one click spends real money and overwrites a
+     verdict. The second click starts a run that outlives this popover, so
+     the button becomes a sentence about what is happening rather than a
+     spinner waiting on a request that has already been answered. */
+  function bindRegrade(m, st) {
+    var btn = m.body.querySelector(".dregrade");
+    if (!btn) return;
+    var armed = false;
+    btn.addEventListener("click", function () {
+      if (!armed) {
+        armed = true;
+        btn.classList.add("arm");
+        btn.textContent = "Confirm — grade it again";
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = "Starting…";
+      fetch("/api/regrade?date=" + encodeURIComponent(st.date), { method: "POST" })
+        .then(function (r) {
+          if (r.ok) return;
+          return r.text().then(function (t) { throw new Error(t.trim() || r.status); });
+        })
+        .then(function () {
+          btn.parentNode.className = "hint";
+          btn.parentNode.textContent =
+            "Grading. It posts when it finishes — reload the page in a minute to read it.";
+        })
+        .catch(function (e) {
+          btn.disabled = false;
+          btn.classList.remove("arm");
+          btn.textContent = "Re-grade this day";
+          armed = false;
+          var p = document.createElement("span");
+          p.className = "dfail";
+          p.textContent = " " + e.message;
+          btn.parentNode.appendChild(p);
+        });
+    });
   }
 
   function bindPicker(m, st) {
@@ -221,6 +283,14 @@
         (st.note ? '<p class="gnote">' + emph(st.note) + "</p>" : "") + "</div>";
     }
 
+    /* Re-grade, for a verdict that has gone stale — the anchors moved, the
+       prescription was edited, or the day was graded before the rest of it
+       had been recorded. Offered only where the server would accept it. */
+    if (d.can_regrade && st.date) {
+      h += '<p class="dact"><button type="button" class="dregrade">' +
+        (st.grade ? "Re-grade this day" : "Grade this day") + "</button></p>";
+    }
+
     /* What the athlete said about the day, where anything was said. Nothing
        is rendered when nothing was — no heading, no empty box: a placeholder
        claims a note exists. */
@@ -234,6 +304,7 @@
 
     m.body.innerHTML = h;
     bindPicker(m, st);
+    bindRegrade(m, st);
     if (mapped) {
       var el = m.body.querySelector(".dmap");
       loadLeaflet()

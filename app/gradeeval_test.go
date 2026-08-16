@@ -60,6 +60,7 @@ func TestGradeEvalBatch(t *testing.T) {
 	metrics.reconcile(dir+"/activities", s.ds().Loc, s.weather)
 
 	g := newGrader(s, cfg)
+	g.settle = 0 // the archive is on disk; nothing is still arriving
 
 	// Every date a human graded, oldest first.
 	human := store.Grades()

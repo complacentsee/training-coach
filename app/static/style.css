@@ -452,6 +452,16 @@ td .rec:hover,td .rec:focus-visible{border-color:var(--accent);color:var(--accen
   background:transparent;color:var(--ink-2);cursor:pointer;
   font:700 .62rem/1 var(--mono);letter-spacing:.07em;text-transform:uppercase}
 .dpill.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+/* Re-grade: deliberately quiet. It is an override, not the way the app is
+   meant to be used, and the armed state is the one that shouts. */
+.dact{margin:0 0 .9rem}
+.dregrade{padding:.3rem .7rem;border-radius:3px;border:1px solid var(--rule);
+  background:transparent;color:var(--ink-3);cursor:pointer;
+  font:700 .62rem/1 var(--mono);letter-spacing:.07em;text-transform:uppercase}
+.dregrade:hover{color:var(--ink-2);border-color:var(--ink-3)}
+.dregrade.arm{border-color:var(--caution);color:var(--caution)}
+.dregrade[disabled]{opacity:.6;cursor:default}
+.dfail{font:700 .62rem/1 var(--mono);color:var(--stop)}
 .dchips{margin:0 0 .8rem;font:700 .64rem/1 var(--mono);letter-spacing:.09em;
   text-transform:uppercase;color:var(--ink-3)}
 /* Auto-fit rather than a fixed column count: four stats on a phone, six on a

@@ -481,7 +481,12 @@ type detailOut struct {
 	Session    *sessionOut `json:"session,omitempty"`
 	Chart      *chartOut   `json:"chart,omitempty"`
 	Notes      []noteOut   `json:"notes,omitempty"`
-	SHA256     string      `json:"sha256"`
+	// CanRegrade says the server would accept a re-grade of this day, which
+	// is what decides whether the page offers one. A button that is always
+	// there and always fails is worse than no button, and grading is off in
+	// a clone with no key. PAGE ONLY — see the payload split above.
+	CanRegrade bool   `json:"can_regrade,omitempty"`
+	SHA256     string `json:"sha256"`
 }
 
 // hms is the register's own spelling of a duration, minutes and seconds with
@@ -535,6 +540,7 @@ func (s *server) detailPayload(name, blockID string) (*detailOut, int, string) {
 		DistM: d.DistM, AscentM: d.AscentM,
 		SHA256: hex.EncodeToString(sum[:]),
 	}
+	out.CanRegrade = s.grader != nil && s.grader.cfg.Mode != "off"
 	if d.TimerS > 0 {
 		out.MovingS, out.MovingHMS = d.TimerS, hms(d.TimerS)
 	}

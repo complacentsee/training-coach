@@ -332,6 +332,12 @@ func TestGradeCases(t *testing.T) {
 	dir := casesDir()
 	s, cases := caseServer(t, dir)
 	g := newGrader(s, cfg)
+	g.settle = 0 // the corpus is on disk; nothing is still arriving
+	// One case is one RECORDING graded against a day's prescription. The
+	// fixtures share dates on purpose — seven long runs under 2026-01-10,
+	// both threshold sessions under 2026-01-13 — so the day around a case
+	// is other cases, not the rest of its session.
+	g.soloRecording = true
 
 	var report strings.Builder
 	fmt.Fprintf(&report, "# Grading cases — %s\n\nModel: `%s`\n\n"+

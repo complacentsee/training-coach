@@ -123,6 +123,14 @@ func graderConfigFromEnv() (graderConfig, error) {
 // older than this many days is a backfill, not a fresh session.
 const gradeRecentDays = 2
 
+// gradeSettle is how long an import waits, after it lands, for the rest of
+// its training day to arrive. A watch transfer delivers a split session's
+// files seconds apart and a cloud grade takes about three, so without this
+// the warm-up would be graded and posted before the effort had finished
+// uploading. Three minutes is far longer than a transfer and costs only
+// lateness on a page nobody is watching at that moment.
+const gradeSettle = 3 * time.Minute
+
 // defaultNotesMax bounds data/grading-notes.md, the athlete-specific overlay
 // appended to the embedded procedure. It is the one input to the system prompt
 // with no natural ceiling: it is a hand-edited file read fresh on every run, so
@@ -149,8 +157,22 @@ type grader struct {
 	// log is exactly what an evaluation does.
 	blindDate string
 
+	// settle is how long an import waits for the rest of its day to arrive
+	// before grading. Tests set it to zero.
+	settle time.Duration
+
+	// soloRecording grades the named file alone, never the day around it.
+	// The grading corpus needs this: it is a per-FILE oracle — seven
+	// independent long runs filed under one date, two threshold sessions
+	// under another — so its fixtures share dates by construction, and
+	// assembling those dates into days would grade eighty kilometres
+	// against a thirteen kilometre prescription. Nothing outside a test
+	// sets it; a real athlete's date is a real day.
+	soloRecording bool
+
 	mu       sync.Mutex
 	inFlight map[string]bool // ISO dates being graded right now
+	imports  map[string]int  // ISO date → imports seen, the settle token
 }
 
 func newGrader(s *server, cfg graderConfig) *grader {
@@ -170,15 +192,26 @@ func newGrader(s *server, cfg graderConfig) *grader {
 			MaxTokens:       2048,
 		},
 		today:    func() time.Time { return s.day(s.ds()) },
+		settle:   gradeSettle,
 		inFlight: map[string]bool{},
+		imports:  map[string]int{},
 	}
 }
 
 // maybeGrade applies every skip rule, then grades. Runs in its own
-// goroutine; nothing here can block or fail an import.
-func (g *grader) maybeGrade(m *activityMetrics) {
-	if reason := g.skipReason(m); reason != "" {
+// goroutine; nothing here can block or fail an import. This is the IMPORT
+// path, so it waits out the settle window first.
+func (g *grader) maybeGrade(m *activityMetrics) { g.gradeDay(m, g.settle, false) }
+
+// gradeDay is the one path to a grade. settle is how long to wait for the
+// rest of the day's recordings; force re-grades a day that already has a
+// verdict.
+func (g *grader) gradeDay(m *activityMetrics, settle time.Duration, force bool) {
+	if reason := g.skipReason(m, force); reason != "" {
 		log.Printf("grader: %s (%s): skipped — %s", m.Name, m.Date, reason)
+		return
+	}
+	if settle > 0 && !g.settled(m, settle) {
 		return
 	}
 	g.mu.Lock()
@@ -195,9 +228,113 @@ func (g *grader) maybeGrade(m *activityMetrics) {
 		g.mu.Unlock()
 	}()
 
+	// The wait may have let another import finish the day's grade; re-check
+	// the rules that time can change.
+	if reason := g.skipReason(m, force); reason != "" {
+		log.Printf("grader: %s (%s): skipped — %s", m.Name, m.Date, reason)
+		return
+	}
 	if _, err := g.grade(m); err != nil {
 		log.Printf("grader: %s (%s): FAILED, day left ungraded: %v", m.Name, m.Date, err)
 	}
+}
+
+// settled waits for the day to stop growing, and reports whether THIS
+// import is still the one that should grade it.
+//
+// A split session arrives as several files seconds apart in one transfer,
+// and the first of them is the warm-up. Grading on arrival grades the
+// warm-up against the whole day's prescription and then locks the rest of
+// the day out, because the posted grade is the idempotency marker — a
+// perfect time trial would post DNF on a fifteen-minute jog. So the last
+// import of a day grades it, and the earlier ones stand down. The cost of
+// waiting too long is a later grade; the cost of not waiting is a wrong
+// one.
+func (g *grader) settled(m *activityMetrics, settle time.Duration) bool {
+	g.mu.Lock()
+	g.imports[m.Date]++
+	mine := g.imports[m.Date]
+	g.mu.Unlock()
+
+	time.Sleep(settle)
+
+	g.mu.Lock()
+	latest := g.imports[m.Date]
+	g.mu.Unlock()
+	if latest != mine {
+		log.Printf("grader: %s (%s): another recording landed while waiting — it grades the day", m.Name, m.Date)
+		return false
+	}
+	return true
+}
+
+// regrade is the human override: grade this day again, now, whatever the
+// automatic rules would have decided about it. A grade is a later entry in
+// an append-only log, so re-grading supersedes rather than rewrites — the
+// day's earlier verdict stays in the record where it belongs.
+//
+// Returns the reason it cannot be done and the status that describes it, or
+// ("", 0) when a run has started in the background.
+func (g *grader) regrade(date string) (string, int) {
+	if g.cfg.Mode == "off" {
+		return "grading is switched off", http.StatusServiceUnavailable
+	}
+	sess, ok := g.sessionOn(date)
+	if !ok {
+		return "that date is outside the current block", http.StatusNotFound
+	}
+	acts, err := g.dayRecordings(date, sess.Kind)
+	if err != nil {
+		return "could not read that day's recordings", http.StatusInternalServerError
+	}
+	if len(acts) == 0 {
+		if sess.Kind == KindRest {
+			return "a rest day is never graded", http.StatusBadRequest
+		}
+		return "nothing matching that day's session was recorded", http.StatusBadRequest
+	}
+	g.mu.Lock()
+	running := g.inFlight[date]
+	g.mu.Unlock()
+	if running {
+		return "a grade for that day is already running", http.StatusConflict
+	}
+	// The LAST recording of the day is the one handed in, for the same
+	// reason the settle window picks it: on a split session it is the one
+	// the day ends on. Every other recording is named in the prompt and
+	// reachable by every tool.
+	last := acts[len(acts)-1]
+	if reason := g.skipReason(&last, true); reason != "" {
+		return reason, http.StatusBadRequest
+	}
+	log.Printf("grader: re-grade requested for %s (%d recording(s))", date, len(acts))
+	go g.gradeDay(&last, 0, true)
+	return "", 0
+}
+
+// postRegrade re-grades one training day on request — the answer to a
+// verdict that has gone stale because the anchors moved, the prescription
+// was edited, or the day was graded off the wrong recording. It starts the
+// run and returns: a grade takes seconds against a hosted model and minutes
+// against a local one, and nothing good comes of holding a request open
+// that long.
+func (s *server) postRegrade(w http.ResponseWriter, r *http.Request) {
+	date := r.URL.Query().Get("date")
+	if !isoDatePattern.MatchString(date) {
+		http.Error(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	if s.grader == nil {
+		http.Error(w, "grading is switched off", http.StatusServiceUnavailable)
+		return
+	}
+	if reason, code := s.grader.regrade(date); reason != "" {
+		http.Error(w, reason, code)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "grading", "date": date})
 }
 
 // gradeResult is what a run concluded — returned so a caller can compare it
@@ -209,7 +346,15 @@ type gradeResult struct {
 
 // skipReason is every rule that makes an import not-a-grading-trigger,
 // returned as prose so the log says why.
-func (g *grader) skipReason(m *activityMetrics) string {
+//
+// force is a human asking for this day again. It waives the two rules that
+// exist only to stop the AUTOMATIC path from firing — the day already has a
+// grade, and the day is too old to be a fresh session — because both are
+// exactly what someone re-grading a stale verdict means to override. It
+// waives none of the others: a rest day, a day outside the block and a day
+// whose recordings are the wrong sport have nothing to grade, and saying so
+// is more useful than grading nothing.
+func (g *grader) skipReason(m *activityMetrics, force bool) string {
 	if m.Sport != "running" && m.Sport != "cycling" {
 		return "sport " + m.Sport + " is not graded"
 	}
@@ -219,7 +364,7 @@ func (g *grader) skipReason(m *activityMetrics) string {
 	if err != nil {
 		return "unparseable date"
 	}
-	if date.Before(today.AddDate(0, 0, -gradeRecentDays)) {
+	if !force && date.Before(today.AddDate(0, 0, -gradeRecentDays)) {
 		return "a backfill, not a fresh session"
 	}
 	blk := d.Current(today)
@@ -237,7 +382,7 @@ func (g *grader) skipReason(m *activityMetrics) string {
 	if (m.Sport == "cycling") != sess.Kind.IsBike() {
 		return fmt.Sprintf("recorded %s but the day prescribes %s", m.Sport, sess.Kind)
 	}
-	if _, ok := g.s.store.Grades()[m.Date]; ok {
+	if _, ok := g.s.store.Grades()[m.Date]; ok && !force {
 		return "already graded"
 	}
 	return ""
@@ -253,22 +398,30 @@ func (g *grader) reconcile() {
 		log.Printf("grader reconcile: %v", err)
 		return
 	}
-	seen := map[string]bool{}
-	days, graded := 0, 0
+	// One grade per DAY, from the day's LAST recording — recent() is name
+	// order, which is start order, so a split session's last file wins.
+	// Handing in the first would grade a time trial off its warm-up.
+	var dates []string
+	last := map[string]int{}
 	for i := range acts {
-		if seen[acts[i].Date] {
-			continue
+		if _, ok := last[acts[i].Date]; !ok {
+			dates = append(dates, acts[i].Date)
 		}
-		seen[acts[i].Date] = true
+		last[acts[i].Date] = i
+	}
+	days, graded := 0, 0
+	for _, date := range dates {
+		m := &acts[last[date]]
 		days++
 		// Say why, always. A reconcile that decides silently is
 		// indistinguishable from one that never ran.
-		if reason := g.skipReason(&acts[i]); reason != "" {
-			log.Printf("grader reconcile: %s (%s): skipped — %s", acts[i].Name, acts[i].Date, reason)
+		if reason := g.skipReason(m, false); reason != "" {
+			log.Printf("grader reconcile: %s (%s): skipped — %s", m.Name, m.Date, reason)
 			continue
 		}
 		graded++
-		g.maybeGrade(&acts[i])
+		// No settle: nothing is still arriving for a day already on disk.
+		g.gradeDay(m, 0, false)
 	}
 	log.Printf("grader reconcile: %d activities since %s, %d day(s), %d graded",
 		len(acts), since, days, graded)
@@ -292,9 +445,7 @@ func (g *grader) grade(m *activityMetrics) (*gradeResult, error) {
 	if g.cfg.Dialect == "openai" {
 		turn = g.llm.openaiTurn
 	}
-	prompt := fmt.Sprintf(
-		"Grade the recorded activity %q for %s. Read the prescription and the metrics with the tools, then post exactly one grade.",
-		m.Name, m.Date)
+	prompt := g.gradePrompt(m)
 
 	final, err := runLLMLoop(ctx, turn, g.systemPrompt(), prompt, tools,
 		func() bool { return posted },
@@ -309,6 +460,119 @@ func (g *grader) grade(m *activityMetrics) (*gradeResult, error) {
 	}
 	log.Printf("grader: %s (%s): done (mode=%s)", m.Name, m.Date, g.cfg.Mode)
 	return result, nil
+}
+
+/* ── the day, not the file ──────────────────────────────────────────────
+
+A training day is not always one recording. A time trial is a warm-up, the
+effort, and a cool-down, and an athlete who stops the watch between them has
+recorded three files — 121 dates in this archive carry more than one, and on
+51 of those every recording is the same sport.
+
+The tools were already able to answer for any of them: get_metrics,
+fastest_segments and hr_share_under all take a filename. What was missing was
+any way for the model to learn that the other files exist, because the prompt
+named exactly one. So the prompt names them all, and the arithmetic that
+decides completion is done here rather than left to a language model adding
+up miles.
+
+The instruction lives in the PROMPT and not in the embedded procedure, which
+is a measured choice rather than a tidy one: a paragraph added to the
+procedure is read on every grade, and a corpus run put the cost at about two
+cases in eleven on ordinary single-recording days. In the prompt it appears
+only when the day actually holds several recordings, so a day with one is
+graded against a byte-identical system prompt and a byte-identical user
+prompt — unchanged by construction rather than by measurement.
+
+The recordings are never merged into one stream. Each tool call measures one
+continuous recording, so no drift or decoupling is ever computed across the
+twenty minutes between stopping the warm-up and starting the effort — a
+number that would mean nothing.
+*/
+
+// dayRecordings is every recording on a training day that belongs to the
+// day's session: a graded sport, and the right side of the run/bike split.
+// A walk on a run day is not part of the run.
+func (g *grader) dayRecordings(date string, kind Kind) ([]activityMetrics, error) {
+	rows, err := g.s.metrics.byDate(date)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]activityMetrics, 0, len(rows))
+	for _, a := range rows {
+		if a.Sport != "running" && a.Sport != "cycling" {
+			continue
+		}
+		if (a.Sport == "cycling") != kind.IsBike() {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// gradePrompt names the day's work. A day with ONE recording keeps the
+// wording it has always had, to the byte: the corpus is graded against that
+// sentence, and a prompt change is a behaviour change even when it reads
+// like a synonym.
+func (g *grader) gradePrompt(m *activityMetrics) string {
+	one := fmt.Sprintf(
+		"Grade the recorded activity %q for %s. Read the prescription and the metrics with the tools, then post exactly one grade.",
+		m.Name, m.Date)
+	if g.soloRecording {
+		return one
+	}
+	sess, ok := g.sessionOn(m.Date)
+	if !ok {
+		return one
+	}
+	acts, err := g.dayRecordings(m.Date, sess.Kind)
+	if err != nil || len(acts) < 2 {
+		return one
+	}
+
+	u := g.s.ds().Athlete.Units
+	var b strings.Builder
+	fmt.Fprintf(&b, "Grade the training day %s. It was recorded as %d separate activities, in the order they were run:\n",
+		m.Date, len(acts))
+	totalM, totalS := 0.0, 0
+	for i, a := range acts {
+		fmt.Fprintf(&b, "  %d. %q — %s", i+1, a.Name, clock(a.ElapsedS))
+		if a.DistanceM != nil {
+			fmt.Fprintf(&b, ", %s", Distance(*a.DistanceM).InMeasured(u))
+			totalM += *a.DistanceM
+		}
+		b.WriteString("\n")
+		totalS += a.ElapsedS
+	}
+	fmt.Fprintf(&b, "Together they are ONE session — the day's — totalling %s", clock(totalS))
+	if totalM > 0 {
+		fmt.Fprintf(&b, " and %s", Distance(totalM).InMeasured(u))
+	}
+	b.WriteString(" of recorded work.\n")
+	b.WriteString("Every activity tool takes a filename, so call get_metrics for each of these and judge the day on all of them together. " +
+		"Completion is measured against that total, never against one recording: a warm-up on its own is not a failed session. " +
+		"The prescribed work may sit entirely inside one of them, so look for the repetitions in each rather than only the first or the longest.\n")
+	b.WriteString("Read the prescription and the metrics with the tools, then post exactly one grade for the day.")
+	return b.String()
+}
+
+// sessionOn is the day's prescribed session in the current block.
+func (g *grader) sessionOn(date string) (Session, bool) {
+	d := g.s.ds()
+	when, err := time.ParseInLocation("2006-01-02", date, d.Loc)
+	if err != nil {
+		return Session{}, false
+	}
+	blk := d.Current(g.today())
+	if blk == nil {
+		return Session{}, false
+	}
+	wk, di, ok := blk.Locate(when)
+	if !ok {
+		return Session{}, false
+	}
+	return wk.Days[di], true
 }
 
 // tools are the loop's whole world: the same payloads the API serves, the
