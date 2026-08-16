@@ -332,7 +332,13 @@
        rule and this is a trace, not a number. */
     var wr = c.watts && c.watts.length ? rangeOf(c.watts) : null;
     if (wr) {
-      panels.push({ vals: c.watts, range: wr, colour: "var(--easy)", invert: false,
+      /* The same ink as pace, deliberately. Each trace has its own labelled
+         panel, so a third colour distinguishes nothing — and measured with
+         tools/palette.py, --accent against --easy is dE2000 2.8 under
+         deuteranopia, which is two colours that are one colour. What the
+         chart actually asks a reader to tell apart is the effort trace from
+         the heart-rate trace, and that pair measures 36.8. */
+      panels.push({ vals: c.watts, range: wr, colour: "var(--accent)", invert: false,
                     label: "watts", fmt: Math.round });
     }
     if (hrr) panels.push({ vals: hr, range: hrr, colour: "var(--hard)", invert: false,
