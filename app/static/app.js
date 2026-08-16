@@ -369,7 +369,9 @@
     var h = "";
     if (g) {
       h += '<p class="g-band"><b class="g g' + esc(g.toLowerCase()) + '">' + esc(g) + "</b>" +
-        (range ? " <span>" + esc(range) + " under the cap</span>" : "") + "</p>";
+        (g.toUpperCase() === "DNF"
+          ? " <span>Not finished</span>"
+          : (range ? " <span>" + esc(range) + " under the cap</span>" : "")) + "</p>";
     }
     h += "<p>" + (note ? emph(note) : "No note was recorded with this grade.") + "</p>";
     bodyEl.innerHTML = h;

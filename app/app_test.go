@@ -3010,3 +3010,59 @@ func TestModalCloseStaysReachable(t *testing.T) {
 		t.Errorf("#modal-body has no min-height:0, so it will grow past the box instead of scrolling: %s", bodyRule)
 	}
 }
+
+// TestDNFIsAVerdictNotALetter: a session stopped by something outside the
+// training — a chain off the sprocket, an injury, weather — is not the
+// athlete's failure to grade. It posts as DNF, renders as its own chip
+// rather than as a letter, and says "not finished" wherever a letter would
+// say "graded". Adam's rule, 15 Aug 2026, with the boundary that keeps the
+// committed fixtures honest: a session abandoned through fatigue or choice
+// still takes its letter, because doing the work is what puts an athlete
+// over the cap and a verdict that excused quitting would reward it.
+func TestDNFIsAVerdictNotALetter(t *testing.T) {
+	srv := fitTestMuxServer(t, "")
+	if err := srv.s.store.Append(Entry{
+		Kind: "grade", Date: "2026-01-13", Val: "DNF",
+		Note: "Chain off the sprocket in rep 2; ERG would not re-engage.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(srv.mux, "/calendar", nil).Body.String()
+	if !strings.Contains(body, `class="g gdnf"`) {
+		t.Error("a DNF does not render as its own chip")
+	}
+	if !strings.Contains(body, "Not finished — read why") {
+		t.Error("the calendar still calls a DNF graded")
+	}
+	// The letter bands are untouched by it: DNF has no range, claims no
+	// floor, and must not appear in the legend's own list.
+	d := srv.s.ds()
+	blk := d.Current(srv.s.day(d))
+	if floors := bandFloors(blk.Grading.Bands); floors == nil {
+		t.Error("the legend stopped parsing once DNF existed")
+	}
+	for _, b := range blk.Grading.Bands {
+		if strings.EqualFold(b.Grade, "DNF") {
+			t.Error("DNF turned up as a band with a range, which it does not have")
+		}
+	}
+
+	// The stylesheet has to give it room: the letter chip is a 0.95rem
+	// square and "DNF" is three characters.
+	css, err := staticFS.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(css), ".gdnf") {
+		t.Error("no .gdnf rule, so the verdict renders in a box built for one letter")
+	}
+
+	// And the grader has to know when it applies, or nothing will ever post
+	// one. The boundary is the half worth pinning.
+	for _, want := range []string{"DNF", "outside the training", "fatigue or choice"} {
+		if !strings.Contains(gradingProcedure, want) {
+			t.Errorf("the embedded procedure does not say %q", want)
+		}
+	}
+}

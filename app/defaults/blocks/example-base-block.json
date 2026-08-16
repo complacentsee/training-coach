@@ -94,7 +94,7 @@
     "range": "under 20%"
    }
   ],
-  "footer": "Hover a graded cell for the reasoning.",
+  "footer": "A session stopped by something outside the training \u2014 a mechanical failure, an injury, weather \u2014 reads *DNF* rather than a letter. Hover a graded cell for the reasoning.",
   "cap": "easyCap"
  },
  "weeks": [

@@ -287,6 +287,12 @@ button.g:hover,button.g:focus-visible{opacity:1;border-color:var(--accent);color
   justify-content:center;border-radius:2px;background:var(--sunk);border:1px solid currentColor;
   font-size:.62rem}
 .g-band span{font:.72rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+/* DNF is a verdict rather than a letter: a session stopped by something
+   outside the training — a mechanical failure, an injury, weather — where a
+   letter would grade the athlete for what the day did to them. Muted, wider
+   than a single character, and no letter's colour. */
+.gdnf{color:var(--ink-3);letter-spacing:0}
+td .gdnf,.g-band .gdnf{width:auto;min-width:.95rem;padding:0 .18rem}
 .ga,.gb{color:var(--easy)}
 .gc{color:var(--ink-2)}
 .gd{color:var(--caution)}
