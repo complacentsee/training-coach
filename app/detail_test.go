@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/muktihari/fit/decoder"
 	"github.com/muktihari/fit/profile/mesgdef"
 	"github.com/muktihari/fit/profile/typedef"
+	"github.com/muktihari/fit/profile/untyped/mesgnum"
 	"github.com/muktihari/fit/proto"
 )
 
@@ -102,7 +104,7 @@ func detailOf(t *testing.T, data []byte) *detailOut {
 	if rec := post(srv.mux, "/api/activity?name="+name, data); rec.Code != http.StatusNoContent {
 		t.Fatalf("POST = %d: %s", rec.Code, rec.Body)
 	}
-	out, code, msg := srv.s.detailPayload(name)
+	out, code, msg := srv.s.detailPayload(name, "")
 	if code != http.StatusOK {
 		t.Fatalf("detailPayload = %d %s", code, msg)
 	}
@@ -531,5 +533,268 @@ func TestCalendarOffersTheRecording(t *testing.T) {
 	// still an ordinary cell.
 	if n := strings.Count(body, "data-detail="); n != 1 {
 		t.Errorf("%d triggers, want exactly the recorded day's", n)
+	}
+}
+
+// TestStepIndicesAddressTheEmittedFile: the join reads a lap's
+// wkt_step_index as an index into flattenSteps, so that numbering has to be
+// the one the encoder writes into the file — body-first with the repeat step
+// trailing. Encode a workout with a repeat, decode it back, and hold the two
+// against each other index by index. If they ever disagree the popover shows
+// the wrong step's target beside every rep, silently.
+func TestStepIndicesAddressTheEmittedFile(t *testing.T) {
+	steps := []resolvedStep{
+		{Role: "warmup", Secs: 600},
+		{Repeat: 3, Body: []resolvedStep{
+			{Role: "active", Secs: 240, PaceFast: 0.24, PaceSlow: 0.26},
+			{Role: "recovery", Secs: 120},
+		}},
+		{Role: "cooldown", DistM: 1000},
+	}
+	em := flattenSteps(steps)
+	want := []string{"warmup", "active", "recovery", "REPEAT", "cooldown"}
+	if len(em) != len(want) {
+		t.Fatalf("%d emitted steps, want %d", len(em), len(want))
+	}
+	for i, w := range want {
+		got := em[i].Leaf.Role
+		if em[i].IsRepeat {
+			got = "REPEAT"
+		}
+		if got != w {
+			t.Errorf("emitted %d is %q, want %q", i, got, w)
+		}
+	}
+	if em[1].Group != 1 || em[1].Reps != 3 || em[3].First != 1 || em[3].Times != 3 {
+		t.Errorf("repeat bookkeeping: %+v / %+v", em[1], em[3])
+	}
+
+	w := fitWorkoutFor("W02 Tu Reps", steps, fitSportRunning, 0x1234, fixtureT0)
+	data, err := w.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := decodeWorkoutSteps(t, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dec) != len(em) {
+		t.Fatalf("the file carries %d steps, flattenSteps says %d", len(dec), len(em))
+	}
+	for i, d := range dec {
+		if d.index != i {
+			t.Errorf("step %d carries message_index %d — the join addresses by position", i, d.index)
+		}
+		if em[i].IsRepeat {
+			if d.durationType != fitDurationRepeat {
+				t.Errorf("emitted %d should be the repeat marker, file says duration type %d", i, d.durationType)
+			}
+			continue
+		}
+		if d.intensity != fitIntensities[em[i].Leaf.Role] {
+			t.Errorf("emitted %d is %q, file says intensity %d", i, em[i].Leaf.Role, d.intensity)
+		}
+	}
+}
+
+type decodedStep struct {
+	index        int
+	intensity    uint8
+	durationType uint8
+}
+
+func decodeWorkoutSteps(t *testing.T, data []byte) ([]decodedStep, error) {
+	t.Helper()
+	fit, err := decoder.New(bytes.NewReader(data)).Decode()
+	if err != nil {
+		return nil, err
+	}
+	var out []decodedStep
+	for i := range fit.Messages {
+		m := &fit.Messages[i]
+		if m.Num != mesgnum.WorkoutStep {
+			continue
+		}
+		d := decodedStep{index: -1}
+		for _, f := range m.Fields {
+			switch f.Num {
+			case 254: // message_index
+				d.index = int(f.Value.Uint16())
+			case 7: // intensity
+				d.intensity = f.Value.Uint8()
+			case 1: // duration_type
+				d.durationType = f.Value.Uint8()
+			}
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// steppedRun builds a recording of the example block's quality Tuesday as if
+// the watch had driven the pushed workout: a warm-up lap, then reps and
+// recoveries carrying the step index the file would stamp on each. paces are
+// given per rep in seconds per metre so a test can place a lap inside or
+// outside the step's own band without restating the band.
+func steppedRun(t *testing.T, repPaces []float64) []byte {
+	t.Helper()
+	var msgs []proto.Message
+	sec := 0
+	rec := func(n int) {
+		for i := 0; i < n; i++ {
+			msgs = append(msgs, runRecord(sec, 150, 3000, 85))
+			sec++
+		}
+	}
+	rec(3)
+	lap := func(start, secs int, distM float64, step uint16) proto.Message {
+		return lapMsg(start, uint32(secs*1000), uint32(secs*1000), uint32(distM*100),
+			typedef.LapTriggerTime).
+			SetWktStepIndex(typedef.MessageIndex(step)).
+			SetAvgHeartRate(150).ToMesg(nil)
+	}
+	at := 0
+	msgs = append(msgs, lap(at, 600, 2000, 0)) // the warm-up, step 0
+	at += 600
+	for i, p := range repPaces {
+		secs := 240
+		if i == len(repPaces)-1 && p < 0 { // a negative pace marks a rep cut short
+			secs = 60
+			p = -p
+		}
+		msgs = append(msgs, lap(at, secs, float64(secs)/p, 1)) // step 1: the rep
+		at += secs
+		msgs = append(msgs, lap(at, 120, 300, 2)) // step 2: the recovery
+		at += 120
+	}
+	msgs = append(msgs, mesgdef.NewSession(nil).
+		SetSport(typedef.SportRunning).
+		SetStartTime(fixtureT0).
+		SetTimestamp(fixtureT0.Add(time.Minute)).
+		SetTotalElapsedTime(uint32(at*1000)).
+		SetTotalTimerTime(uint32(at*1000)).
+		SetTotalDistance(800_000).ToMesg(nil))
+	return encodeActivityFixture(t, msgs...)
+}
+
+// TestPrescribedJoinsLapsToSteps is the phase's whole point: a lap the watch
+// drove says which prescribed step it was, and the block says what that step
+// asked for. Prescribed against delivered, rep by rep — the reading a general
+// activity site cannot make, because it does not have the plan.
+func TestPrescribedJoinsLapsToSteps(t *testing.T) {
+	dir := t.TempDir()
+	srv := fitTestMuxServer(t, "")
+	srv.s.dataDir = dir
+
+	// The example block's quality Tuesday: warm-up, then 3 × (4:00 at a pace
+	// band, recovery). Read the band out of the plan rather than restating it.
+	d := srv.s.ds()
+	blk := d.Current(srv.s.day(d))
+	day := time.Date(2026, 1, 13, 0, 0, 0, 0, d.Loc)
+	wk, di, ok := blk.Locate(day)
+	if !ok {
+		t.Skip("the example block does not cover 2026-01-13")
+	}
+	sess := wk.Days[di]
+	rs, err := resolveSteps(blk.ctxFor(d.Athlete, wk.N).forSession(&sess), sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	em := flattenSteps(rs)
+	if len(em) < 3 || em[1].Leaf.Role != "active" || em[1].Leaf.PaceFast == 0 {
+		t.Skipf("the example quality day is no longer a paced repeat: %+v", em)
+	}
+	inBand := (float64(em[1].Leaf.PaceFast) + float64(em[1].Leaf.PaceSlow)) / 2
+	tooSlow := float64(em[1].Leaf.PaceSlow) * 1.15
+
+	const name = "2026-01-13-06-30-00.fit"
+	if rec := post(srv.mux, "/api/activity?name="+name,
+		steppedRun(t, []float64{inBand, tooSlow, -inBand})); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d: %s", rec.Code, rec.Body)
+	}
+	out, code, msg := srv.s.detailPayload(name, "")
+	if code != http.StatusOK {
+		t.Fatalf("detailPayload = %d %s", code, msg)
+	}
+
+	if out.Session == nil || out.Session.RepsAsked != em[1].Reps {
+		t.Fatalf("session: %+v, want the day's %d reps", out.Session, em[1].Reps)
+	}
+	// Two ran the full four minutes; the third was cut off after one.
+	if out.Session.RepsDone != 2 {
+		t.Errorf("reps done = %d, want 2 — the third lap covered a quarter of its step", out.Session.RepsDone)
+	}
+	want := []struct{ label, verdict string }{
+		{"W-up", ""},
+		{"Rep 1", "in"},
+		{"Rec 1", ""},
+		{"Rep 2", "under"},
+		{"Rec 2", ""},
+		{"Rep 3", "short"},
+		{"Rec 3", ""},
+	}
+	if len(out.Laps) != len(want) {
+		t.Fatalf("%d laps, want %d", len(out.Laps), len(want))
+	}
+	for i, w := range want {
+		p := out.Laps[i].Prescribed
+		if p == nil {
+			t.Errorf("lap %d joined to no step", i+1)
+			continue
+		}
+		if p.Label != w.label {
+			t.Errorf("lap %d is %q, want %q", i+1, p.Label, w.label)
+		}
+		if w.verdict != "" && p.Verdict != w.verdict {
+			t.Errorf("lap %d (%s) verdict %q, want %q", i+1, p.Label, p.Verdict, w.verdict)
+		}
+		if p.Label == "Rep 1" && p.Target == "" {
+			t.Error("a rep carries no target, so there is nothing to read it against")
+		}
+	}
+}
+
+// TestJoinDegradesWithoutAPushedWorkout: the join is a bonus, never a
+// requirement. A recording with no step indices — a Zwift ride is one lap
+// with none — still gets its day's prescription named, and every lap stands
+// on its own numbers.
+func TestJoinDegradesWithoutAPushedWorkout(t *testing.T) {
+	dir := t.TempDir()
+	srv := fitTestMuxServer(t, "")
+	srv.s.dataDir = dir
+	const name = "2026-01-13-06-30-00.fit"
+	if rec := post(srv.mux, "/api/activity?name="+name, gpsRun(t, typedef.SubSportGeneric)); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d: %s", rec.Code, rec.Body)
+	}
+	out, code, msg := srv.s.detailPayload(name, "")
+	if code != http.StatusOK {
+		t.Fatalf("detailPayload = %d %s", code, msg)
+	}
+	if out.Session == nil || out.Session.Label == "" {
+		t.Fatal("the day's prescription is not named")
+	}
+	for _, l := range out.Laps {
+		// gpsRun's second lap carries a step index of its own invention; the
+		// join may name it, but nothing here may fail for want of one.
+		_ = l
+	}
+	if out.Session.RepsDone > out.Session.RepsAsked {
+		t.Errorf("more reps delivered than asked: %+v", out.Session)
+	}
+
+	// A ride recorded on a run day is not that day's session: naming its laps
+	// after the run's steps would invent a reading.
+	const bike = "2026-01-13-17-00-00.fit"
+	if rec := post(srv.mux, "/api/activity?name="+bike, bikeFixture(t)); rec.Code != http.StatusNoContent {
+		t.Fatalf("bike POST = %d: %s", rec.Code, rec.Body)
+	}
+	out, code, _ = srv.s.detailPayload(bike, "")
+	if code != http.StatusOK {
+		t.Fatalf("bike detailPayload = %d", code)
+	}
+	for i, l := range out.Laps {
+		if l.Prescribed != nil {
+			t.Errorf("lap %d of a ride was joined to a run day's steps: %+v", i+1, l.Prescribed)
+		}
 	}
 }
