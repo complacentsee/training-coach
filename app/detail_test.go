@@ -348,6 +348,9 @@ func TestGraderPayloadIsNotThePagePayload(t *testing.T) {
 		"distance_m": true, "dist": true, "pace": true, "sha256": true,
 		"hr": true, "cadence": true, "profile": true, "grade_input": true,
 		"decoupling_pct": true, "power": true, "weather": true,
+		// Added deliberately 16 Aug 2026: where the clock stopped and for
+		// how long, so a note stops guessing at it from the profile.
+		"stops": true, "stopped_s": true,
 		"first_20min": true,
 	}
 	for k := range got {

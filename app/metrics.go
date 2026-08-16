@@ -369,6 +369,10 @@ func describedDistance(s *activityStreams) (dist []float64, gaps []int) {
 	n := len(s.Time)
 	dist, gaps = make([]float64, n), make([]int, n)
 	gapS := recordingGapS(s.Time)
+	// A stream with no speed still has gaps to count: a trainer session with
+	// no speed sensor carries Vel nil, and reading it as a distance of zero
+	// is right where reading it at all was a crash.
+	haveVel := len(s.Vel) == n
 	for i := 1; i < n; i++ {
 		dt := s.Time[i] - s.Time[i-1]
 		dist[i], gaps[i] = dist[i-1], gaps[i-1]
@@ -376,7 +380,9 @@ func describedDistance(s *activityStreams) (dist []float64, gaps []int) {
 			gaps[i]++
 			continue
 		}
-		dist[i] += s.Vel[i] * float64(dt)
+		if haveVel {
+			dist[i] += s.Vel[i] * float64(dt)
+		}
 	}
 	return dist, gaps
 }
@@ -635,4 +641,55 @@ func bikeGradeInput(s *activityStreams, lo, hi, cap int) (inBand *float64, secsO
 		secsOver = &n
 	}
 	return inBand, secsOver
+}
+
+// stop is one interruption the RECORDING itself states: an interval the
+// device did not sample through, because the timer stopped. Where it
+// happened is reported in distance as well as in time, because that is how
+// an athlete finds it again — "at 9.3 miles" is a place on a route, where
+// "at 90:49" is a place in a clock nobody replays.
+type stop struct {
+	AtS     int     `json:"at_s"`      // seconds from the first sample
+	AtHMS   string  `json:"at_hms"`    // the same, spoken
+	AtDistM float64 `json:"at_dist_m"` // ground covered before it
+	AtDist  string  `json:"at_dist"`   // the same, in the athlete's units
+	Secs    int     `json:"secs"`
+}
+
+// maxStops bounds the list. A session with more interruptions than this has
+// a story the count tells better than an enumeration.
+const maxStops = 20
+
+// stopsIn finds every recording gap and says where it fell. It reports only
+// what the file states: a gap is the clock stopping, which is auto-pause or
+// a paused watch. Standing still with the timer RUNNING is invisible here
+// and stays invisible — finding it needs a speed threshold, and inventing a
+// movement rule is exactly what this register refuses to do (measured on one
+// walk: a gap rule gives 616 s where a 0.5 m/s threshold gives 957 s against
+// a timer time of 1,204.9 s).
+func stopsIn(s *activityStreams, u Units) ([]stop, int) {
+	if len(s.Time) < 2 {
+		return nil, 0
+	}
+	dist, _ := describedDistance(s)
+	gapS := recordingGapS(s.Time)
+	var out []stop
+	total := 0
+	for i := 1; i < len(s.Time); i++ {
+		dt := s.Time[i] - s.Time[i-1]
+		if dt < gapS {
+			continue
+		}
+		total += dt
+		if len(out) >= maxStops {
+			continue
+		}
+		st := stop{AtS: s.Time[i-1], AtHMS: clock(s.Time[i-1]), Secs: dt}
+		if s.HaveVel {
+			st.AtDistM = pyRound(dist[i-1], 1)
+			st.AtDist = Distance(dist[i-1]).InMeasured(u)
+		}
+		out = append(out, st)
+	}
+	return out, total
 }

@@ -325,6 +325,12 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		GradeInput    map[string]any `json:"grade_input,omitempty"`
 		First20       *first20Out    `json:"first_20min,omitempty"`
 		Profile       []profilePoint `json:"profile,omitempty"`
+		// Where the clock stopped, and how far in. A grade note that says
+		// "a stop around minutes 82-92" is guessing from the profile's
+		// buckets — measured against the file, that stop was 2:34 at 9.34
+		// miles, off by eight minutes and a mile and a half.
+		Stops    []stop `json:"stops,omitempty"`
+		StoppedS int    `json:"stopped_s,omitempty"`
 	}{Name: row.Name, Date: row.Date, Sport: row.Sport, StartUTC: row.StartUTC,
 		ElapsedS: row.ElapsedS, Records: row.Records, DistanceM: row.DistanceM,
 		SHA256:     row.SHA256,
@@ -417,6 +423,7 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 	// so an hour and a three-hour ride both cost about the same to read.
 	if streams != nil {
 		out.Profile = sessionProfile(streams, 60, a.Units)
+		out.Stops, out.StoppedS = stopsIn(streams, a.Units)
 	}
 
 	// The peak an average hides. A ramp test's whole result is its best

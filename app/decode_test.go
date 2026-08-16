@@ -12,6 +12,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1277,5 +1278,72 @@ func TestActivityDate(t *testing.T) {
 	// 2026-08-01 03:00 UTC is the previous evening in Chicago.
 	if d := activityDate("workout.fit", time.Date(2026, 8, 1, 3, 0, 0, 0, time.UTC), chi); d != "2026-07-31" {
 		t.Errorf("tz fallback date = %s", d)
+	}
+}
+
+// TestStopsSayWhereNotJustWhen: a grade note that places a stop from the
+// per-minute profile is guessing — measured against the real file, one such
+// note put a 2:34 stop "around minutes 82-92" when it began at 90:49, 9.34
+// miles in. The register states both, and states distance because that is
+// how an athlete finds the place again.
+func TestStopsSayWhereNotJustWhen(t *testing.T) {
+	// Ten minutes at 3 m/s, a 200 s stop, ten more. The stop begins at
+	// 600 s and 1,800 m — 1.118 miles.
+	s := gappedRun(t, 1, 600, 200, 600, 3, 3)
+	stops, total := stopsIn(s, Imperial)
+	if len(stops) != 1 {
+		t.Fatalf("%d stops, want the one: %+v", len(stops), stops)
+	}
+	st := stops[0]
+	if st.AtS != 600 || st.AtHMS != "10:00" || st.Secs != 200 {
+		t.Errorf("stop at %d s (%q) for %d s, want 600 (10:00) for 200", st.AtS, st.AtHMS, st.Secs)
+	}
+	if math.Abs(st.AtDistM-1800) > 1 {
+		t.Errorf("stop at %.1f m in, want 1,800", st.AtDistM)
+	}
+	if st.AtDist != "1.12 mi" {
+		t.Errorf("stop at %q in, want it spoken in the athlete's units", st.AtDist)
+	}
+	if total != 200 {
+		t.Errorf("stopped total %d s, want 200", total)
+	}
+
+	// The device's own arithmetic is the cross-check: elapsed minus the
+	// timer time is what the watch says it paused for. Where the two
+	// disagree, one of them is being read wrong.
+	d, err := decodeDetail(encodeActivityFixture(t, sessionOnly(t, 1400, 1200)...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.ElapsedS - d.TimerS; got != 200 {
+		t.Errorf("elapsed minus moving = %v, want the 200 s the session states", got)
+	}
+
+	// A gap-free recording has nothing to report, and says nothing.
+	clean := gappedRun(t, 1, 600, 1, 600, 3, 3)
+	if stops, total := stopsIn(clean, Imperial); len(stops) != 0 || total != 0 {
+		t.Errorf("a continuous recording reported %d stops (%d s)", len(stops), total)
+	}
+
+	// A stream with no speed still counts its stops; it just cannot place
+	// them on the ground.
+	noVel := &activityStreams{Time: []int{0, 1, 2, 300, 301}}
+	if stops, total := stopsIn(noVel, Imperial); len(stops) != 1 || total != 298 || stops[0].AtDist != "" {
+		t.Errorf("no-speed stream: %+v total %d", stops, total)
+	}
+}
+
+// sessionOnly is a two-record activity whose SESSION states the clocks, for
+// checking the device's own elapsed-minus-timer arithmetic.
+func sessionOnly(t *testing.T, elapsedS, timerS int) []proto.Message {
+	t.Helper()
+	return []proto.Message{
+		runRecord(0, 140, 3000, 80),
+		runRecord(1, 140, 3000, 80),
+		mesgdef.NewSession(nil).SetSport(typedef.SportRunning).
+			SetStartTime(fixtureT0).SetTimestamp(fixtureT0.Add(time.Minute)).
+			SetTotalElapsedTime(uint32(elapsedS * 1000)).
+			SetTotalTimerTime(uint32(timerS * 1000)).
+			SetTotalDistance(100_00).ToMesg(nil),
 	}
 }
