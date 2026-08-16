@@ -185,7 +185,7 @@ func decodeDetailOpt(data []byte, skipCRC bool) (*activityDetail, error) {
 		lat, lon float64
 	}
 	var fixes []fix
-	var t0 time.Time
+	var t0, tLast time.Time
 	var haveT0 bool
 
 	for dec.Next() {
@@ -207,6 +207,7 @@ func decodeDetailOpt(data []byte, skipCRC bool) (*activityDetail, error) {
 				if !haveT0 {
 					t0, haveT0 = r.Timestamp, true
 				}
+				tLast = r.Timestamp
 				if r.PositionLat != basetype.Sint32Invalid && r.PositionLong != basetype.Sint32Invalid {
 					fixes = append(fixes, fix{r.Timestamp,
 						semicirclesToDegrees(r.PositionLat), semicirclesToDegrees(r.PositionLong)})
@@ -296,10 +297,13 @@ func decodeDetailOpt(data []byte, skipCRC bool) (*activityDetail, error) {
 			out.Track = append(out.Track, trackPoint{f.lat, f.lon})
 		}
 	}
-	// A file with no session message still has records: fall back to the
-	// span the records cover rather than reporting a zero-second activity.
-	if out.ElapsedS == 0 && len(fixes) > 0 {
-		out.ElapsedS = fixes[len(fixes)-1].t.Sub(t0).Seconds()
+	// A file whose session carries no total_elapsed_time still has records:
+	// the span they cover is the honest fallback. It reads off the RECORDS
+	// and not the position fixes, because an indoor ride has none of the
+	// latter — measured on a 1,799 s trainer session that reported "0:00
+	// elapsed" beside 7.77 miles.
+	if out.ElapsedS == 0 && !tLast.IsZero() {
+		out.ElapsedS = tLast.Sub(t0).Seconds()
 	}
 	return out, nil
 }
@@ -395,6 +399,14 @@ type sessionOut struct {
 	RepsWhat  string `json:"reps_what,omitempty"` // what one rep was: "3:00 @ 239-265 W"
 }
 
+// noteOut is one thing the athlete said about the day. Absent entirely when
+// nothing was said: a popover that renders an empty "Notes" heading is
+// telling the reader something was written when nothing was.
+type noteOut struct {
+	Kind string `json:"kind,omitempty"` // note | task | issue | skip — where it was said
+	Note string `json:"note"`
+}
+
 type trackOut struct {
 	Points   int    `json:"points"`
 	Polyline string `json:"polyline"`
@@ -420,6 +432,7 @@ type detailOut struct {
 	Splits     []splitOut  `json:"splits,omitempty"`
 	Track      *trackOut   `json:"track,omitempty"`
 	Session    *sessionOut `json:"session,omitempty"`
+	Notes      []noteOut   `json:"notes,omitempty"`
 	SHA256     string      `json:"sha256"`
 }
 
@@ -551,6 +564,13 @@ func (s *server) detailPayload(name, blockID string) (*detailOut, int, string) {
 		out.Track = &trackOut{Points: len(d.Track), Polyline: encodePolyline(d.Track)}
 	}
 	s.joinPrescription(out, d, blockID)
+	// What the athlete said about the day. On 12 Aug 2026 the recording shows
+	// two of four reps and a 296 s stop inside the second; only the note says
+	// the chain came off and ERG would not re-engage. The numbers cannot
+	// carry that and should not be read as if they could.
+	for _, e := range s.store.NotesOn(out.Date) {
+		out.Notes = append(out.Notes, noteOut{Kind: e.Kind, Note: e.Note})
+	}
 	return out, http.StatusOK, ""
 }
 

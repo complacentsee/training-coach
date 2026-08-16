@@ -798,3 +798,78 @@ func TestJoinDegradesWithoutAPushedWorkout(t *testing.T) {
 		}
 	}
 }
+
+// TestNotesTravelOnlyWhenSomethingWasSaid: the athlete's own account of a
+// day is the half no recording carries — on 12 Aug 2026 the file shows two
+// of four reps and a stop inside the second, and only the note says the
+// chain came off. It travels when it exists, and the key is absent when
+// nothing was said, so a page cannot render a heading over nothing.
+func TestNotesTravelOnlyWhenSomethingWasSaid(t *testing.T) {
+	dir := t.TempDir()
+	srv := fitTestMuxServer(t, "")
+	srv.s.dataDir = dir
+	const name = "2026-01-13-06-30-00.fit"
+	if rec := post(srv.mux, "/api/activity?name="+name, gpsRun(t, typedef.SubSportGeneric)); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d: %s", rec.Code, rec.Body)
+	}
+
+	out, _, _ := srv.s.detailPayload(name, "")
+	if len(out.Notes) != 0 {
+		t.Fatalf("a day nobody wrote about carries %d notes", len(out.Notes))
+	}
+	body := get(srv.mux, "/api/activity-detail?name="+name, nil).Body.String()
+	if strings.Contains(body, `"notes"`) {
+		t.Error("the payload carries an empty notes key, which reads as a note that exists")
+	}
+
+	for _, e := range []Entry{
+		{Kind: "note", Date: "2026-01-13", Note: "Chain came off in rep 2; ERG would not re-engage."},
+		{Kind: "task", Date: "2026-01-13", Key: "session", Val: "done", Note: "legs felt flat"},
+		{Kind: "grade", Date: "2026-01-13", Val: "C", Note: "the verdict, which is not the athlete talking"},
+		{Kind: "note", Date: "2026-01-14", Note: "another day entirely"},
+	} {
+		if err := srv.s.store.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, _, _ = srv.s.detailPayload(name, "")
+	if len(out.Notes) != 2 {
+		t.Fatalf("%d notes, want the day's two: %+v", len(out.Notes), out.Notes)
+	}
+	if !strings.Contains(out.Notes[0].Note, "Chain came off") || out.Notes[1].Kind != "task" {
+		t.Errorf("notes are not the day's own, oldest first: %+v", out.Notes)
+	}
+	for _, n := range out.Notes {
+		if n.Kind == "grade" {
+			t.Error("the grade's note came through as the athlete's account of the day")
+		}
+	}
+}
+
+// TestElapsedFallsBackToTheRecords: a session message that carries no
+// total_elapsed_time is not a zero-second activity. The span of the records
+// is the fallback, and it must not depend on position — an indoor ride has
+// no fixes, and one reported "0:00 elapsed" beside 7.77 miles.
+func TestElapsedFallsBackToTheRecords(t *testing.T) {
+	var msgs []proto.Message
+	for i := 0; i <= 600; i++ {
+		msgs = append(msgs, mesgdef.NewRecord(nil).
+			SetTimestamp(fixtureT0.Add(time.Duration(i)*time.Second)).
+			SetSpeed(7000).SetPower(200).ToMesg(nil))
+	}
+	// A session with a distance and a sport, and no clock of its own.
+	msgs = append(msgs, mesgdef.NewSession(nil).
+		SetSport(typedef.SportCycling).
+		SetSubSport(typedef.SubSportIndoorCycling).
+		SetStartTime(fixtureT0).
+		SetTimestamp(fixtureT0.Add(time.Minute)).
+		SetTotalDistance(420_000).ToMesg(nil))
+
+	d := detailOf(t, encodeActivityFixture(t, msgs...))
+	if d.ElapsedS != 600 || d.ElapsedHMS != "10:00" {
+		t.Errorf("elapsed %v (%q), want the 600 s the records cover", d.ElapsedS, d.ElapsedHMS)
+	}
+	if d.MovingS != 0 {
+		t.Errorf("moving %v — the file states no timer time and none may be invented", d.MovingS)
+	}
+}
