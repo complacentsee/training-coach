@@ -23,7 +23,7 @@
 # from whether the prescribed reps were run, which fastest_segments
 # recovers from the trace (the athlete does not lap his repetitions).
 #
-# The abandoned row expects DNF rather than a letter, per Adam's rule of
+# The abandoned row expects DNF rather than a letter, per the rule of
 # 16 Aug 2026: a session that was not essentially completed — under 90% of
 # the prescribed distance or duration, or a rep short — is DNF whatever the
 # reason, and the note carries why and what the delivered work was worth.

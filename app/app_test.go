@@ -2955,7 +2955,7 @@ func TestRecordedKindMatchesTheSessionsSport(t *testing.T) {
 // TestModalCloseStaysReachable: the popup box is its own scroll container,
 // so an absolutely positioned close button scrolls away with the content —
 // on a long popup (a lap table and a grade note) it ends up above the top of
-// the scroll port with no way back. Adam hit exactly that on 15 Aug 2026.
+// the scroll port with no way back, which the athlete hit on a long popup.
 // The header holds the button and sits OUTSIDE the scroller: the box is a
 // flex column that does not scroll, and #modal-body is what scrolls. The box
 // is also clamped to the height of the backdrop, because iOS measures vh
@@ -3012,7 +3012,7 @@ func TestModalCloseStaysReachable(t *testing.T) {
 }
 
 // TestDNFIsAVerdictNotALetter: a session that was not essentially completed
-// posts as DNF — Adam's rule, revised 16 Aug 2026 to a COMPLETION verdict
+// posts as DNF — revised 16 Aug 2026 to a COMPLETION verdict
 // rather than a cause one: a long run four miles short is DNF exactly as a
 // mechanical failure is, and why it stopped lives in the note along with
 // what the delivered work was worth. A letter is for a session that was
@@ -3060,7 +3060,7 @@ func TestDNFIsAVerdictNotALetter(t *testing.T) {
 	// one. The boundary is the half worth pinning.
 	for _, want := range []string{
 		"DNF", "not essentially completed", "90%", "every prescribed repetition",
-		// The boundary Adam drew on 16 Aug: volume decides DNF, execution
+		// The boundary drawn 16 Aug: volume decides DNF, execution
 		// decides the letter. Ten miles of tempo against ten miles easy is
 		// a completed session graded F.
 		"DNF is for the day that ended early. F is for the day that finished wrong",
@@ -3076,7 +3076,7 @@ func TestDNFIsAVerdictNotALetter(t *testing.T) {
 // to render. Both of those are things app.js's own click handler claims, so
 // without an explicit bail two popups answered one tap: the activity
 // popover drew itself and the grade popup then overwrote its title with
-// "Grade" — which is exactly what Adam saw on 16 Aug 2026.
+// "Grade" — which is exactly what a tap on it produced.
 func TestActivityTriggerOwnsItsClick(t *testing.T) {
 	srv := fitTestMuxServer(t, "")
 	if err := srv.s.store.Append(Entry{

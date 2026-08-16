@@ -5,7 +5,7 @@ package main
 // grade depends on anything decoded here, decode.go and metrics.go remain
 // the authoritative conversion and measurement halves, and there is no
 // python mirror to keep in step. A field joins the register when a grade
-// depends on it, and not before (Adam, 15 Aug 2026).
+// depends on it, and not before (decided 15 Aug 2026).
 //
 // Conversion conventions — change them here or not at all:
 //

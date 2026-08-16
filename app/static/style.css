@@ -218,7 +218,7 @@ td[data-guide]:hover{outline:1px solid var(--accent)}
    hidden — so a box sized in vh stands taller than the window actually shows
    while the URL bar is up, and a bottom-aligned box pushes its own header
    off the top of the screen. That is what put the close button out of reach
-   on Adam's phone on 15 Aug 2026, with the popup scrolled to the top and the
+   on a phone on 15 Aug 2026, with the popup scrolled to the top and the
    × simply not on the screen. Both units are declared: a browser that does
    not know dvh keeps the vh line. */
 .modal{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.55);
@@ -241,7 +241,7 @@ td[data-guide]:hover{outline:1px solid var(--accent)}
    in the corner the × scrolled away with the content, and a long popup left
    no way out but the backdrop. Reported 15 Aug 2026 and fixed twice: making
    the header sticky cured the scroll-away, which was real and measurable in
-   both engines, but not the thing Adam hit — that was the box standing
+   both engines, but not the thing reported — that was the box standing
    taller than the window, above. */
 .modal-hd{flex:none;display:flex;align-items:flex-start;gap:.5rem;
   background:var(--surface);margin:0;padding:1.1rem 1.2rem .5rem}
