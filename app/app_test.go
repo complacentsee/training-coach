@@ -3058,7 +3058,13 @@ func TestDNFIsAVerdictNotALetter(t *testing.T) {
 
 	// And the grader has to know when it applies, or nothing will ever post
 	// one. The boundary is the half worth pinning.
-	for _, want := range []string{"DNF", "not essentially completed", "90%", "every prescribed repetition"} {
+	for _, want := range []string{
+		"DNF", "not essentially completed", "90%", "every prescribed repetition",
+		// The boundary Adam drew on 16 Aug: volume decides DNF, execution
+		// decides the letter. Ten miles of tempo against ten miles easy is
+		// a completed session graded F.
+		"DNF is for the day that ended early. F is for the day that finished wrong",
+	} {
 		if !strings.Contains(gradingProcedure, want) {
 			t.Errorf("the embedded procedure does not say %q", want)
 		}
