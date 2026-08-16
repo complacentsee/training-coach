@@ -276,11 +276,9 @@
   function chartSVG(d, mt, run) {
     var c = d.chart;
     if (!c || !c.secs || c.secs.length < 2) return "";
-    var prim = run ? c.pace : c.watts;
     var hr = c.hr;
-    var pr = prim && prim.length ? rangeOf(prim) : null;
+    var pr = run && c.pace && c.pace.length ? rangeOf(c.pace) : null;
     var hrr = hr && hr.length ? rangeOf(hr) : null;
-    if (!pr && !hrr) return "";
 
     /* Two panels stacked on one clock rather than two lines in one box. On
        a run they crossed constantly and read as a tangle — and the crossings
@@ -289,11 +287,24 @@
     var W = 360, L = 36, R = 26, T = 8, GAP = 14, BOT = 16;
     var pw = W - L - R;
     var panels = [];
-    if (pr) panels.push({ vals: prim, range: pr, colour: "var(--accent)", invert: run,
-                          label: run ? "pace" + (c.unit || "") : "watts", fmt: run ? mmss : Math.round });
+    if (run && pr) {
+      panels.push({ vals: c.pace, range: pr, colour: "var(--accent)", invert: true,
+                    label: "pace" + (c.unit || ""), fmt: mmss });
+    }
+    /* Watts on a run as well as a ride. On the bike ERG sets the level, so
+       the trace is the trainer's shape; on a run it is the athlete's own
+       output and worth trending on its own axis. Nothing is derived from a
+       run's watts — no W/kg, no share of FTP — that stays the register's
+       rule and this is a trace, not a number. */
+    var wr = c.watts && c.watts.length ? rangeOf(c.watts) : null;
+    if (wr) {
+      panels.push({ vals: c.watts, range: wr, colour: "var(--easy)", invert: false,
+                    label: "watts", fmt: Math.round });
+    }
     if (hrr) panels.push({ vals: hr, range: hrr, colour: "var(--hard)", invert: false,
                            label: "heart rate", fmt: Math.round, hr: true });
-    var ph = panels.length > 1 ? 72 : 110;
+    if (!panels.length) return "";
+    var ph = panels.length > 2 ? 58 : panels.length > 1 ? 72 : 110;
     var H = T + panels.length * ph + (panels.length - 1) * GAP + BOT;
 
     var span = c.secs[c.secs.length - 1] || 1;
@@ -309,10 +320,18 @@
     var g = [];
     panels.forEach(function (p, i) {
       var top = T + i * (ph + GAP);
+      /* CLAMPED to its own panel. Unclamped, his walk breaks — 13:41 against
+         a 10:54 floor — drew straight down through the panel below and read
+         as heart rate. The axis says where the floor is and marks it when
+         something is pinned there. */
       var y = function (v) {
         var f = (v - p.range.lo) / (p.range.hi - p.range.lo);
+        f = Math.max(0, Math.min(1, f));
         return top + ph * (p.invert ? f : 1 - f);
       };
+      // A panel the eye can tell from its neighbour.
+      g.push('<rect x="' + L + '" y="' + top + '" width="' + pw + '" height="' + ph +
+        '" fill="var(--sunk)" opacity="0.5" rx="2"/>');
       if (p.hr && cap) {
         /* Time above the cap is what costs the grade, so that is the region
            the eye should find first. */
@@ -327,8 +346,13 @@
         g.push('<polyline points="' + pts + '" fill="none" stroke="' + p.colour +
           '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>');
       });
+      /* Both ends of the scale, and no marker for the clamping: the range is
+         the 5th to 95th percentile, so SOMETHING is always beyond both ends
+         and a symbol that is always on says nothing. The box does the work —
+         a line riding its edge is visibly at the edge. */
       [p.range.hi, p.range.lo].forEach(function (v) {
-        g.push('<text x="' + (L - 4) + '" y="' + (y(v) + (v === p.range.hi ? 7 : 0)).toFixed(1) +
+        var isHi = v === p.range.hi;
+        g.push('<text x="' + (L - 4) + '" y="' + (y(v) + (isHi ? (p.invert ? 0 : 7) : (p.invert ? 7 : 0))).toFixed(1) +
           '" text-anchor="end" font-size="9" fill="var(--ink-3)">' + p.fmt(v) + "</text>");
       });
       g.push('<text x="' + (L + pw) + '" y="' + (top - 1) + '" text-anchor="end" font-size="8.5" letter-spacing="0.08em" fill="' + p.colour +
