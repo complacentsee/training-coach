@@ -479,6 +479,9 @@
       return { title: titleEl, body: bodyEl };
     },
     esc: esc,
+    /* Emphasis is data: a note may carry *strong*, _em_ and newlines, and
+       anything rendering one has to say so the same way the guides do. */
+    emph: emph,
   };
 
   document.addEventListener("click", function (e) {

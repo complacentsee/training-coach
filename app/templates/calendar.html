@@ -28,7 +28,9 @@
           {{if $c.Session.Tag}}<span class="tag">{{$c.Session.Tag}}</span>{{end}}
           <span class="amt">{{amount $c.Session}}</span>
           <span class="lbl">{{emph $c.Session.Label}}</span>
-          {{if $c.FitURL}}<a class="fitbtn" href="{{$c.FitURL}}" download>FIT</a>{{end}}{{if $c.ZwoURL}} <a class="fitbtn" href="{{$c.ZwoURL}}" download>ZWO</a>{{end}}
+          {{if $c.FitURL}}<a class="fitbtn" href="{{$c.FitURL}}" download>FIT</a>{{end}}{{if $c.ZwoURL}} <a class="fitbtn" href="{{$c.ZwoURL}}" download>ZWO</a>{{end}}{{if $c.Recorded}}{{if $c.FitURL}} {{end}}<button type="button" class="rec" data-detail="{{iso $c.Date}}"
+              data-sport="{{$c.Sport}}" data-grade="{{$c.Grade}}" data-note="{{$c.Note}}"
+              aria-label="What you did on {{date $c.Date}}" title="What you did">DID</button>{{end}}
         </td>
       {{end}}
     </tr>
@@ -42,4 +44,5 @@
 {{range $i, $b := .Bands}}{{if $i}} · {{end}}<b class="g g{{lower $b.Grade}}">{{$b.Grade}}</b> {{$b.Range}}{{end}}.{{if .Footer}}
 {{emph .Footer}}{{end}}</p>
 {{end}}
+{{if .AnyRecorded}}<script src="{{asset "detail.js"}}" defer></script>{{end}}
 {{template "foot" .}}{{end}}

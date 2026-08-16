@@ -34,6 +34,12 @@
   {{else if .Recorded}}
   <p class="recorded">Recorded</p>
   {{end}}
+  {{/* The recording itself, behind one tap: laps, both clocks and the paces
+       the watch measured, against the prescription above it. */}}
+  {{if .HasActivity}}
+  <p class="detline"><button type="button" class="detbtn" data-detail="{{iso .Today}}"
+     data-sport="{{.Sport}}" data-grade="{{.Grade}}" data-note="{{.GradeNote}}">What you did</button></p>
+  {{end}}
   {{if and .Skippable (not .Recorded)}}
   {{/* Two taps, because the first is easy to hit by accident and the second
        is not. Armed, it says exactly what it is about to do. */}}
@@ -88,6 +94,7 @@
 {{end}}
 
 <script src="{{asset "trend.js"}}" defer></script>
+{{if .HasActivity}}<script src="{{asset "detail.js"}}" defer></script>{{end}}
 
 <section class="card">
   <h2 class="sec">Feedback</h2>

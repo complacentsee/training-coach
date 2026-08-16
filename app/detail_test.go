@@ -13,6 +13,8 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -435,5 +437,99 @@ func TestElevationRenders(t *testing.T) {
 		if got := Elevation(tc.m).In(Imperial); got != tc.imperial {
 			t.Errorf("%v m imperial = %q, want %q", tc.m, got, tc.imperial)
 		}
+	}
+}
+
+// TestActivitiesByDate: the page needs the recordings for one day and their
+// sports, so it can open the one matching the day's session — 121 archive
+// dates carry more than one file. The unfiltered listing is what it always
+// was, because the watch page reads it.
+func TestActivitiesByDate(t *testing.T) {
+	mux := fitTestMux(t, t.TempDir())
+	post(mux, "/api/activity?name=2026-01-06-07-00-00.fit", gpsRun(t, typedef.SubSportGeneric))
+	post(mux, "/api/activity?name=2026-01-06-17-00-00.fit", bikeFixture(t))
+	post(mux, "/api/activity?name=2026-01-07-07-00-00.fit", gpsRun(t, typedef.SubSportGeneric))
+
+	var all []map[string]any
+	if err := json.Unmarshal(get(mux, "/api/activities", nil).Body.Bytes(), &all); err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("unfiltered listing has %d, want 3", len(all))
+	}
+	if _, ok := all[0]["sport"]; ok {
+		t.Error("the unfiltered listing gained a sport key the watch page never asked for")
+	}
+
+	var day []map[string]any
+	if err := json.Unmarshal(get(mux, "/api/activities?date=2026-01-06", nil).Body.Bytes(), &day); err != nil {
+		t.Fatal(err)
+	}
+	if len(day) != 2 {
+		t.Fatalf("2026-01-06 listed %d recordings, want 2: %v", len(day), day)
+	}
+	sports := map[string]bool{}
+	for _, a := range day {
+		sports[a["sport"].(string)] = true
+	}
+	if !sports["running"] || !sports["cycling"] {
+		t.Errorf("sports on the day: %v, want both", sports)
+	}
+	if rec := get(mux, "/api/activities?date=6-1-2026", nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed date = %d, want 400", rec.Code)
+	}
+	if rec := get(mux, "/api/activities?date=2026-02-02", nil); rec.Code != http.StatusOK ||
+		strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Errorf("a day with nothing recorded = %d %q, want an empty list", rec.Code, rec.Body.String())
+	}
+}
+
+// bikeFixture is a minimal indoor ride: enough for a sport and a session.
+func bikeFixture(t *testing.T) []byte {
+	t.Helper()
+	msgs := []proto.Message{
+		mesgdef.NewRecord(nil).SetTimestamp(fixtureT0).SetSpeed(7000).SetPower(200).ToMesg(nil),
+		mesgdef.NewRecord(nil).SetTimestamp(fixtureT0.Add(time.Second)).SetSpeed(7000).SetPower(210).ToMesg(nil),
+		mesgdef.NewSession(nil).SetSport(typedef.SportCycling).
+			SetSubSport(typedef.SubSportVirtualActivity).
+			SetStartTime(fixtureT0).SetTimestamp(fixtureT0.Add(time.Minute)).
+			SetTotalElapsedTime(2_000).SetTotalTimerTime(2_000).SetTotalDistance(1_400).ToMesg(nil),
+	}
+	return encodeActivityFixture(t, msgs...)
+}
+
+// TestCalendarOffersTheRecording: a day with a recording gets the affordance
+// that opens it, and the script that draws it. A block with nothing recorded
+// renders neither — the page pays for what it uses.
+func TestCalendarOffersTheRecording(t *testing.T) {
+	dir := t.TempDir()
+	mux := fitTestMux(t, dir)
+
+	body := get(mux, "/calendar", nil).Body.String()
+	if strings.Contains(body, "data-detail=") {
+		t.Error("an empty archive still offered a recording to open")
+	}
+	if strings.Contains(body, "detail.") && strings.Contains(body, "<script") {
+		t.Error("an empty archive loaded detail.js")
+	}
+
+	// The example block runs from 2026-01-05; its second day is a quality run.
+	if rec := post(mux, "/api/activity?name=2026-01-06-07-00-00.fit", gpsRun(t, typedef.SubSportGeneric)); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d: %s", rec.Code, rec.Body)
+	}
+	body = get(mux, "/calendar", nil).Body.String()
+	if !strings.Contains(body, `data-detail="2026-01-06"`) {
+		t.Error("the recorded day carries no trigger")
+	}
+	if !strings.Contains(body, `data-sport="running"`) {
+		t.Error("the trigger does not say which sport the session was")
+	}
+	if !regexp.MustCompile(`<script src="/static/detail\.[0-9a-f]+\.js"`).MatchString(body) {
+		t.Error("detail.js is not loaded on a calendar that has a trigger")
+	}
+	// One recording is one trigger: every other day of a two-week block is
+	// still an ordinary cell.
+	if n := strings.Count(body, "data-detail="); n != 1 {
+		t.Errorf("%d triggers, want exactly the recorded day's", n)
 	}
 }
