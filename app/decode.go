@@ -84,8 +84,8 @@ type activityStreams struct {
 	// here. A trainer ride has none.
 	//
 	// The wider promise that once sat here — that this app never serves a
-	// position — was retired on 15 Aug 2026, deliberately and by Adam's
-	// decision: detail.go serves the full track to the activity popover, and
+	// position — was retired on 15 Aug 2026, deliberately and by the
+	// athlete's decision: detail.go serves the full track to the popover, and
 	// the map draws it. What replaced the promise is the deployment: an
 	// identity-aware tunnel in front, since the app itself authenticates
 	// nobody and the README now says so plainly. The register's own handling

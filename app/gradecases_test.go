@@ -185,7 +185,7 @@ func TestQualityDaysAreNotShareGraded(t *testing.T) {
 			delivered = &cases[i]
 		case "F", "DNF":
 			// A session that was not essentially completed is DNF rather
-			// than a letter (Adam, 16 Aug 2026); either expectation marks
+			// than a letter (rule of 16 Aug 2026); either expectation marks
 			// the abandoned half of the pair.
 			abandoned = &cases[i]
 		}

@@ -25,6 +25,16 @@ import (
 	"github.com/muktihari/fit/proto"
 )
 
+// fixtureLat/fixtureLon put every synthesized route in the Sierra Nevada,
+// which is where the polyline algorithm's own published example sits and
+// where nobody in this repo has ever run. A fixture must never carry a real
+// position: tools/sanitizefit exists to strip them out of committed
+// recordings, and a test that pasted one back in would defeat it.
+const (
+	fixtureLat = 38.5
+	fixtureLon = -120.2
+)
+
 // semicircles is the inverse of the decode side's conversion, so a fixture
 // can state a position in degrees.
 func semicircles(deg float64) int32 {
@@ -63,8 +73,8 @@ func gpsRun(t *testing.T, sub typedef.SubSport) []byte {
 			SetHeartRate(uint8(140+i%5)).
 			SetSpeed(3000).
 			SetCadence(80).
-			SetPositionLat(semicircles(44.9484+float64(i)*0.00001)).
-			SetPositionLong(semicircles(-93.3405)).ToMesg(nil))
+			SetPositionLat(semicircles(fixtureLat+float64(i)*0.00001)).
+			SetPositionLong(semicircles(fixtureLon)).ToMesg(nil))
 	}
 	msgs = append(msgs,
 		lapMsg(0, 592_225, 592_225, 160_934, typedef.LapTriggerDistance).
@@ -72,10 +82,10 @@ func gpsRun(t *testing.T, sub typedef.SubSport) []byte {
 			SetAvgCadence(85).SetAvgPower(294).SetMaxPower(397).
 			SetTotalAscent(12).
 			SetEnhancedAvgSpeed(2717).
-			SetStartPositionLat(semicircles(44.9484)).
-			SetStartPositionLong(semicircles(-93.3405)).
-			SetEndPositionLat(semicircles(44.9435)).
-			SetEndPositionLong(semicircles(-93.3414)).ToMesg(nil),
+			SetStartPositionLat(semicircles(fixtureLat)).
+			SetStartPositionLong(semicircles(fixtureLon)).
+			SetEndPositionLat(semicircles(fixtureLat-0.005)).
+			SetEndPositionLong(semicircles(fixtureLon-0.001)).ToMesg(nil),
 		lapMsg(593, 591_287, 591_287, 160_934, typedef.LapTriggerManual).
 			SetAvgHeartRate(149).SetWktStepIndex(typedef.MessageIndex(3)).ToMesg(nil),
 		// A button press: 0.2 m in 1.1 s. Arithmetically a pace of 179:05/mi.
@@ -253,7 +263,7 @@ func TestPolylineMatchesTheAlgorithm(t *testing.T) {
 	// than the encoding's own resolution.
 	var route []trackPoint
 	for i := 0; i < 500; i++ {
-		route = append(route, trackPoint{Lat: 44.9484 + float64(i)*0.000173, Lon: -93.3405 - float64(i)*0.000211})
+		route = append(route, trackPoint{Lat: fixtureLat + float64(i)*0.000173, Lon: fixtureLon - float64(i)*0.000211})
 	}
 	back := decodePolylineForTest(t, encodePolyline(route))
 	if len(back) != len(route) {
@@ -977,8 +987,8 @@ func TestRouteIsCutAtLapBoundaries(t *testing.T) {
 		msgs = append(msgs, mesgdef.NewRecord(nil).
 			SetTimestamp(fixtureT0.Add(time.Duration(sec)*time.Second)).
 			SetHeartRate(150).SetSpeed(3000).
-			SetPositionLat(semicircles(44.9484+float64(sec)*0.00002)).
-			SetPositionLong(semicircles(-93.3405)).ToMesg(nil))
+			SetPositionLat(semicircles(fixtureLat+float64(sec)*0.00002)).
+			SetPositionLong(semicircles(fixtureLon)).ToMesg(nil))
 	}
 	for i, start := range []int{0, 600, 1200} {
 		msgs = append(msgs, lapMsg(start, 600_000, 600_000, 160_934, typedef.LapTriggerDistance).
