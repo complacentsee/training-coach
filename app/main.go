@@ -591,6 +591,10 @@ type calendarData struct {
 	// AnyRecorded decides whether the page loads detail.js at all: a block
 	// with nothing recorded renders no trigger and pays for no script.
 	AnyRecorded bool
+	// Block is the id the cells' triggers carry, so an archived calendar
+	// joins a recording against the plan that prescribed it rather than
+	// against whatever block is current today.
+	Block string
 }
 
 // archiveBanner appears on any page showing a block that is not the one being
@@ -649,6 +653,7 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 	cd := calendarData{Nav: "calendar", Title: "The whole block",
 		Archive:  s.archiveOf(d, blk, day),
 		Headings: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}}
+	cd.Block = blk.ID
 	cd.Intro, _ = ctx.resolve(blk.Intro)
 	cd.Grading = resolveGrading(ctx, blk.Grading)
 

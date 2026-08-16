@@ -337,24 +337,25 @@ const (
 )
 
 type lapOut struct {
-	N          int       `json:"n"`
-	StartS     int       `json:"start_s"`
-	Trigger    string    `json:"trigger"`
-	Step       *int      `json:"step,omitempty"`
-	DistM      float64   `json:"dist_m"`
-	Dist       string    `json:"dist,omitempty"`
-	ElapsedS   float64   `json:"elapsed_s"`
-	TimerS     float64   `json:"timer_s"`
-	Pace       string    `json:"pace,omitempty"`
-	AvgHR      *int      `json:"avg_hr,omitempty"`
-	MaxHR      *int      `json:"max_hr,omitempty"`
-	AvgCadence *int      `json:"avg_cadence,omitempty"`
-	AvgPower   *int      `json:"avg_power,omitempty"`
-	MaxPower   *int      `json:"max_power,omitempty"`
-	AscentM    *int      `json:"ascent_m,omitempty"`
-	Ascent     string    `json:"ascent,omitempty"`
-	Start      []float64 `json:"start,omitempty"`
-	End        []float64 `json:"end,omitempty"`
+	N          int            `json:"n"`
+	StartS     int            `json:"start_s"`
+	Trigger    string         `json:"trigger"`
+	Step       *int           `json:"step,omitempty"`
+	DistM      float64        `json:"dist_m"`
+	Dist       string         `json:"dist,omitempty"`
+	ElapsedS   float64        `json:"elapsed_s"`
+	TimerS     float64        `json:"timer_s"`
+	Pace       string         `json:"pace,omitempty"`
+	AvgHR      *int           `json:"avg_hr,omitempty"`
+	MaxHR      *int           `json:"max_hr,omitempty"`
+	AvgCadence *int           `json:"avg_cadence,omitempty"`
+	AvgPower   *int           `json:"avg_power,omitempty"`
+	MaxPower   *int           `json:"max_power,omitempty"`
+	AscentM    *int           `json:"ascent_m,omitempty"`
+	Ascent     string         `json:"ascent,omitempty"`
+	Start      []float64      `json:"start,omitempty"`
+	End        []float64      `json:"end,omitempty"`
+	Prescribed *prescribedOut `json:"prescribed,omitempty"`
 }
 
 type splitOut struct {
@@ -364,6 +365,34 @@ type splitOut struct {
 	Dist   string  `json:"dist,omitempty"`
 	Pace   string  `json:"pace,omitempty"`
 	Splits *int    `json:"splits,omitempty"`
+}
+
+// prescribedOut is which step of the pushed workout a lap was, and how the
+// delivery compares to what that step asked for. This is the join the plan
+// exists for: the watch stamps wkt_step_index on every lap it drove, and the
+// block already knows what step 1 of that workout was meant to be.
+type prescribedOut struct {
+	Index  int    `json:"index"` // wkt_step_index, as recorded
+	Role   string `json:"role"`
+	Label  string `json:"label"`         // "Rep 2", "Recovery 2", "Warm-up"
+	Rep    int    `json:"rep,omitempty"` // 1-based occurrence within its repeat
+	OfReps int    `json:"of_reps,omitempty"`
+	Dur    string `json:"dur,omitempty"`    // "3:00", or "400 m" on a distance step
+	Target string `json:"target,omitempty"` // "239-265 W", "7:41-7:55/mi", "140-150 bpm"
+	// Verdict reads against the EFFORT asked for, so "under" is less power,
+	// a slower pace or a lower heart rate, and "over" is the reverse. One
+	// vocabulary, whichever metric the step targets.
+	Verdict string `json:"verdict,omitempty"` // in | under | over | short
+}
+
+// sessionOut is the prescription the day carried, so the recording can be
+// read against what was asked rather than on its own.
+type sessionOut struct {
+	Kind      string `json:"kind"`
+	Label     string `json:"label"`
+	RepsAsked int    `json:"reps_asked,omitempty"`
+	RepsDone  int    `json:"reps_done,omitempty"`
+	RepsWhat  string `json:"reps_what,omitempty"` // what one rep was: "3:00 @ 239-265 W"
 }
 
 type trackOut struct {
@@ -390,6 +419,7 @@ type detailOut struct {
 	Laps       []lapOut    `json:"laps,omitempty"`
 	Splits     []splitOut  `json:"splits,omitempty"`
 	Track      *trackOut   `json:"track,omitempty"`
+	Session    *sessionOut `json:"session,omitempty"`
 	SHA256     string      `json:"sha256"`
 }
 
@@ -404,7 +434,7 @@ func hms(secs float64) string {
 // detailPayload decodes the stored bytes for display. It deliberately does
 // NOT read metrics.db: an activity whose import failed still has a lap table
 // and a route, and that is one of the empty states this page owes.
-func (s *server) detailPayload(name string) (*detailOut, int, string) {
+func (s *server) detailPayload(name, blockID string) (*detailOut, int, string) {
 	if !validActivityName(name) {
 		return nil, http.StatusBadRequest, "name must be a plain .fit filename"
 	}
@@ -520,6 +550,7 @@ func (s *server) detailPayload(name string) (*detailOut, int, string) {
 	if len(d.Track) > 0 {
 		out.Track = &trackOut{Points: len(d.Track), Polyline: encodePolyline(d.Track)}
 	}
+	s.joinPrescription(out, d, blockID)
 	return out, http.StatusOK, ""
 }
 
@@ -530,7 +561,7 @@ func (s *server) detailPayload(name string) (*detailOut, int, string) {
 // the old units from a cache. Gzipped when asked for: the origin compresses
 // nothing, and the polyline is the first response where that shows.
 func (s *server) getActivityDetail(w http.ResponseWriter, r *http.Request) {
-	out, code, msg := s.detailPayload(r.URL.Query().Get("name"))
+	out, code, msg := s.detailPayload(r.URL.Query().Get("name"), r.URL.Query().Get("block"))
 	if code != http.StatusOK {
 		http.Error(w, msg, code)
 		return
@@ -589,4 +620,200 @@ func encodePolyline(pts []trackPoint) string {
 		prevLat, prevLon = lat, lon
 	}
 	return b.String()
+}
+
+/* ── the step join ─────────────────────────────────────────────────────────
+
+A lap the watch drove carries wkt_step_index, and the block knows what that
+step asked for. Joining them is the one reading this app can produce and a
+general activity site cannot: prescribed against delivered, rep by rep,
+rather than a list of laps with no idea what they were meant to be.
+
+Everything here degrades rather than fails. A recording with no step indices
+(a Zwift ride is one lap with none), a day outside any block, a sport that
+does not match the day's session, steps that will not resolve — each costs
+the join and nothing else, and the lap table stands on its own.
+*/
+
+// repDeliveredShare is how much of a step's prescribed duration a lap has to
+// cover before it counts as that rep having been done. Measured on the
+// 12 Aug 2026 ride: the two delivered reps lapped at exactly 180.0 s against
+// a 180 s step, and the laps after them were 91.4 s, 2.4 s and 0.8 s — the
+// athlete pressing the button, not a third and fourth rep. The watch laps a
+// driven step on the step's own boundary, so anything short of nine tenths
+// was cut off.
+const repDeliveredShare = 0.9
+
+// joinPrescription attaches each lap's prescribed step, and the session it
+// belongs to, when the file came from a workout this block pushed.
+func (s *server) joinPrescription(out *detailOut, d *activityDetail, blockID string) {
+	ds := s.ds()
+	if ds == nil {
+		return
+	}
+	date, err := time.ParseInLocation("2006-01-02", out.Date, ds.Loc)
+	if err != nil {
+		return
+	}
+	blk, ok := ds.blockFor(blockID, s.day(ds))
+	if !ok {
+		return
+	}
+	wk, di, ok := blk.Locate(date)
+	if !ok {
+		return
+	}
+	sess := wk.Days[di]
+	out.Session = &sessionOut{Kind: string(sess.Kind), Label: sess.Label}
+
+	// A ride recorded on a run day is not that day's session, and pinning its
+	// laps to the run's steps would invent a reading. The grader's own test.
+	if len(sess.Steps) == 0 || sportOf(sess.Kind) != d.Sport {
+		return
+	}
+	ctx := blk.ctxFor(ds.Athlete, wk.N).forSession(&sess)
+	rs, err := resolveSteps(ctx, sess)
+	if err != nil {
+		log.Printf("activity-detail %s: resolving %s's steps: %v", out.Name, out.Date, err)
+		return
+	}
+	em := flattenSteps(rs)
+	u := ds.Athlete.Units
+
+	// Rep numbering is per emitted step: the file repeats step indices
+	// (1,2,1,2 on a two-step repeat), so the nth lap carrying index i is the
+	// nth time through step i.
+	seen := map[int]int{}
+	for i := range out.Laps {
+		l := &out.Laps[i]
+		if l.Step == nil || *l.Step >= len(em) {
+			continue
+		}
+		e := em[*l.Step]
+		if e.IsRepeat { // the marker that closes a repeat is not a lap anyone runs
+			continue
+		}
+		seen[*l.Step]++
+		p := &prescribedOut{Index: *l.Step, Role: e.Leaf.Role,
+			Dur: stepDuration(e.Leaf, u), Target: stepTarget(e.Leaf, u)}
+		if e.Group > 0 {
+			p.Rep, p.OfReps = seen[*l.Step], e.Reps
+		}
+		p.Label = stepLabel(e.Leaf.Role, p.Rep)
+		// A lap that never covered its step is not judged against the step's
+		// band: on 12 Aug the athlete pressed the button twice at the end and
+		// a 0.8 s lap at 318 W read as a rep OVER its target. Short is the
+		// verdict, and it is the honest one.
+		if !delivered(e.Leaf, *l) {
+			p.Verdict = "short"
+		} else {
+			p.Verdict = stepVerdict(e.Leaf, *l, d.Sport == "running")
+		}
+		l.Prescribed = p
+	}
+
+	// The session line: what one rep was, how many were asked for, and how
+	// many the recording actually carries.
+	for i, e := range em {
+		if e.Group == 0 || e.IsRepeat || e.Leaf.Role != "active" {
+			continue
+		}
+		out.Session.RepsAsked = e.Reps
+		out.Session.RepsWhat = strings.TrimSpace(stepDuration(e.Leaf, u) + " @ " + stepTarget(e.Leaf, u))
+		out.Session.RepsWhat = strings.TrimSuffix(out.Session.RepsWhat, "@")
+		for _, l := range out.Laps {
+			if l.Prescribed == nil || l.Prescribed.Index != i {
+				continue
+			}
+			if delivered(e.Leaf, l) {
+				out.Session.RepsDone++
+			}
+		}
+		break // the first work repeat is the session's headline
+	}
+}
+
+// delivered reports whether a lap covered enough of its step to count as
+// that rep having been run.
+func delivered(st resolvedStep, l lapOut) bool {
+	switch {
+	case st.Secs > 0:
+		return l.TimerS >= float64(st.Secs)*repDeliveredShare
+	case st.DistM > 0:
+		return l.DistM >= st.DistM*repDeliveredShare
+	}
+	return false
+}
+
+func stepDuration(st resolvedStep, u Units) string {
+	switch {
+	case st.Secs > 0:
+		return clock(st.Secs)
+	case st.DistM > 0:
+		return Distance(st.DistM).In(u)
+	}
+	return ""
+}
+
+func stepTarget(st resolvedStep, u Units) string {
+	switch {
+	case st.PowerHi > 0:
+		return fmt.Sprintf("%d–%d W", st.PowerLo, st.PowerHi)
+	case st.PaceFast > 0 && st.PaceSlow > 0:
+		return st.PaceSlow.In(u) + "–" + st.PaceFast.In(u)
+	case st.HRHi > 0:
+		return fmt.Sprintf("%d–%d bpm", st.HRLo, st.HRHi)
+	}
+	return ""
+}
+
+// stepLabel is what the row says it was. A rep is numbered where it repeats;
+// a warm-up is a warm-up.
+func stepLabel(role string, rep int) string {
+	name := map[string]string{
+		"active": "Rep", "recovery": "Rec", "rest": "Rest",
+		"warmup": "W-up", "cooldown": "Cool",
+	}[role]
+	if name == "" {
+		name = role
+	}
+	if rep > 0 && (role == "active" || role == "recovery" || role == "rest") {
+		return fmt.Sprintf("%s %d", name, rep)
+	}
+	return name
+}
+
+// stepVerdict compares a DELIVERED lap to the band its step asked for, in the
+// step's own currency: watts where ERG held the watts, pace where the target
+// is a pace, heart rate where that is all the step declared. "under" is
+// always less effort than asked and "over" always more — including for pace,
+// where the slower number is the smaller effort.
+func stepVerdict(st resolvedStep, l lapOut, run bool) string {
+	band := func(v, lo, hi float64) string {
+		switch {
+		case v < lo:
+			return "under"
+		case v > hi:
+			return "over"
+		}
+		return "in"
+	}
+	switch {
+	case st.PowerHi > 0 && l.AvgPower != nil:
+		return band(float64(*l.AvgPower), float64(st.PowerLo), float64(st.PowerHi))
+	case st.PaceFast > 0 && st.PaceSlow > 0 && run && l.DistM > 0 && l.TimerS > 0:
+		// Pace is seconds per metre: slower is a bigger number and less work,
+		// so the comparison inverts against the band's own ends.
+		p := l.TimerS / l.DistM
+		switch {
+		case p > float64(st.PaceSlow):
+			return "under"
+		case p < float64(st.PaceFast):
+			return "over"
+		}
+		return "in"
+	case st.HRHi > 0 && l.AvgHR != nil:
+		return band(float64(*l.AvgHR), float64(st.HRLo), float64(st.HRHi))
+	}
+	return ""
 }

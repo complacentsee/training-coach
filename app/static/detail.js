@@ -65,6 +65,7 @@
     var st = {
       date: btn.getAttribute("data-detail") || "",
       sport: btn.getAttribute("data-sport") || "",
+      block: btn.getAttribute("data-block") || "",
       grade: btn.getAttribute("data-grade") || "",
       note: btn.getAttribute("data-note") || "",
     };
@@ -93,7 +94,8 @@
        file whose import failed has none, and the shape is still worth
        reading, so its absence costs those rows and nothing else. */
     Promise.all([
-      getJSON("/api/activity-detail?name=" + encodeURIComponent(name)),
+      getJSON("/api/activity-detail?name=" + encodeURIComponent(name) +
+        (st.block ? "&block=" + encodeURIComponent(st.block) : "")),
       getJSON("/api/activity-metrics?name=" + encodeURIComponent(name)).catch(function () { return null; }),
     ]).then(function (r) {
       draw(m, st, r[0], r[1]);
@@ -141,6 +143,19 @@
     var when = clockOf(d.start_utc);
     if (when) chips.push(esc(when));
     h += '<p class="dchips">' + chips.join(" · ") + "</p>";
+
+    /* What the day asked for, above what the recording did. This is the join
+       a general activity site cannot make: the block knows what step 1 was. */
+    if (d.session && d.session.label) {
+      var line = '<p class="dsess"><b>' + emph(d.session.label) + "</b>";
+      if (d.session.reps_asked) {
+        var done = d.session.reps_done || 0;
+        line += ' <span class="' + (done >= d.session.reps_asked ? "v-in" : "v-under") + '">' +
+          done + " of " + d.session.reps_asked + " reps</span>";
+        if (d.session.reps_what) line += ' <span class="dwhat">' + esc(d.session.reps_what) + "</span>";
+      }
+      h += line + "</p>";
+    }
 
     /* What it was. Distance and both clocks always; the rest only where the
        file and the register have something to say. */
@@ -212,14 +227,23 @@
        width only where the laps are not all the same length: reps, steps,
        a lap pressed by hand. */
     var uniform = uniformLaps(laps);
-    var cols = ["#", "Dist", "Time"];
+    var stepped = laps.some(function (l) { return l.prescribed; });
+    var cols = [stepped ? "Step" : "#", "Dist", "Time"];
     if (run && !uniform) cols.push("Pace");
     if (!run && anyPower) cols.push("Power");
     if (anyHR) cols.push("HR");
     if (run && anyClimb) cols.push("Asc");
 
     var rows = laps.map(function (l) {
-      var td = ["<td>" + l.n + (mixed && l.trigger !== "distance" ? '<i>' + esc(l.trigger.replace("session_end", "end")) + "</i>" : "") + "</td>"];
+      var p = l.prescribed;
+      var first = stepped
+        ? (p ? esc(p.label) : "—")
+        : l.n + (mixed && l.trigger !== "distance" ? '<i>' + esc(l.trigger.replace("session_end", "end")) + "</i>" : "");
+      var td = ["<td>" + first + "</td>"];
+      /* The verdict marks the metric the step actually targeted, and nothing
+         else: watts where ERG held the watts, pace where a pace was asked. */
+      var v = p && p.verdict ? ' class="v-' + esc(p.verdict) + '"' : "";
+      var tip = p && p.target ? ' title="' + esc(p.dur + " @ " + p.target) + '"' : "";
       td.push("<td>" + esc(l.dist || "—") + "</td>");
       /* Where the timer and the clock disagree, both are shown: that gap is
          a stop inside the lap, and on 12 Aug it is a 296 s stop inside a
@@ -227,8 +251,8 @@
       var t = dur(l.timer_s);
       if (l.elapsed_s - l.timer_s > 2) t += " <i>" + dur(l.elapsed_s) + "</i>";
       td.push("<td>" + t + "</td>");
-      if (run && !uniform) td.push("<td>" + esc(l.pace || "—") + "</td>");
-      if (!run && anyPower) td.push("<td>" + (l.avg_power ? l.avg_power + " W" : "—") + "</td>");
+      if (run && !uniform) td.push("<td" + v + tip + ">" + esc(l.pace || "—") + "</td>");
+      if (!run && anyPower) td.push("<td" + v + tip + ">" + (l.avg_power ? l.avg_power + " W" : "—") + "</td>");
       if (anyHR) td.push("<td>" + (l.avg_hr || "—") + "</td>");
       if (run && anyClimb) td.push("<td>" + (l.ascent_m ? esc(l.ascent || l.ascent_m + " m") : "—") + "</td>");
       return "<tr>" + td.join("") + "</tr>";

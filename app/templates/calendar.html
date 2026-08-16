@@ -29,7 +29,7 @@
           <span class="amt">{{amount $c.Session}}</span>
           <span class="lbl">{{emph $c.Session.Label}}</span>
           {{if $c.FitURL}}<a class="fitbtn" href="{{$c.FitURL}}" download>FIT</a>{{end}}{{if $c.ZwoURL}} <a class="fitbtn" href="{{$c.ZwoURL}}" download>ZWO</a>{{end}}{{if $c.Recorded}}{{if $c.FitURL}} {{end}}<button type="button" class="rec" data-detail="{{iso $c.Date}}"
-              data-sport="{{$c.Sport}}" data-grade="{{$c.Grade}}" data-note="{{$c.Note}}"
+              data-sport="{{$c.Sport}}" data-block="{{$.Block}}" data-grade="{{$c.Grade}}" data-note="{{$c.Note}}"
               aria-label="View the activity recorded on {{date $c.Date}}" title="View activity">VIEW</button>{{end}}
         </td>
       {{end}}

@@ -388,24 +388,22 @@ func fitASCIIField(what, s string) error {
 // loader emits converts.
 func fitWorkoutFor(name string, steps []resolvedStep, sport uint8, serial uint32, created time.Time) FitWorkout {
 	w := FitWorkout{Name: name, Sport: sport, Serial: serial, TimeCreated: created}
-	for _, s := range steps {
-		if s.Repeat > 0 {
-			first := uint32(len(w.Steps))
-			for _, b := range s.Body {
-				w.Steps = append(w.Steps, fitLeafStep(b))
-			}
+	// flattenSteps owns the emitted order and therefore the step numbering a
+	// recorded lap refers back to; this loop only converts units.
+	for _, e := range flattenSteps(steps) {
+		if e.IsRepeat {
 			w.Steps = append(w.Steps, FitStep{
 				Intensity:     fitIntensities["active"],
 				DurationType:  fitDurationRepeat,
-				DurationValue: first, // message_index of the first child
+				DurationValue: uint32(e.First), // message_index of the first child
 				TargetType:    fitTargetOpen,
-				TargetValue:   uint32(s.Repeat),
+				TargetValue:   uint32(e.Times),
 				CustomLow:     fitInvalidUint32,
 				CustomHigh:    fitInvalidUint32,
 			})
 			continue
 		}
-		w.Steps = append(w.Steps, fitLeafStep(s))
+		w.Steps = append(w.Steps, fitLeafStep(e.Leaf))
 	}
 	return w
 }

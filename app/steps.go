@@ -238,6 +238,40 @@ type resolvedStep struct {
 	Body   []resolvedStep
 }
 
+// emittedStep is one workout_step as the FILE will carry it. The flattening
+// is the numbering: a recorded lap's wkt_step_index is an index into this
+// slice, so the encoder and anything reading a lap back must agree here or
+// the join silently addresses the wrong step. One function, both readers.
+type emittedStep struct {
+	Leaf     resolvedStep // the step itself; meaningless on a repeat marker
+	IsRepeat bool         // the trailing marker that closes a repeat
+	Times    int          // how many times, on the marker
+	First    int          // index of the repeat's first body step, on the marker
+	Group    int          // 1-based repeat this leaf belongs to; 0 outside one
+	Reps     int          // that repeat's count, on a leaf inside one
+}
+
+// flattenSteps is the dialect's one statement of emitted order: repeats
+// body-first with the repeat step trailing, exactly as the watch expects and
+// as maxFitSteps counts.
+func flattenSteps(steps []resolvedStep) []emittedStep {
+	var out []emittedStep
+	group := 0
+	for _, s := range steps {
+		if s.Repeat > 0 {
+			group++
+			first := len(out)
+			for _, b := range s.Body {
+				out = append(out, emittedStep{Leaf: b, Group: group, Reps: s.Repeat})
+			}
+			out = append(out, emittedStep{IsRepeat: true, Times: s.Repeat, First: first})
+			continue
+		}
+		out = append(out, emittedStep{Leaf: s})
+	}
+	return out
+}
+
 // resolveSteps renders a session's steps against the day's context and checks
 // everything only a resolved value can show. It assumes validateSteps has
 // passed, which is true for anything the loader accepted.
