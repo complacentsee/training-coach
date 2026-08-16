@@ -3066,3 +3066,47 @@ func TestDNFIsAVerdictNotALetter(t *testing.T) {
 		}
 	}
 }
+
+// TestActivityTriggerOwnsItsClick: the calendar's VIEW chip sits INSIDE a
+// cell that opens a guide, and carries the day's grade note for the popover
+// to render. Both of those are things app.js's own click handler claims, so
+// without an explicit bail two popups answered one tap: the activity
+// popover drew itself and the grade popup then overwrote its title with
+// "Grade" — which is exactly what Adam saw on 16 Aug 2026.
+func TestActivityTriggerOwnsItsClick(t *testing.T) {
+	srv := fitTestMuxServer(t, "")
+	if err := srv.s.store.Append(Entry{
+		Kind: "grade", Date: "2026-01-13", Val: "A", Note: "a note the popover renders itself",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	srv.s.dataDir = dir
+	if rec := post(srv.mux, "/api/activity?name=2026-01-13-06-30-00.fit", tenSecondRun(t)); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d", rec.Code)
+	}
+	body := get(srv.mux, "/calendar", nil).Body.String()
+
+	// The collision's preconditions, so this test fails loudly if the markup
+	// stops being the thing the guard is about.
+	chip := regexp.MustCompile(`(?s)<button type="button" class="rec"[^>]*>`).FindString(body)
+	if chip == "" {
+		t.Fatal("no VIEW chip on a day with a recording")
+	}
+	for _, attr := range []string{"data-detail=", "data-note="} {
+		if !strings.Contains(chip, attr) {
+			t.Errorf("the chip no longer carries %s: %s", attr, chip)
+		}
+	}
+	if !strings.Contains(body, `data-guide=`) {
+		t.Error("the cells no longer open guides, so the guard may be stale")
+	}
+
+	js, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `closest("[data-detail]")`) {
+		t.Error("app.js does not stand aside for the activity popover's own trigger")
+	}
+}
