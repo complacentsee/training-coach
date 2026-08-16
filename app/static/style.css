@@ -214,26 +214,41 @@ li.task{display:flex;align-items:flex-start;gap:.6rem}
 td[data-guide]{cursor:pointer}
 td[data-guide]:hover{outline:1px solid var(--accent)}
 
+/* dvh, not vh: on iOS vh is the LARGE viewport — the one with the toolbars
+   hidden — so a box sized in vh stands taller than the window actually shows
+   while the URL bar is up, and a bottom-aligned box pushes its own header
+   off the top of the screen. That is what put the close button out of reach
+   on Adam's phone on 15 Aug 2026, with the popup scrolled to the top and the
+   × simply not on the screen. Both units are declared: a browser that does
+   not know dvh keeps the vh line. */
 .modal{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.55);
-  display:flex;align-items:flex-end;justify-content:center;padding:0}
+  display:flex;align-items:flex-end;justify-content:center;padding:0;
+  height:100vh;height:100dvh}
 @media(min-width:640px){.modal{align-items:center;padding:2rem 1rem}}
 .modal[hidden]{display:none}
+/* The box does not scroll — the BODY does, so the header is a sibling of the
+   scroller rather than a child of it and cannot scroll away whatever the
+   engine thinks of sticky. */
 .modal-box{position:relative;background:var(--surface);color:var(--ink);
   border:1px solid var(--rule);border-radius:6px 6px 0 0;
-  width:100%;max-width:34rem;max-height:86vh;overflow-y:auto;
-  overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
-  /* No top padding: the sticky header supplies it. With padding here the
-     header pinned 1.1rem below the scroll port's top edge and a strip of
-     content showed above it. */
-  padding:0 1.2rem calc(1.4rem + env(safe-area-inset-bottom))}
+  width:100%;max-width:34rem;
+  /* min(...,100%) is the belt: whatever dvh reports, the box can never be
+     taller than the backdrop it sits in, and the backdrop is the window. */
+  max-height:86vh;max-height:min(86dvh,100%);
+  display:flex;flex-direction:column;overflow:hidden;padding:0}
 @media(min-width:640px){.modal-box{border-radius:6px}}
-/* The header is STICKY, and the close button lives in it. Absolutely
-   positioned in the corner, the × scrolled away with the content — the box
-   is its own scroll container, so an absolute child scrolls with it, and a
-   long popup left no way out but the backdrop. Reported 15 Aug 2026. */
-.modal-hd{position:sticky;top:0;z-index:2;display:flex;align-items:flex-start;gap:.5rem;
-  background:var(--surface);margin:0 -1.2rem .8rem;
-  padding:1.1rem 1.2rem .5rem}
+/* The header holds the close button and never moves. Absolutely positioned
+   in the corner the × scrolled away with the content, and a long popup left
+   no way out but the backdrop. Reported 15 Aug 2026 and fixed twice: making
+   the header sticky cured the scroll-away, which was real and measurable in
+   both engines, but not the thing Adam hit — that was the box standing
+   taller than the window, above. */
+.modal-hd{flex:none;display:flex;align-items:flex-start;gap:.5rem;
+  background:var(--surface);margin:0;padding:1.1rem 1.2rem .5rem}
+/* min-height:0 or the flex item refuses to shrink below its content and the
+   whole popup grows past the box instead of scrolling inside it. */
+#modal-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  padding:0 1.2rem calc(1.4rem + env(safe-area-inset-bottom))}
 .modal-x{flex:none;width:2rem;height:2rem;margin:-.35rem -.5rem 0 0;border:none;
   background:transparent;color:var(--ink-3);font-size:1.5rem;line-height:1;cursor:pointer}
 .modal-x:hover{color:var(--ink)}
