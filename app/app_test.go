@@ -2951,3 +2951,41 @@ func TestRecordedKindMatchesTheSessionsSport(t *testing.T) {
 		})
 	}
 }
+
+// TestModalCloseStaysReachable: the popup box is its own scroll container,
+// so an absolutely positioned close button scrolls away with the content —
+// on a long popup (a lap table and a grade note) it ends up above the top of
+// the scroll port with no way back. Adam hit exactly that on 15 Aug 2026.
+// The header is sticky and holds the button, and the box carries no top
+// padding of its own, which is what makes the sticky edge line up with the
+// scroll port instead of sitting 1.1rem below it.
+func TestModalCloseStaysReachable(t *testing.T) {
+	mux := fitTestMux(t, "")
+	body := get(mux, "/", nil).Body.String()
+	hd := regexp.MustCompile(`(?s)<div class="modal-hd">.*?</div>`).FindString(body)
+	if hd == "" {
+		t.Fatal("the popup has no header element")
+	}
+	if !strings.Contains(hd, `id="modal-title"`) || !strings.Contains(hd, `class="modal-x"`) {
+		t.Errorf("the header does not hold both the title and the close button: %s", hd)
+	}
+
+	css, err := staticFS.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := regexp.MustCompile(`(?s)\.modal-hd\{[^}]*\}`).Find(css)
+	if rule == nil {
+		t.Fatal("no .modal-hd rule in the stylesheet")
+	}
+	if !strings.Contains(string(rule), "position:sticky") {
+		t.Errorf(".modal-hd is not sticky, so the close button scrolls away again: %s", rule)
+	}
+	boxRule := regexp.MustCompile(`(?s)\.modal-box\{[^}]*\}`).Find(css)
+	if boxRule == nil {
+		t.Fatal("no .modal-box rule in the stylesheet")
+	}
+	if !strings.Contains(string(boxRule), "padding:0 ") {
+		t.Errorf(".modal-box carries a top padding again, which pins the sticky header below the scroll port and shows a strip of content above it: %s", boxRule)
+	}
+}

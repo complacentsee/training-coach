@@ -222,13 +222,23 @@ td[data-guide]:hover{outline:1px solid var(--accent)}
   border:1px solid var(--rule);border-radius:6px 6px 0 0;
   width:100%;max-width:34rem;max-height:86vh;overflow-y:auto;
   overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
-  padding:1.1rem 1.2rem calc(1.4rem + env(safe-area-inset-bottom))}
+  /* No top padding: the sticky header supplies it. With padding here the
+     header pinned 1.1rem below the scroll port's top edge and a strip of
+     content showed above it. */
+  padding:0 1.2rem calc(1.4rem + env(safe-area-inset-bottom))}
 @media(min-width:640px){.modal-box{border-radius:6px}}
-.modal-x{position:absolute;top:.5rem;right:.6rem;width:2rem;height:2rem;border:none;
+/* The header is STICKY, and the close button lives in it. Absolutely
+   positioned in the corner, the × scrolled away with the content — the box
+   is its own scroll container, so an absolute child scrolls with it, and a
+   long popup left no way out but the backdrop. Reported 15 Aug 2026. */
+.modal-hd{position:sticky;top:0;z-index:2;display:flex;align-items:flex-start;gap:.5rem;
+  background:var(--surface);margin:0 -1.2rem .8rem;
+  padding:1.1rem 1.2rem .5rem}
+.modal-x{flex:none;width:2rem;height:2rem;margin:-.35rem -.5rem 0 0;border:none;
   background:transparent;color:var(--ink-3);font-size:1.5rem;line-height:1;cursor:pointer}
 .modal-x:hover{color:var(--ink)}
-.modal h3{font-family:var(--display);font-size:1.4rem;text-transform:uppercase;
-  letter-spacing:.02em;margin:0 2rem .8rem 0;line-height:1.1}
+.modal h3{flex:1;min-width:0;font-family:var(--display);font-size:1.4rem;text-transform:uppercase;
+  letter-spacing:.02em;margin:0;line-height:1.1}
 .g-sec{margin-bottom:.7rem}
 .g-lab{font-family:var(--mono);font-size:.62rem;letter-spacing:.11em;text-transform:uppercase;
   color:var(--ink-3);font-weight:700;display:block;margin-bottom:.15rem}
