@@ -24,6 +24,7 @@ func (u Units) valid() bool { return u == Imperial || u == Metric }
 const (
 	metresPerMile = 1609.344
 	metresPerKM   = 1000.0
+	metresPerFoot = 0.3048
 	kgPerPound    = 0.45359237
 )
 
@@ -181,6 +182,19 @@ func (w *Weight) UnmarshalJSON(b []byte) error {
 	v, err := ParseWeight(s)
 	*w = v
 	return err
+}
+
+// Elevation is canonical metres of climbing. It is a MEASURED quantity only
+// — a device reports whole metres of ascent and no plan authors one — so it
+// renders and does not parse, and it rounds to whole units in both systems:
+// a tenth of a foot of climbing is noise on a figure a barometer guessed at.
+type Elevation float64
+
+func (e Elevation) In(u Units) string {
+	if u == Metric {
+		return trimNum(math.Round(float64(e)), 0) + " m"
+	}
+	return trimNum(math.Round(float64(e)/metresPerFoot), 0) + " ft"
 }
 
 /* ── parsing helpers ───────────────────────────────────────────────────── */
