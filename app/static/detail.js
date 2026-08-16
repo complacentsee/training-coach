@@ -169,7 +169,17 @@
        construction — the gate is server-side — so this is simply absent
        there rather than an empty box. */
     var mapped = d.track && d.track.segments && d.track.segments.length;
-    if (mapped) h += '<div class="dmap"></div>';
+    if (mapped) {
+      h += '<div class="dmap"></div>';
+    } else if (d.indoor) {
+      /* A trainer session records a position and it is not a place — Zwift
+         writes its own world's — so the route is gated server-side. Saying
+         so is the "no laps" case: a fact about the recording, not a
+         placeholder for something the athlete never wrote. */
+      h += '<p class="hint">Indoors — no route.</p>';
+    } else {
+      h += '<p class="hint">This recording carries no positions.</p>';
+    }
 
     /* What it was. Distance and both clocks always; the rest only where the
        file and the register have something to say. */
@@ -401,16 +411,25 @@
     if (leafletLoading) return leafletLoading;
     if (!vendor.js) return Promise.reject(new Error("no map library"));
     leafletLoading = new Promise(function (resolve, reject) {
+      var pending = vendor.css ? 2 : 1;
+      var fail = false;
+      function one() { if (!--pending && !fail) resolve(); }
+      /* BOTH halves, not just the script. Leaflet sizes its container from
+         the stylesheet, so initialising while the CSS is still in flight
+         gives a map with no height and no tiles — which looks exactly like
+         a map that failed. */
       if (vendor.css) {
         var link = document.createElement("link");
         link.rel = "stylesheet";
         link.href = vendor.css;
+        link.onload = one;
+        link.onerror = function () { fail = true; reject(new Error("map styles did not load")); };
         document.head.appendChild(link);
       }
       var el = document.createElement("script");
       el.src = vendor.js;
-      el.onload = function () { resolve(); };
-      el.onerror = function () { reject(new Error("map library did not load")); };
+      el.onload = one;
+      el.onerror = function () { fail = true; reject(new Error("map library did not load")); };
       document.head.appendChild(el);
     });
     return leafletLoading;
@@ -470,7 +489,10 @@
         .bindTooltip(seg.lap ? "Lap " + seg.lap : "Before lap 1", { sticky: true });
     });
     if (all.length) map.fitBounds(all, { padding: [12, 12] });
+    // The container is inside a popover that may still be settling; ask
+    // twice rather than assume the first measurement was the real one.
     setTimeout(function () { map.invalidateSize(); }, 60);
+    setTimeout(function () { map.invalidateSize(); if (all.length) map.fitBounds(all, { padding: [12, 12] }); }, 400);
   }
 
   function splits(d, run) {
