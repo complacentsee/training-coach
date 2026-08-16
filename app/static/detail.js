@@ -72,6 +72,7 @@
     if (!window.AppModal) return;
     var st = {
       trigger: btn,
+      draws: 0, // guards a slow map against a faster pill switch
       date: btn.getAttribute("data-detail") || "",
       sport: btn.getAttribute("data-sport") || "",
       block: btn.getAttribute("data-block") || "",
@@ -98,7 +99,19 @@
 
   function show(m, st, name) {
     st.name = name;
-    m.body.innerHTML = '<p class="hint">Reading the recording…</p>';
+    /* Switching recordings must not rebuild the popover. The day around
+       them does not change — same prescription, same grade, same notes, and
+       possibly a re-grade running in it — so only the recording's own
+       region is replaced. Blanking the body instead cost a flash, the
+       scroll position, a fresh Leaflet instance every switch, and would
+       have thrown away an in-flight "Grading…" along with the poll's handle
+       on it. */
+    var region = m.body.querySelector(".drec");
+    if (region) {
+      region.classList.add("wait");
+    } else {
+      m.body.innerHTML = '<p class="hint">Reading the recording…</p>';
+    }
     /* The measured numbers are a separate payload and a separate decode; a
        file whose import failed has none, and the shape is still worth
        reading, so its absence costs those rows and nothing else. */
@@ -111,9 +124,16 @@
     }).catch(function (e) {
       /* An undecodable file still has a selector and a name: say what is
          wrong with THIS recording rather than emptying the popover. */
-      m.body.innerHTML = picker(st) +
-        "<p>This recording could not be read.</p>" +
+      var failed = '<p>This recording could not be read.</p>' +
         '<p class="hint">' + esc(e.message) + "</p>";
+      var region = m.body.querySelector(".drec");
+      if (region) {
+        region.classList.remove("wait");
+        region.innerHTML = failed;
+        markPill(m, st);
+        return;
+      }
+      m.body.innerHTML = picker(st) + failed;
       bindPicker(m, st);
     });
   }
@@ -291,6 +311,9 @@
 
   function draw(m, st, d, mt) {
     var run = d.sport === "running";
+    /* h accumulates the RECORDING's half; day accumulates the day's. What
+       belongs to which is the question of what a pill switch may replace. */
+    var day = "";
     /* The payload's grade is CURRENT; st.grade came from a calendar cell
        rendered whenever the page was loaded. A re-grade lands seconds later
        and must be visible without one. */
@@ -299,7 +322,7 @@
       st.note = d.grade_note || "";
       st.gradedAt = d.graded_at || "";
     }
-    var h = picker(st);
+    var h = "";
 
     var chips = [];
     if (st.date) chips.push(esc(longDate(st.date)));
@@ -371,7 +394,7 @@
     h += chartSVG(d, mt, run);
 
     if (st.grade) {
-      h += '<div class="dgrade"><p class="g-band"><b class="g g' + esc(st.grade.toLowerCase()) +
+      day += '<div class="dgrade"><p class="g-band"><b class="g g' + esc(st.grade.toLowerCase()) +
         '">' + esc(st.grade) + "</b> <span>" +
         (st.grade.toUpperCase() === "DNF" ? "Not finished" : "Graded") + "</span></p>" +
         (st.note ? '<p class="gnote">' + emph(st.note) + "</p>" : "") + "</div>";
@@ -381,7 +404,7 @@
        prescription was edited, or the day was graded before the rest of it
        had been recorded. Offered only where the server would accept it. */
     if (d.can_regrade && st.date) {
-      h += '<div class="dact"><button type="button" class="dregrade">' +
+      day += '<div class="dact"><button type="button" class="dregrade">' +
         (st.grade ? "Re-grade this day" : "Grade this day") + "</button>" +
         '<div class="dsay" hidden><label for="dsay">Anything the grader should know?' +
         ' <span>optional</span></label>' +
@@ -395,24 +418,57 @@
        is rendered when nothing was — no heading, no empty box: a placeholder
        claims a note exists. */
     if (d.notes && d.notes.length) {
-      h += '<div class="dnotes">' + d.notes.map(function (n) {
+      day += '<div class="dnotes">' + d.notes.map(function (n) {
         return "<p>" + emph(n.note) + "</p>";
       }).join("") + "</div>";
     }
 
-    h += '<p class="dsrc">' + esc(d.name) + "</p>";
+    /* The skeleton is built once. .drec is the recording, .dday is the day,
+       and only the first is replaced when the athlete switches pills. */
+    var region = m.body.querySelector(".drec");
+    if (!region) {
+      m.body.innerHTML = picker(st) +
+        '<div class="drec"></div><div class="dday"></div><p class="dsrc"></p>';
+      bindPicker(m, st);
+      region = m.body.querySelector(".drec");
+      m.body.querySelector(".dday").innerHTML = day;
+      bindRegrade(m, st);
+    }
+    /* A Leaflet instance holds document-level listeners, so the outgoing
+       one is torn down rather than orphaned with its container. */
+    if (st.map) {
+      try { st.map.remove(); } catch (e) { /* already gone */ }
+      st.map = null;
+    }
+    region.classList.remove("wait");
+    region.innerHTML = h;
+    m.body.querySelector(".dsrc").textContent = d.name;
+    markPill(m, st);
 
-    m.body.innerHTML = h;
-    bindPicker(m, st);
-    bindRegrade(m, st);
     if (mapped) {
-      var el = m.body.querySelector(".dmap");
+      /* Two fast switches must not leave the first one's map drawing into a
+         container that is no longer on the page. */
+      var mine = ++st.draws;
+      var el = region.querySelector(".dmap");
       loadLeaflet()
-        .then(function () { drawMap(el, d.track); })
+        .then(function () {
+          if (mine !== st.draws) return;
+          st.map = drawMap(el, d.track);
+        })
         .catch(function (e) {
+          if (mine !== st.draws) return;
           el.className = "dmap-off";
           el.textContent = "The map did not load: " + e.message;
         });
+    }
+  }
+
+  /* Which pill is lit. The picker itself is never re-rendered — its
+     buttons keep the listeners bound on the first draw. */
+  function markPill(m, st) {
+    var pills = m.body.querySelectorAll("[data-pick]");
+    for (var i = 0; i < pills.length; i++) {
+      pills[i].classList.toggle("on", pills[i].getAttribute("data-pick") === st.name);
     }
   }
 
@@ -640,6 +696,8 @@
     return v || fallback;
   }
 
+  /* Returns the map so the caller can tear it down: a Leaflet instance
+     outlives its container and keeps document-level listeners. */
   function drawMap(el, track) {
     /* Leaflet writes the stroke as an SVG attribute, where a CSS var() does
        not resolve, so the tokens are read now and baked in. The popover is
@@ -669,8 +727,13 @@
     if (all.length) map.fitBounds(all, { padding: [12, 12] });
     // The container is inside a popover that may still be settling; ask
     // twice rather than assume the first measurement was the real one.
-    setTimeout(function () { map.invalidateSize(); }, 60);
-    setTimeout(function () { map.invalidateSize(); if (all.length) map.fitBounds(all, { padding: [12, 12] }); }, 400);
+    setTimeout(function () { if (map._container) map.invalidateSize(); }, 60);
+    setTimeout(function () {
+      if (!map._container) return; // torn down by a pill switch in between
+      map.invalidateSize();
+      if (all.length) map.fitBounds(all, { padding: [12, 12] });
+    }, 400);
+    return map;
   }
 
   function splits(d, run) {

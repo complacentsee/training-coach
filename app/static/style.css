@@ -452,6 +452,11 @@ td .rec:hover,td .rec:focus-visible{border-color:var(--accent);color:var(--accen
   background:transparent;color:var(--ink-2);cursor:pointer;
   font:700 .62rem/1 var(--mono);letter-spacing:.07em;text-transform:uppercase}
 .dpill.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+/* Switching recordings replaces one region, not the popover. It dims while
+   the next one loads rather than blanking: a flash back to "reading…" threw
+   away the scroll position on a view the athlete was already reading. */
+.drec{transition:opacity .12s ease-out}
+.drec.wait{opacity:.55}
 /* Re-grade: deliberately quiet. It is an override, not the way the app is
    meant to be used, and the armed state is the one that shouts. */
 .dact{margin:0 0 .9rem}
