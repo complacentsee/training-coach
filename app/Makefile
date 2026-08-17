@@ -58,7 +58,7 @@ SRC_HASH = $(shell cat Dockerfile go.mod go.sum $(GO_SRC) $(ASSETS) | shasum -a 
 # the server uses, so local and live are directly comparable.
 DATA_REV = go run . -validate -data ./data 2>&1 | sed -n 's/.*rev=\([0-9a-f]*\).*/\1/p'
 
-.PHONY: help run build image test src-hash check-hash validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
+.PHONY: help run build image test src-hash watch-replay check-hash validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
 
 help:           ## list targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /|/' | column -t -s'|'
@@ -77,6 +77,47 @@ test:           ## run the test suite
 
 src-hash:       ## print the build revision this tree hashes to
 	@echo $(SRC_HASH)
+
+# The watch page is the one part of this repo a test could never reach: proving
+# it meant plugging in a watch, so nothing proved it. The replay harness swaps
+# the watch for a responder that speaks the same containers, which turns "did
+# that refactor change the wire?" into a diff. Four scenarios, because the
+# interesting behaviour is not all on the happy path: both data-phase framings
+# (the Epix splits headers, MTP 1.1 Appendix H) and a desynced session in each
+# direction, which is the error the batch loops treat as fatal.
+#
+# It does NOT replace the watch. It proves the page still sends what it sent
+# before; only the Epix proves the watch still accepts it.
+# WATCH_REF, not REF: REF is already this file's docker image reference, and
+# a `?=` cannot override a `:=` that has already run — the collision made this
+# target ask git for `running-coach:latest`.
+WATCH_REF ?= main
+watch-replay:   ## replay static/webmtp.js against a fake watch and diff with WATCH_REF (default main)
+	@set -e; \
+	command -v node >/dev/null || { echo "FAILED: node is needed to replay the watch page" >&2; exit 1; }; \
+	TMP=$$(mktemp -d); trap 'rm -rf $$TMP' EXIT INT TERM; \
+	git show $(WATCH_REF):app/static/webmtp.js > $$TMP/ref.js || { \
+	  echo "FAILED: no app/static/webmtp.js at $(WATCH_REF)" >&2; exit 1; }; \
+	FAIL=0; \
+	for mode in single split desync-pull desync-send; do \
+	  case $$mode in \
+	    single) FLAG="";; \
+	    split) FLAG=--split;; \
+	    *) FLAG=--desync=$${mode#desync-};; \
+	  esac; \
+	  node ../tools/webmtp_replay.js $$TMP/ref.js $$FLAG > $$TMP/a.txt 2>&1 || true; \
+	  node ../tools/webmtp_replay.js ./static/webmtp.js $$FLAG > $$TMP/b.txt 2>&1 || true; \
+	  [ -s $$TMP/a.txt ] && [ -s $$TMP/b.txt ] || { \
+	    echo "FAILED: $$mode produced no output — an empty pair diffs identical" >&2; exit 1; }; \
+	  if diff -q $$TMP/a.txt $$TMP/b.txt >/dev/null; then \
+	    printf 'watch-replay  %-12s identical to $(WATCH_REF)  (%s transfers)\n' \
+	      $$mode "$$(grep -cE '(OUT|  IN) ' $$TMP/b.txt)"; \
+	  else \
+	    printf 'watch-replay  %-12s DIFFERS from $(WATCH_REF)\n' $$mode; \
+	    diff $$TMP/a.txt $$TMP/b.txt; FAIL=1; \
+	  fi; \
+	done; \
+	[ $$FAIL = 0 ] || { echo "FAILED: the wire moved" >&2; exit 1; }
 
 # SRC_HASH's entire job is to notice that a source file changed, and the cases
 # it silently missed were both nested: a .go file in a subpackage, and an asset
