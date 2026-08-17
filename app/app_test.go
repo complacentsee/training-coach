@@ -2706,6 +2706,55 @@ func TestFITFramingGate(t *testing.T) {
 	}
 }
 
+// TestFITCRCGate is the half framing cannot do. A flipped byte inside the
+// data leaves every length in the file self-consistent, so the framing walk
+// waves it through; only the CRC sees it. The archive is append-only, so a
+// damaged recording admitted once is damaged forever.
+//
+// Both conventions must keep passing — the whole-part one is not an
+// exception here, it is 485 of the live archive's 1,369 files.
+func TestFITCRCGate(t *testing.T) {
+	clean := tenSecondRun(t)
+
+	flipped := bytes.Clone(clean)
+	flipped[len(flipped)/2] ^= 0xFF
+	if err := fitFramingErr(flipped); err != nil {
+		t.Fatalf("a flipped data byte broke the framing, so this test proves nothing: %v", err)
+	}
+
+	for _, c := range []struct {
+		name string
+		body []byte
+		want int
+	}{
+		{"the encoder's own bytes", clean, http.StatusNoContent},
+		{"Zwift's whole-file CRC convention", zwiftConvention(clean), http.StatusNoContent},
+		{"a 12-byte header", twelveByteHeader(clean), http.StatusNoContent},
+		{"a well-framed fake recording", fitBytes("not really fit"), http.StatusNoContent},
+		{"a flipped data byte", flipped, http.StatusBadRequest},
+		{"a flipped CRC", func() []byte {
+			b := bytes.Clone(clean)
+			b[len(b)-1] ^= 0xFF
+			return b
+		}(), http.StatusBadRequest},
+	} {
+		if ok := wholeFileFITCRCOK(c.body); ok != (c.want == http.StatusNoContent) {
+			t.Errorf("%s: wholeFileFITCRCOK = %v", c.name, ok)
+		}
+		// Each body under its own name, so a refusal is never the store's
+		// duplicate rule wearing the CRC gate's clothes.
+		dir := t.TempDir()
+		name := "2026-08-16-07-00-00.fit"
+		if rec := post(fitTestMux(t, dir), "/api/activity?name="+name, c.body); rec.Code != c.want {
+			t.Errorf("%s: POST = %d, want %d: %s", c.name, rec.Code, c.want, rec.Body.String())
+		}
+		_, err := os.Stat(filepath.Join(dir, "activities", name))
+		if stored := err == nil; stored != (c.want == http.StatusNoContent) {
+			t.Errorf("%s: stored = %v, want %v", c.name, stored, c.want == http.StatusNoContent)
+		}
+	}
+}
+
 func TestActivityRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	mux := fitTestMux(t, dir)

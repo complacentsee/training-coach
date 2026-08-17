@@ -235,6 +235,17 @@ func (s *server) postActivity(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a well-framed FIT file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Framing catches a short read; only the CRC catches a wrong one. A
+	// flipped byte inside the data leaves every length in the file
+	// self-consistent, and this archive is append-only — a damaged recording
+	// admitted once is damaged forever. wholeFileFITCRCOK is the decoder's
+	// own check, both conventions, unchanged: 485 of the live archive's 1,369
+	// files match only the whole-part one, so accepting a single convention
+	// here would refuse a third of what the watch and Zwift actually write.
+	if !wholeFileFITCRCOK(body) {
+		http.Error(w, "FIT CRC mismatch — the file is damaged or was read short", http.StatusBadRequest)
+		return
+	}
 	dir := s.activitiesDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("activity %s: %v", name, err)
