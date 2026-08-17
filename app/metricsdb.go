@@ -38,12 +38,16 @@ import (
 // metricsSchemaVersion gates the whole file: a mismatch on open drops every
 // derived table and rebuilds from the archive via the startup reconcile.
 // Bump it whenever the schema OR the register's arithmetic changes shape.
-const metricsSchemaVersion = 3
+// v4, 17 Aug 2026: the gap rule — statistics are moving-time statistics,
+// histograms deposit no seconds across a recording gap, and moving_s joins
+// the row. A version bump is the whole migration: drop and rebuild.
+const metricsSchemaVersion = 4
 
 const metricsSchema = `
 CREATE TABLE IF NOT EXISTS activities(
   name TEXT PRIMARY KEY, date TEXT NOT NULL, sport TEXT NOT NULL,
-  start_utc TEXT NOT NULL, elapsed_s INTEGER NOT NULL, records INTEGER NOT NULL,
+  start_utc TEXT NOT NULL, elapsed_s INTEGER NOT NULL, moving_s INTEGER NOT NULL,
+  records INTEGER NOT NULL,
   avg_hr REAL, max_hr INTEGER, dropout_share REAL, hr_drift REAL,
   decoupling_pct REAL, avg_cadence REAL, avg_power REAL, distance_m REAL,
   sha256 TEXT NOT NULL, schema_version INTEGER NOT NULL,
@@ -217,8 +221,8 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location, wx *
 		tempF, dewF, windMPH, wxSrc = &w.TempF, &w.DewF, &w.WindMPH, &w.Source
 		rh = &w.RH
 	}
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO activities VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		a.Name, a.Date, a.Sport, a.StartUTC, a.ElapsedS, a.Records,
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO activities VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.Name, a.Date, a.Sport, a.StartUTC, a.ElapsedS, a.MovingS, a.Records,
 		a.AvgHR, a.MaxHR, a.DropoutShare, a.HRDrift, a.DecouplingPct,
 		a.AvgCadence, a.AvgPower, a.DistanceM, a.SHA256, metricsSchemaVersion,
 		tempF, dewF, rh, windMPH, wxSrc); err != nil {
@@ -254,7 +258,7 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location, wx *
 // recordings (121 dates in this archive), and naming them to the grader
 // means saying how big each one was.
 func (m *metricsDB) byDate(date string) ([]activityMetrics, error) {
-	rows, err := m.r.Query(`SELECT name, date, sport, elapsed_s, distance_m
+	rows, err := m.r.Query(`SELECT name, date, sport, elapsed_s, moving_s, distance_m
 		FROM activities WHERE date = ? ORDER BY name`, date)
 	if err != nil {
 		return nil, err
@@ -263,7 +267,7 @@ func (m *metricsDB) byDate(date string) ([]activityMetrics, error) {
 	var out []activityMetrics
 	for rows.Next() {
 		var a activityMetrics
-		if err := rows.Scan(&a.Name, &a.Date, &a.Sport, &a.ElapsedS, &a.DistanceM); err != nil {
+		if err := rows.Scan(&a.Name, &a.Date, &a.Sport, &a.ElapsedS, &a.MovingS, &a.DistanceM); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -487,12 +491,12 @@ func (m *metricsDB) rowByName(name string) (*activityMetrics, error) {
 	var tempF, dewF, windMPH *float64
 	var rh *int
 	var wxSrc *string
-	err := m.r.QueryRow(`SELECT name, date, sport, start_utc, elapsed_s, records,
+	err := m.r.QueryRow(`SELECT name, date, sport, start_utc, elapsed_s, moving_s, records,
 		avg_hr, max_hr, dropout_share, hr_drift, decoupling_pct,
 		avg_cadence, avg_power, distance_m, sha256,
 		temp_f, dew_f, humidity_pct, wind_mph, weather_src
 		FROM activities WHERE name=?`, name).Scan(
-		&a.Name, &a.Date, &a.Sport, &a.StartUTC, &a.ElapsedS, &a.Records,
+		&a.Name, &a.Date, &a.Sport, &a.StartUTC, &a.ElapsedS, &a.MovingS, &a.Records,
 		&a.AvgHR, &a.MaxHR, &a.DropoutShare, &a.HRDrift, &a.DecouplingPct,
 		&a.AvgCadence, &a.AvgPower, &a.DistanceM, &a.SHA256,
 		&tempF, &dewF, &rh, &windMPH, &wxSrc)

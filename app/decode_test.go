@@ -138,9 +138,11 @@ func TestDecodeActivityFixture(t *testing.T) {
 	if m.DropoutShare == nil || *m.DropoutShare != 0 {
 		t.Errorf("dropout = %v", m.DropoutShare)
 	}
-	// Halves split at t=5: first-half samples 121..125, second 127..130
-	// (126 opens the second list, so it weights nothing) → 128.5 − 123.
-	if m.HRDrift == nil || *m.HRDrift != 5.5 {
+	// Halves split at t=5: first-half samples 121..125 → 123, second half
+	// 126..130 → 128. Sample 126 covers (5,6] and belongs to the half it
+	// sits in — under the old sublist idiom it opened the second list and
+	// weighted nothing, which is why this pinned 5.5 until 17 Aug 2026.
+	if m.HRDrift == nil || *m.HRDrift != 5.0 {
 		t.Errorf("drift = %v", m.HRDrift)
 	}
 	total := 0
@@ -149,6 +151,78 @@ func TestDecodeActivityFixture(t *testing.T) {
 	}
 	if total != 10 || m.HRHist[125] != 1 {
 		t.Errorf("hist = %v", m.HRHist)
+	}
+}
+
+// TestRecordingGapCarriesNoWeight pins the gap rule end to end: eleven
+// seconds at HR 130, a 790 s gap (the watch stopped), eleven at HR 150.
+// The sample after the gap spans it and must weight NOTHING — under the
+// old convention it carried all 790 s, which is how a 12-minute phone
+// call once read as "rode too easy".
+func TestRecordingGapCarriesNoWeight(t *testing.T) {
+	msgs := make([]proto.Message, 0, 24)
+	for i := 0; i <= 10; i++ {
+		msgs = append(msgs, runRecord(i, 130, 3000, 80))
+	}
+	for i := 800; i <= 810; i++ {
+		msgs = append(msgs, runRecord(i, 150, 3000, 80))
+	}
+	msgs = append(msgs, sessionMsg(typedef.SportRunning, 100_00))
+	body := encodeActivityFixture(t, msgs...)
+
+	st, err := decodeActivity(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := computeMetrics("2026-08-01-12-00-00.fit", "2026-08-01", st)
+	if m.ElapsedS != 810 || m.MovingS != 20 {
+		t.Fatalf("elapsed=%d moving=%d, want 810 and 20", m.ElapsedS, m.MovingS)
+	}
+	// Ten weighted seconds at 130, ten at 150; the gap sample's 790 s of
+	// HR 150 deposit nothing. Elapsed-weighted, this would be ~149.75.
+	if m.AvgHR == nil || *m.AvgHR != 140 {
+		t.Errorf("avg hr = %v, want exactly 140", m.AvgHR)
+	}
+	total := 0
+	for _, sec := range m.HRHist {
+		total += sec
+	}
+	if total != m.MovingS || m.HRHist[130] != 10 || m.HRHist[150] != 10 {
+		t.Errorf("hist = %v (total %d), want 10 s each of 130 and 150", m.HRHist, total)
+	}
+	// Drift: halves split at t=405 — all 130 before, all 150 after.
+	if m.HRDrift == nil || *m.HRDrift != 20 {
+		t.Errorf("drift = %v, want 20", m.HRDrift)
+	}
+	if sh := runGradeShare(st, 145); sh == nil || *sh != 0.5 {
+		t.Errorf("share under 145 = %v, want exactly 0.5", sh)
+	}
+
+	// Through the route: the payload says how much of the clock was work —
+	// and only on a file that stopped. The stop-free fixture's payload must
+	// not gain the keys, so a gap-free grade context is unchanged by
+	// construction.
+	dir := t.TempDir()
+	mux := fitTestMux(t, dir)
+	if rec := post(mux, "/api/activity?name=2026-08-01-12-00-00.fit", body); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(get(mux, "/api/activity-metrics?name=2026-08-01-12-00-00.fit", nil).Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["moving_s"] != 20.0 || out["moving_hms"] != "0:20" {
+		t.Errorf("payload moving = %v %v, want 20 and 0:20", out["moving_s"], out["moving_hms"])
+	}
+	if rec := post(mux, "/api/activity?name=2026-08-01-13-00-00.fit", tenSecondRun(t)); rec.Code != http.StatusNoContent {
+		t.Fatal("gap-free fixture refused")
+	}
+	var free map[string]any
+	if err := json.Unmarshal(get(mux, "/api/activity-metrics?name=2026-08-01-13-00-00.fit", nil).Body.Bytes(), &free); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := free["moving_s"]; has {
+		t.Error("a stop-free file's payload gained moving_s — it must be byte-identical to what it always was")
 	}
 }
 

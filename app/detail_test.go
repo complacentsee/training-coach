@@ -355,6 +355,12 @@ func TestGraderPayloadIsNotThePagePayload(t *testing.T) {
 		// laps WITH their trigger, so a button press is not read as a rep.
 		"stops": true, "stopped_s": true, "laps": true, "lap_count": true,
 		"first_20min": true,
+		// Added deliberately 17 Aug 2026: the moving clock beside the wall
+		// clock, present only when a recording gap exists — a stop-free
+		// file's payload is unchanged by construction. The statistics are
+		// weighted over moving time (the gap rule), and against a prescribed
+		// duration, moving is the number that answers "was the work done".
+		"moving_s": true, "moving_hms": true,
 	}
 	for k := range got {
 		if !want[k] {

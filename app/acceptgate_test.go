@@ -428,6 +428,9 @@ func diffMetrics(d *dataset, m *activityMetrics, s *activityStreams, raw json.Ra
 	if ev, ok := dig(py, "elapsed").(float64); !ok || int(ev) != m.ElapsedS {
 		diffs = append(diffs, fmt.Sprintf("elapsed: go %d, py %v", m.ElapsedS, dig(py, "elapsed")))
 	}
+	if mv, ok := dig(py, "moving").(float64); !ok || int(mv) != m.MovingS {
+		diffs = append(diffs, fmt.Sprintf("moving: go %d, py %v", m.MovingS, dig(py, "moving")))
+	}
 	check("hr.avg", m.AvgHR, dig(py, "hr", "avg"), 1)
 	check("hr.dropout_share", m.DropoutShare, dig(py, "hr", "dropout_share"), 4)
 	check("hr.drift", m.HRDrift, dig(py, "hr", "drift"), 1)

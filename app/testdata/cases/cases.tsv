@@ -34,11 +34,11 @@
 2026-01-10-06-00-00.fit	2026-01-10	A	1.0000	legend	generated: 13 km held at 136-146 bpm, every minute under the cap
 2026-01-10-07-00-00.fit	2026-01-10	B	0.6020	legend	real: 12.19 km, avg 146.6 — on the B floor
 2026-01-10-08-00-00.fit	2026-01-10	C	0.5774	legend	real: 12.60 km, avg 145.5
-2026-01-10-09-00-00.fit	2026-01-10	C	0.4442	legend	real: 12.08 km, avg 143.4
-2026-01-10-10-00-00.fit	2026-01-10	D	0.3225	legend	real: 11.28 km, avg 159.8
-2026-01-10-11-00-00.fit	2026-01-10	F	0.1917	legend	real: 12.96 km, avg 163.1 — just under the D floor
-2026-01-10-12-00-00.fit	2026-01-10	F	0.0409	legend	real: 12.92 km, avg 171.7
+2026-01-10-09-00-00.fit	2026-01-10	C	0.4248	legend	real: 12.08 km, avg 143.4; carries stops — share is moving-time since 17 Aug 2026 (was 0.4442)
+2026-01-10-10-00-00.fit	2026-01-10	F	0.1758	legend	real: 11.28 km, avg 159.8; carries stops — the old D rested on stop-time counted as under-cap (0.3225); moving-time says F, 17 Aug 2026
+2026-01-10-11-00-00.fit	2026-01-10	F	0.1089	legend	real: 12.96 km, avg 163.1 — just under the D floor; carries stops — moving-time share since 17 Aug 2026 (was 0.1917)
+2026-01-10-12-00-00.fit	2026-01-10	F	0.0245	legend	real: 12.92 km, avg 171.7; carries stops — moving-time share since 17 Aug 2026 (was 0.0409)
 2026-01-17-07-00-00.fit	2026-01-17	F	0.0228	legend	real: 13.96 km, avg 175.9 — a long run run hard throughout
-2026-01-07-07-00-00.fit	2026-01-07	D	0.2226	legend	real: 8.10 km against an 8 km easy day, avg 158.0
+2026-01-07-07-00-00.fit	2026-01-07	F	0.1328	legend	real: 8.10 km against an 8 km easy day, avg 158.0; carries stops — moving-time share since 17 Aug 2026 (was 0.2226 (letter was D))
 2026-01-13-06-00-00.fit	2026-01-13	A	0.6496	judgment	generated: the 3x4:00 threshold day delivered - all three reps at 4:30/km, on target
 2026-01-13-07-00-00.fit	2026-01-13	DNF	0.8343	judgment	generated: the same day abandoned - one rep at 5:28/km, then home at 25 min of 45 - not essentially completed

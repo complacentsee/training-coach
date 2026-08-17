@@ -17,6 +17,15 @@ The pinned conventions, restated from the register:
   Never count samples; resampled streams only look uniform. A non-positive
   interval contributes nothing (clocks can step backwards at a chained
   file's seam).
+- A sample whose interval spans a RECORDING GAP carries ZERO weight in every
+  statistic (since 17 Aug 2026): one post-resume second is not evidence
+  about the minutes the watch was stopped. The gap threshold is the
+  register's own — max(10 s, 5x the median positive interval). Statistics
+  are therefore MOVING-time statistics; `elapsed` keeps the wall clock and
+  `moving` says how much of it was recorded work.
+- Windowed statistics (drift halves, first-20-min, the bike after-warm-up
+  window) select samples by predicate on the original stream, each keeping
+  its own weight — never by rebuilding a sublist and re-weighting inside it.
 - HR dropouts: samples under 50 bpm are excluded from all HR statistics and
   the excluded share is reported. Over 5% excluded, the note must say so.
 - Runs are graded on the whole run, warm-up, strides and all — that is what
@@ -41,28 +50,34 @@ def parse_weight_kg(s):
     v = float(m.group(1))
     return v if m.group(2) == "kg" else v * 0.45359237
 
-def weighted(t, vals, keep):
-    """(total secs kept, mean, share of secs where keep) over paired samples."""
-    tot = tot_v = 0.0
+def sample_weights(t):
+    """w[i] = seconds sample i covers; zero across a recording gap or a
+    non-positive interval. The gap threshold mirrors recordingGapS."""
+    dts = sorted(dt for i in range(1, len(t)) if (dt := t[i] - t[i - 1]) > 0)
+    gap_s = max(10, dts[len(dts) // 2] * 5) if dts else 10
+    w = [0] * len(t)
     for i in range(1, len(t)):
         dt = t[i] - t[i - 1]
-        if dt <= 0:
-            continue
-        if keep(vals[i]):
-            tot += dt
-            tot_v += dt * vals[i]
+        if 0 < dt < gap_s:
+            w[i] = dt
+    return w
+
+def weighted(w, vals, keep):
+    """(total secs kept, mean) over paired samples, sample i covering w[i]."""
+    tot = tot_v = 0.0
+    for i in range(1, len(w)):
+        if w[i] > 0 and keep(vals[i]):
+            tot += w[i]
+            tot_v += w[i] * vals[i]
     return tot, (tot_v / tot if tot else None)
 
-def share(t, vals, pred, valid=lambda v: True):
+def share(w, vals, pred, valid=lambda v: True):
     num = den = 0.0
-    for i in range(1, len(t)):
-        dt = t[i] - t[i - 1]
-        if dt <= 0:
-            continue
-        if valid(vals[i]):
-            den += dt
+    for i in range(1, len(w)):
+        if w[i] > 0 and valid(vals[i]):
+            den += w[i]
             if pred(vals[i]):
-                num += dt
+                num += w[i]
     return num / den if den else None
 
 def main():
@@ -79,31 +94,41 @@ def main():
         sys.exit("no heart_rate stream")
     kg = parse_weight_kg(a["weight"])
     anchors = a["hr"]
-    out = {"elapsed": t[-1], "elapsed_hms": f"{t[-1]//60}:{t[-1]%60:02d}"}
+    w = sample_weights(t)
+    moving = sum(w)
+    out = {"elapsed": t[-1], "elapsed_hms": f"{t[-1]//60}:{t[-1]%60:02d}",
+           "moving": moving}
 
     ok = lambda v: v >= 50  # dropout rule
-    dropped = share(t, hr, lambda v: not ok(v))
-    kept_secs, avg_hr = weighted(t, hr, ok)
+    dropped = share(w, hr, lambda v: not ok(v))
+    kept_secs, avg_hr = weighted(w, hr, ok)
     out["hr"] = {
         "avg": round(avg_hr, 1),
         "max": max(v for v in hr if ok(v)),
         "dropout_share": round(dropped, 4),
     }
 
+    # Drift: predicate on the original stream, each sample keeping its own
+    # weight — never a rebuilt sublist.
     half = t[-1] / 2
-    firsts = [(ti, v) for ti, v in zip(t, hr) if ok(v) and ti <= half]
-    seconds = [(ti, v) for ti, v in zip(t, hr) if ok(v) and ti > half]
-    if firsts and seconds:
-        m1 = weighted([x for x, _ in firsts], [v for _, v in firsts], ok)[1]
-        m2 = weighted([x for x, _ in seconds], [v for _, v in seconds], ok)[1]
-        out["hr"]["drift"] = round(m2 - m1, 1)
+    w1 = s1 = w2 = s2 = 0.0
+    for i in range(1, len(w)):
+        if w[i] > 0 and ok(hr[i]):
+            if t[i] <= half:
+                w1 += w[i]; s1 += w[i] * hr[i]
+            else:
+                w2 += w[i]; s2 += w[i] * hr[i]
+    if w1 and w2:
+        out["hr"]["drift"] = round(s2 / w2 - s1 / w1, 1)
 
-    w = s.get("watts")
-    if w:
-        _, avg_w = weighted(t, w, lambda v: True)
-        out["power"] = {"avg": round(avg_w, 1), "max": max(w)}
+    watts = s.get("watts")
+    if watts:
+        _, avg_w = weighted(w, watts, lambda v: True)
+        out["power"] = {"avg": round(avg_w, 1), "max": max(watts)}
         # best_60s is the highest time-weighted mean over any 60 s of
-        # recorded time (gaps count as elapsed, as everywhere else). A ramp
+        # ELAPSED time — deliberately not the gap rule: it is max-seeking,
+        # a window spanning a stop can only lose, and changing it buys
+        # nothing. A ramp
         # test's result IS this number: FTP is 75% of it, and an average
         # over the whole ride describes a climb to failure as a steady ride.
         if args.kind == "bike":
@@ -112,7 +137,7 @@ def main():
             cdur = [0.0] * len(t)
             for i in range(1, len(t)):
                 dt = max(t[i] - t[i - 1], 0)
-                csum[i] = csum[i - 1] + dt * w[i]
+                csum[i] = csum[i - 1] + dt * watts[i]
                 cdur[i] = cdur[i - 1] + dt
             for i in range(len(t)):
                 while j < len(t) and t[j] - t[i] < 60:
@@ -129,23 +154,20 @@ def main():
         # a run: a running-power estimate divided by cycling FTP is a ratio
         # with no meaning, and quoting it invites grading a run on it.
         if args.kind == "bike":
-            out["power"]["wkg"] = round(avg_w / kg, 2)
+            out["power"]["wkg"] = round(avg_w / kg, 2)  # avg is moving-based
             ftp = a.get("power", {}).get("ftp")
             if ftp:
                 out["power"]["pct_ftp"] = round(avg_w / ftp, 3)
                 out["power"]["z2_band_w"] = [round(0.56 * ftp), round(0.75 * ftp)]
 
-    output = w or s.get("velocity_smooth")
-    if output and firsts and seconds:
+    output = watts or s.get("velocity_smooth")
+    if output and w1 and w2:
         def half_eff(lo, hi):
             num = den = 0.0
-            for i in range(1, len(t)):
-                dt = t[i] - t[i - 1]
-                if dt <= 0:
-                    continue
-                if lo < t[i] <= hi and ok(hr[i]) and output[i] > 0:
-                    num += dt * (output[i] / hr[i])
-                    den += dt
+            for i in range(1, len(w)):
+                if w[i] > 0 and lo < t[i] <= hi and ok(hr[i]) and output[i] > 0:
+                    num += w[i] * (output[i] / hr[i])
+                    den += w[i]
             return num / den if den else None
         start = 600 if args.kind == "bike" else 0
         mid = start + (t[-1] - start) / 2
@@ -155,32 +177,35 @@ def main():
 
     cad = s.get("cadence")
     if cad:
-        _, avg_c = weighted(t, cad, lambda v: v > 0)
+        _, avg_c = weighted(w, cad, lambda v: v > 0)
         if avg_c:
             out["cadence"] = round(avg_c * (2 if args.kind == "run" else 1), 1)
 
     if args.kind == "run":
         cap = anchors["gradeCap"]
         out["grade_input"] = {
-            "under_grade_cap_share": round(share(t, hr, lambda v: v <= cap, ok), 4),
+            "under_grade_cap_share": round(share(w, hr, lambda v: v <= cap, ok), 4),
             "grade_cap": cap,
         }
-        f20 = [(ti, v) for ti, v in zip(t, hr) if ok(v) and ti <= 1200]
-        if f20:
-            m = weighted([x for x, _ in f20], [v for _, v in f20], ok)[1]
-            out["first_20min"] = {"avg": round(m, 1), "cap": anchors["firstMin"]}
+        f_tot = f_sum = 0.0
+        for i in range(1, len(w)):
+            if w[i] > 0 and t[i] <= 1200 and ok(hr[i]):
+                f_tot += w[i]; f_sum += w[i] * hr[i]
+        if f_tot:
+            out["first_20min"] = {"avg": round(f_sum / f_tot, 1), "cap": anchors["firstMin"]}
     else:
         lo, hi, cap = anchors["bikeLo"], anchors["bikeHi"], anchors["bikeCap"]
-        after_warmup = lambda: [
-            (ti, v) for ti, v in zip(t, hr) if ti > 600 and ok(v)
-        ]
-        aw = after_warmup()
-        tw, vw = [x for x, _ in aw], [v for _, v in aw]
+        aw_num = aw_den = 0.0
+        for i in range(1, len(w)):
+            if w[i] > 0 and t[i] > 600 and ok(hr[i]):
+                aw_den += w[i]
+                if lo <= hr[i] <= hi:
+                    aw_num += w[i]
         out["grade_input"] = {
-            "in_band_share_after_warmup": round(share(tw, vw, lambda v: lo <= v <= hi), 4),
+            "in_band_share_after_warmup": round(aw_num / aw_den, 4) if aw_den else None,
             "band": [lo, hi],
             "cap": cap,
-            "secs_over_cap": round(share(t, hr, lambda v: v > cap, ok) * kept_secs),
+            "secs_over_cap": round(share(w, hr, lambda v: v > cap, ok) * kept_secs),
         }
 
     json.dump(out, sys.stdout, indent=1)

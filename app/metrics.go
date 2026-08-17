@@ -15,6 +15,21 @@ package main
 //     backwards at a chained file's seam, and negative seconds subtracting
 //     from a share is how the histogram and the stream computation were
 //     once able to disagree about the same run.
+//   - A sample whose interval spans a RECORDING GAP (dt ≥ recordingGapS,
+//     the same threshold stopsIn reports stops with) carries ZERO weight in
+//     every statistic and histogram — since 17 Aug 2026. One second of
+//     post-resume data is not evidence about the twelve minutes the watch
+//     was stopped, and weighting it as if it were turned a phone call into
+//     "rode too easy": a 741 s gap sample at HR 108 dragged a mid-band ride
+//     from 70.7% in-band to 54.1%, average power from 122.8 W to 98.6, and
+//     manufactured a −11.9 drift. Statistics are therefore MOVING-time
+//     statistics; elapsed_s alone keeps the wall clock, and moving_s says
+//     how much of it was recorded work.
+//   - Windowed statistics (drift halves, first-20-min, the bike's
+//     after-warm-up window) select samples by PREDICATE on the original
+//     stream, each keeping its own weight — never by building a sublist and
+//     re-weighting inside it, which silently bridged excluded time onto the
+//     next kept sample and dropped each window's first sample entirely.
 //   - HR dropouts: samples under 50 bpm are excluded from all HR statistics
 //     and the excluded share is reported (dropout_share). Over 5% excluded,
 //     a grade note must say the HR numbers are contaminated.
@@ -55,7 +70,11 @@ type activityMetrics struct {
 	Sport    string
 	StartUTC string // RFC3339
 	ElapsedS int
-	Records  int
+	// MovingS is the elapsed seconds minus every recording gap — the time
+	// the statistics are weighted over. Equal to ElapsedS on a file with no
+	// stops, which is most of them.
+	MovingS int
+	Records int
 
 	AvgHR         *float64
 	MaxHR         *int
@@ -79,18 +98,31 @@ type activityMetrics struct {
 // hrValid is the dropout rule's one boundary.
 func hrValid(v float64) bool { return v >= 50 }
 
-// weightedMean is (total seconds kept, mean) over paired samples, sample i
-// covering t[i]−t[i−1] seconds. Returns nil when nothing qualifies.
-func weightedMean(t []int, vals []float64, keep func(float64) bool) (float64, *float64) {
-	var tot, totV float64
+// sampleWeights is every statistic's clock: w[i] is the seconds sample i
+// covers, zero when the interval is non-positive (a chained file's seam) or
+// spans a recording gap (the watch was stopped — one post-resume second is
+// not evidence about the minutes before it). moving is their sum, the
+// recorded work the wall clock held.
+func sampleWeights(t []int) (w []int, moving int) {
+	gapS := recordingGapS(t)
+	w = make([]int, len(t))
 	for i := 1; i < len(t); i++ {
-		dt := float64(t[i] - t[i-1])
-		if dt <= 0 {
-			continue
+		if dt := t[i] - t[i-1]; dt > 0 && dt < gapS {
+			w[i] = dt
+			moving += dt
 		}
-		if keep(vals[i]) {
-			tot += dt
-			totV += dt * vals[i]
+	}
+	return w, moving
+}
+
+// weightedMean is (total seconds kept, mean) over paired samples, sample i
+// covering w[i] seconds. Returns nil when nothing qualifies.
+func weightedMean(w []int, vals []float64, keep func(float64) bool) (float64, *float64) {
+	var tot, totV float64
+	for i := 1; i < len(w); i++ {
+		if w[i] > 0 && keep(vals[i]) {
+			tot += float64(w[i])
+			totV += float64(w[i]) * vals[i]
 		}
 	}
 	if tot == 0 {
@@ -101,17 +133,13 @@ func weightedMean(t []int, vals []float64, keep func(float64) bool) (float64, *f
 }
 
 // timeShare is the time-weighted share of valid samples satisfying pred.
-func timeShare(t []int, vals []float64, pred, valid func(float64) bool) *float64 {
+func timeShare(w []int, vals []float64, pred, valid func(float64) bool) *float64 {
 	var num, den float64
-	for i := 1; i < len(t); i++ {
-		dt := float64(t[i] - t[i-1])
-		if dt <= 0 {
-			continue
-		}
-		if valid(vals[i]) {
-			den += dt
+	for i := 1; i < len(w); i++ {
+		if w[i] > 0 && valid(vals[i]) {
+			den += float64(w[i])
 			if pred(vals[i]) {
-				num += dt
+				num += float64(w[i])
 			}
 		}
 	}
@@ -134,16 +162,17 @@ func intsToFloats(xs []int) []float64 {
 // training day the caller derived (device name first, start time second) —
 // the register itself is date-blind.
 func computeMetrics(name, date string, s *activityStreams) *activityMetrics {
+	w, moving := sampleWeights(s.Time)
 	a := &activityMetrics{Name: name, Date: date, Sport: s.Sport,
 		StartUTC: s.StartUTC.Format("2006-01-02T15:04:05Z"),
-		ElapsedS: s.Time[len(s.Time)-1], Records: len(s.Time),
+		ElapsedS: s.Time[len(s.Time)-1], MovingS: moving, Records: len(s.Time),
 		DistanceM: s.DistM, HRHist: map[int]int{}}
 	all := func(float64) bool { return true }
 	hrF := intsToFloats(s.HR)
 
 	if s.HaveHR {
-		a.DropoutShare = timeShare(s.Time, hrF, func(v float64) bool { return !hrValid(v) }, all)
-		_, a.AvgHR = weightedMean(s.Time, hrF, hrValid)
+		a.DropoutShare = timeShare(w, hrF, func(v float64) bool { return !hrValid(v) }, all)
+		_, a.AvgHR = weightedMean(w, hrF, hrValid)
 		mx := 0
 		for _, v := range s.HR {
 			if v >= 50 && v > mx {
@@ -153,34 +182,33 @@ func computeMetrics(name, date string, s *activityStreams) *activityMetrics {
 		if mx > 0 {
 			a.MaxHR = &mx
 		}
-		// Drift: valid samples split at half the elapsed time, a weighted
-		// mean within each half's own filtered list.
+		// Drift: second-half mean minus first-half mean, split at half the
+		// elapsed time — each sample selected where it sits and keeping its
+		// own weight, per the windowed-statistics convention.
 		half := float64(a.ElapsedS) / 2
-		var t1, t2 []int
-		var v1, v2 []float64
-		for i, ti := range s.Time {
-			if !hrValid(hrF[i]) {
+		var w1, w2 float64
+		var s1, s2 float64
+		for i := 1; i < len(w); i++ {
+			if w[i] == 0 || !hrValid(hrF[i]) {
 				continue
 			}
-			if float64(ti) <= half {
-				t1, v1 = append(t1, ti), append(v1, hrF[i])
+			if float64(s.Time[i]) <= half {
+				w1 += float64(w[i])
+				s1 += float64(w[i]) * hrF[i]
 			} else {
-				t2, v2 = append(t2, ti), append(v2, hrF[i])
+				w2 += float64(w[i])
+				s2 += float64(w[i]) * hrF[i]
 			}
 		}
-		if len(t1) > 0 && len(t2) > 0 {
-			_, m1 := weightedMean(t1, v1, hrValid)
-			_, m2 := weightedMean(t2, v2, hrValid)
-			if m1 != nil && m2 != nil {
-				d := *m2 - *m1
-				a.HRDrift = &d
-			}
+		if w1 > 0 && w2 > 0 {
+			d := s2/w2 - s1/w1
+			a.HRDrift = &d
 		}
-		// Histogram: every sample's dt at its bpm, missing included as 0.
-		for i := 1; i < len(s.Time); i++ {
-			dt := s.Time[i] - s.Time[i-1]
-			if dt > 0 {
-				a.HRHist[s.HR[i]] += dt
+		// Histogram: every weighted sample's seconds at its bpm, missing
+		// included as 0. A gap-spanning sample has no seconds to deposit.
+		for i := 1; i < len(w); i++ {
+			if w[i] > 0 {
+				a.HRHist[s.HR[i]] += w[i]
 			}
 		}
 		// Decoupling: watts preferred, else velocity; bike drops the first
@@ -191,14 +219,14 @@ func computeMetrics(name, date string, s *activityStreams) *activityMetrics {
 		} else if s.HaveVel {
 			output = s.Vel
 		}
-		if output != nil && len(t1) > 0 && len(t2) > 0 {
+		if output != nil && w1 > 0 && w2 > 0 {
 			start := 0.0
 			if s.Sport == "cycling" {
 				start = 600
 			}
 			mid := start + (float64(a.ElapsedS)-start)/2
-			e1 := halfEfficiency(s.Time, hrF, output, start, mid)
-			e2 := halfEfficiency(s.Time, hrF, output, mid, float64(a.ElapsedS))
+			e1 := halfEfficiency(s.Time, w, hrF, output, start, mid)
+			e2 := halfEfficiency(s.Time, w, hrF, output, mid, float64(a.ElapsedS))
 			if e1 != nil && e2 != nil && *e1 != 0 && *e2 != 0 {
 				d := (*e1 / *e2 - 1) * 100
 				a.DecouplingPct = &d
@@ -206,17 +234,16 @@ func computeMetrics(name, date string, s *activityStreams) *activityMetrics {
 		}
 	}
 	if s.HaveWatts {
-		_, a.AvgPower = weightedMean(s.Time, intsToFloats(s.Watts), all)
+		_, a.AvgPower = weightedMean(w, intsToFloats(s.Watts), all)
 		a.PowerHist = map[int]int{}
-		for i := 1; i < len(s.Time); i++ {
-			dt := s.Time[i] - s.Time[i-1]
-			if dt > 0 {
-				a.PowerHist[s.Watts[i]] += dt
+		for i := 1; i < len(w); i++ {
+			if w[i] > 0 {
+				a.PowerHist[s.Watts[i]] += w[i]
 			}
 		}
 	}
 	if s.HaveCad {
-		_, a.AvgCadence = weightedMean(s.Time, intsToFloats(s.Cad),
+		_, a.AvgCadence = weightedMean(w, intsToFloats(s.Cad),
 			func(v float64) bool { return v > 0 })
 	}
 	return a
@@ -496,8 +523,10 @@ func fastestSegments(s *activityStreams, meters float64, secs int, count int, u 
 }
 
 // bestRolling is the highest time-weighted mean of vals over any window of
-// `window` seconds. Recording gaps count as elapsed time, as everywhere
-// else in the register. Returns nil when the trace is shorter than the
+// `window` seconds. Recording gaps count as ELAPSED time here, deliberately
+// outside the gap rule: this is max-seeking, a window spanning a stop can
+// only lose, and both registers keep it that way in step. Returns nil when
+// the trace is shorter than the
 // window. This is what a ramp test is actually judged on — an average over
 // the whole ride says "steady Z2" about a session that climbed to failure,
 // which is how a valid test gets read as a soft one.
@@ -565,17 +594,13 @@ func pyRound(x float64, n int) float64 {
 
 // halfEfficiency is the mean output/HR over (lo, hi], valid HR and positive
 // output only — decoupling's building block.
-func halfEfficiency(t []int, hr, output []float64, lo, hi float64) *float64 {
+func halfEfficiency(t, w []int, hr, output []float64, lo, hi float64) *float64 {
 	var num, den float64
 	for i := 1; i < len(t); i++ {
 		ti := float64(t[i])
-		dt := float64(t[i] - t[i-1])
-		if dt <= 0 {
-			continue
-		}
-		if lo < ti && ti <= hi && hrValid(hr[i]) && output[i] > 0 {
-			num += dt * (output[i] / hr[i])
-			den += dt
+		if w[i] > 0 && lo < ti && ti <= hi && hrValid(hr[i]) && output[i] > 0 {
+			num += float64(w[i]) * (output[i] / hr[i])
+			den += float64(w[i])
 		}
 	}
 	if den == 0 {
@@ -593,28 +618,30 @@ func runGradeShare(s *activityStreams, cap int) *float64 {
 	if !s.HaveHR {
 		return nil
 	}
+	w, _ := sampleWeights(s.Time)
 	hrF := intsToFloats(s.HR)
-	return timeShare(s.Time, hrF, func(v float64) bool { return v <= float64(cap) }, hrValid)
+	return timeShare(w, hrF, func(v float64) bool { return v <= float64(cap) }, hrValid)
 }
 
-// runFirst20Mean is the mean HR over the first 1200 s (valid samples,
-// weighted within the filtered list — the register's drift-halves idiom).
+// runFirst20Mean is the mean HR over the first 1200 s — valid samples
+// selected in place, each keeping its own weight.
 func runFirst20Mean(s *activityStreams) *float64 {
 	if !s.HaveHR {
 		return nil
 	}
-	var t []int
-	var v []float64
-	for i, ti := range s.Time {
-		if ti <= 1200 && hrValid(float64(s.HR[i])) {
-			t, v = append(t, ti), append(v, float64(s.HR[i]))
+	w, _ := sampleWeights(s.Time)
+	var tot, sum float64
+	for i := 1; i < len(w); i++ {
+		if w[i] > 0 && s.Time[i] <= 1200 && hrValid(float64(s.HR[i])) {
+			tot += float64(w[i])
+			sum += float64(w[i]) * float64(s.HR[i])
 		}
 	}
-	if len(t) == 0 {
+	if tot == 0 {
 		return nil
 	}
-	_, m := weightedMean(t, v, hrValid)
-	return m
+	m := sum / tot
+	return &m
 }
 
 // bikeGradeInput is the in-band share after the 600 s warm-up (measured
@@ -624,18 +651,25 @@ func bikeGradeInput(s *activityStreams, lo, hi, cap int) (inBand *float64, secsO
 	if !s.HaveHR {
 		return nil, nil
 	}
+	w, _ := sampleWeights(s.Time)
 	hrF := intsToFloats(s.HR)
-	var tw []int
-	var vw []float64
-	for i, ti := range s.Time {
-		if ti > 600 && hrValid(hrF[i]) {
-			tw, vw = append(tw, ti), append(vw, hrF[i])
+	// The after-warm-up window, selected in place with each sample's own
+	// weight — the windowed-statistics convention.
+	var num, den float64
+	for i := 1; i < len(w); i++ {
+		if w[i] > 0 && s.Time[i] > 600 && hrValid(hrF[i]) {
+			den += float64(w[i])
+			if float64(lo) <= hrF[i] && hrF[i] <= float64(hi) {
+				num += float64(w[i])
+			}
 		}
 	}
-	inBand = timeShare(tw, vw, func(v float64) bool { return float64(lo) <= v && v <= float64(hi) },
-		func(float64) bool { return true })
-	kept, _ := weightedMean(s.Time, hrF, hrValid)
-	over := timeShare(s.Time, hrF, func(v float64) bool { return v > float64(cap) }, hrValid)
+	if den > 0 {
+		v := num / den
+		inBand = &v
+	}
+	kept, _ := weightedMean(w, hrF, hrValid)
+	over := timeShare(w, hrF, func(v float64) bool { return v > float64(cap) }, hrValid)
 	if over != nil {
 		n := int(pyRound(*over*kept, 0)) // banker's, as the mirror rounds
 		secsOver = &n

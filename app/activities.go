@@ -452,14 +452,22 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		Cap int     `json:"cap_bpm"`
 	}
 	out := struct {
-		Name       string   `json:"name"`
-		Date       string   `json:"date"`
-		Sport      string   `json:"sport"`
-		StartUTC   string   `json:"start_utc"`
-		ElapsedS   int      `json:"elapsed_s"`
-		ElapsedHMS string   `json:"elapsed_hms"`
-		Records    int      `json:"records"`
-		DistanceM  *float64 `json:"distance_m,omitempty"`
+		Name       string `json:"name"`
+		Date       string `json:"date"`
+		Sport      string `json:"sport"`
+		StartUTC   string `json:"start_utc"`
+		ElapsedS   int    `json:"elapsed_s"`
+		ElapsedHMS string `json:"elapsed_hms"`
+		// Present only when a recording gap exists, so a stop-free file's
+		// payload is byte-identical to what it always was — the same
+		// omit-when-equal rule the laps' elapsed_s follows. Moving time is
+		// what the statistics below are weighted over; against a prescribed
+		// duration it is the number that answers "was the work done",
+		// because a phone call is not part of a ride.
+		MovingS   int      `json:"moving_s,omitempty"`
+		MovingHMS string   `json:"moving_hms,omitempty"`
+		Records   int      `json:"records"`
+		DistanceM *float64 `json:"distance_m,omitempty"`
 		// Rendered in the athlete's units beside the raw metres, because
 		// these numbers are quoted back to him and because a comparison
 		// against the previous session of this kind carries them that way:
@@ -491,6 +499,10 @@ func (s *server) activityMetricsPayload(name string) (any, int, string) {
 		ElapsedS: row.ElapsedS, Records: row.Records, DistanceM: row.DistanceM,
 		SHA256:     row.SHA256,
 		ElapsedHMS: fmt.Sprintf("%d:%02d", row.ElapsedS/60, row.ElapsedS%60)}
+	if row.MovingS > 0 && row.MovingS < row.ElapsedS {
+		out.MovingS = row.MovingS
+		out.MovingHMS = fmt.Sprintf("%d:%02d", row.MovingS/60, row.MovingS%60)
+	}
 
 	if row.AvgHR != nil {
 		h := &hrOut{Avg: pyRound(*row.AvgHR, 1), Max: row.MaxHR}

@@ -590,17 +590,30 @@ func (g *grader) gradePrompt(m *activityMetrics, athleteNote string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Grade the training day %s. It was recorded as %d separate activities, in the order they were run:\n",
 		m.Date, len(acts))
-	totalM, totalS := 0.0, 0
+	totalM, totalS, totalMov := 0.0, 0, 0
 	for i, a := range acts {
 		fmt.Fprintf(&b, "  %d. %q — %s", i+1, a.Name, clock(a.ElapsedS))
+		// Moving only where it differs, so a stop-free day's prompt is the
+		// byte-identical one the corpus was measured against.
+		if a.MovingS > 0 && a.MovingS < a.ElapsedS {
+			fmt.Fprintf(&b, " (%s moving)", clock(a.MovingS))
+		}
 		if a.DistanceM != nil {
 			fmt.Fprintf(&b, ", %s", Distance(*a.DistanceM).InMeasured(u))
 			totalM += *a.DistanceM
 		}
 		b.WriteString("\n")
 		totalS += a.ElapsedS
+		if a.MovingS > 0 {
+			totalMov += a.MovingS
+		} else {
+			totalMov += a.ElapsedS
+		}
 	}
 	fmt.Fprintf(&b, "Together they are ONE session — the day's — totalling %s", clock(totalS))
+	if totalMov < totalS {
+		fmt.Fprintf(&b, " (%s moving)", clock(totalMov))
+	}
 	if totalM > 0 {
 		fmt.Fprintf(&b, " and %s", Distance(totalM).InMeasured(u))
 	}
