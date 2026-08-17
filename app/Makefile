@@ -58,7 +58,7 @@ SRC_HASH = $(shell cat Dockerfile go.mod go.sum $(GO_SRC) $(ASSETS) | shasum -a 
 # the server uses, so local and live are directly comparable.
 DATA_REV = go run . -validate -data ./data 2>&1 | sed -n 's/.*rev=\([0-9a-f]*\).*/\1/p'
 
-.PHONY: help run build image test src-hash watch-replay check-hash validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
+.PHONY: help run build image test src-hash watch-replay watch-drive check-hash validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
 
 help:           ## list targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /|/' | column -t -s'|'
@@ -107,8 +107,12 @@ watch-replay:   ## replay static/webmtp.js against a fake watch and diff with WA
 	  esac; \
 	  node ../tools/webmtp_replay.js $$TMP/ref.js $$FLAG > $$TMP/a.txt 2>&1 || true; \
 	  node ../tools/webmtp_replay.js ./static/webmtp.js $$FLAG > $$TMP/b.txt 2>&1 || true; \
-	  [ -s $$TMP/a.txt ] && [ -s $$TMP/b.txt ] || { \
-	    echo "FAILED: $$mode produced no output — an empty pair diffs identical" >&2; exit 1; }; \
+	  for f in $$TMP/a.txt $$TMP/b.txt; do \
+	    [ -s $$f ] || { echo "FAILED: $$mode produced no output" >&2; exit 1; }; \
+	    grep -q '=== wire ===' $$f || { \
+	      echo "FAILED: $$mode did not reach the wire — the replay crashed:" >&2; \
+	      head -5 $$f >&2; exit 1; }; \
+	  done; \
 	  if diff -q $$TMP/a.txt $$TMP/b.txt >/dev/null; then \
 	    printf 'watch-replay  %-12s identical to $(WATCH_REF)  (%s transfers)\n' \
 	      $$mode "$$(grep -cE '(OUT|  IN) ' $$TMP/b.txt)"; \
@@ -118,6 +122,31 @@ watch-replay:   ## replay static/webmtp.js against a fake watch and diff with WA
 	  fi; \
 	done; \
 	[ $$FAIL = 0 ] || { echo "FAILED: the wire moved" >&2; exit 1; }
+
+# The mass-storage half. There is no "before" to diff against — this transport
+# is new — so this checks behaviour instead: the three things the directory
+# picker can actually return, and the promise that the device's manifest never
+# leaves the browser.
+watch-drive:    ## drive static/webmsc.js against a fake mounted volume
+	@set -e; \
+	command -v node >/dev/null || { echo "FAILED: node is needed to replay the watch page" >&2; exit 1; }; \
+	TMP=$$(mktemp -d); trap 'rm -rf $$TMP' EXIT INT TERM; \
+	for c in volume-root garmin-picked not-a-watch two-transports; do \
+	  EXTRA=""; CASE=$$c; \
+	  [ "$$c" = two-transports ] && { CASE=volume-root; EXTRA=--with-usb; }; \
+	  node ../tools/webmsc_replay.js ./static/webmtp.js ./static/webmsc.js --case=$$CASE $$EXTRA > $$TMP/$$c.txt 2>&1 \
+	    || { echo "FAILED: $$c crashed" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
+	  grep -q 'manifest leak: none' $$TMP/$$c.txt || { \
+	    echo "FAILED: $$c leaked the device manifest" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
+	  case $$c in \
+	    not-a-watch) WANT='no GARMIN/GarminDevice.xml here';; \
+	    two-transports) WANT='(dark)';; \
+	    *) WANT='Pulled 2';; \
+	  esac; \
+	  grep -q "$$WANT" $$TMP/$$c.txt || { \
+	    echo "FAILED: $$c did not produce \"$$WANT\"" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
+	  printf 'watch-drive   %-14s ok  (%s)\n' $$c "$$(sed -n 's/^after connect: //p' $$TMP/$$c.txt | cut -c1-60)"; \
+	done
 
 # SRC_HASH's entire job is to notice that a source file changed, and the cases
 # it silently missed were both nested: a .go file in a subpackage, and an asset

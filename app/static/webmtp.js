@@ -477,9 +477,14 @@
 
     var self = {
       id: "mtp",
-      label: "Epix over USB", // how a transport names itself to the athlete
+      // How a transport names ITSELF, used only when there is more than one to
+      // choose between. It names the connection rather than the watch: which
+      // model is on the other end is the device's own answer, and it arrives
+      // in the status line after connecting.
+      label: "Connect over USB",
       onLost: null,
       available: mtpTransport.available,
+      canSend: true,
 
       connect: async function () {
         // FIRST statement. Nothing may be awaited before this line.
@@ -542,6 +547,11 @@
         return live(mtp.getObject(entry.id, entry.size));
       },
 
+      // Which training day a recording belongs to. This device names files by
+      // the athlete's local clock, verified 13 Aug 2026, so the first ten
+      // characters ARE the day and no decode is needed.
+      dayOf: function (entry) { return (entry.name || "").slice(0, 10); },
+
       sendWorkout: async function (name, bytes) {
         return live(mtp.sendFile(storage, newFiles, name, bytes));
       },
@@ -574,6 +584,14 @@
     };
     return self;
   }
+
+  // The registry the page reads at startup. webmsc.js pushes its own factory
+  // into the same array; both scripts are `defer`, so both have registered
+  // before DOMContentLoaded regardless of which loads first.
+  window.rcTransports = window.rcTransports || [];
+  window.rcTransports.push(mtpTransport);
+  // Read without constructing anything: see the chooser below for why.
+  mtpTransport.label = "Connect over USB";
 
   // available is a property of the factory as well as of an instance, so the
   // page can ask before it has anything to connect with.
@@ -609,32 +627,47 @@
     el.textContent = text;
   }
 
-  // makeTransport builds the one the page uses. There is a single
-  // implementation today, and the seam above is what lets a second one be
-  // chosen here rather than threaded through everything below.
-  var makeTransport = mtpTransport;
-
   // t is the CONNECTED transport, null when there is none. It replaced
   // `mtp, storage, newFiles` — three variables that were all one fact
   // (whether a device is reachable) written in one protocol's nouns.
   var t = null;
+  // The factory t was built from, so the right button can say "Disconnect".
+  var activeMake = null;
+  // One entry per transport the browser can actually offer: {btn, make}.
+  // With one, it is the page's original single button, unchanged.
+  var choices = [];
 
-  // The one button is a toggle and names the action it will take next.
+  // A button is a toggle and names the action it will take next. With several
+  // transports the connected one says Disconnect and the rest go dark, because
+  // two live connections would be two devices and one page.
   function setConnectUI(connected) {
-    connectBtn.textContent = connected ? "Disconnect" : "Connect watch";
+    choices.forEach(function (c) {
+      var mine = connected && c.make === activeMake;
+      c.btn.textContent = mine ? "Disconnect" : c.label;
+      c.btn.disabled = connected && !mine;
+    });
+  }
+
+  // Every "no transfers while a transfer runs" line in the page goes through
+  // here, so it covers whichever buttons exist.
+  function setConnectEnabled(on) {
+    choices.forEach(function (c) {
+      c.btn.disabled = !on || (t !== null && c.make !== activeMake);
+    });
   }
 
   // disconnect releases the watch deliberately, so other tools can reach the
   // device without this tab closing. What "release" means is the transport's
   // business.
   async function disconnect() {
-    connectBtn.disabled = true;
+    setConnectEnabled(false);
     sendBtn.disabled = true;
     pullBtn.disabled = true;
     await t.disconnect();
     t = null;
+    activeMake = null;
     setConnectUI(false);
-    connectBtn.disabled = false;
+    setConnectEnabled(true);
     say("Disconnected. Unplug when ready, or connect again to transfer.");
   }
   // watchWentAway is what the transport calls when the device disappears
@@ -643,10 +676,11 @@
   // reload. Which platform event means "gone" is the transport's to know.
   function watchWentAway() {
     t = null;
+    activeMake = null;
     sendBtn.disabled = true;
     pullBtn.disabled = true;
     setConnectUI(false);
-    connectBtn.disabled = false;
+    setConnectEnabled(true);
     say("Watch unplugged — it imports anything just sent. Check Training → Workouts; reconnect to send again.");
   }
 
@@ -752,30 +786,33 @@
     return fresh;
   }
 
-  async function connect() {
-    connectBtn.disabled = true;
+  async function connect(make) {
+    setConnectEnabled(false);
     // Built and armed synchronously: the transport's picker must be reached
     // with the click's transient activation still live, and an await here
-    // would spend it.
-    var next = makeTransport();
+    // would spend it. That is why the factory is called, not awaited, and why
+    // nothing above this line does I/O.
+    var next = make();
     next.onLost = watchWentAway;
     try {
       var info = await next.connect();
       t = next;
+      activeMake = make;
       var senderLine = "Connected: " + info.title;
       say(senderLine);
       // Send stays dark until the pull listing is done: two live buttons
       // would interleave two transaction streams on one session.
       await setupPull(senderLine);
-      sendBtn.disabled = false;
+      sendBtn.disabled = !t.canSend;
       setConnectUI(true);
-      connectBtn.disabled = false;
+      setConnectEnabled(true);
     } catch (e) {
       say(e.message, true);
       await next.disconnect();
       t = null;
+      activeMake = null;
       setConnectUI(false);
-      connectBtn.disabled = false;
+      setConnectEnabled(true);
       sendBtn.disabled = true;
       pullBtn.disabled = true;
     }
@@ -811,16 +848,22 @@
   async function pullAll() {
     pullBtn.disabled = true;
     sendBtn.disabled = true;
-    connectBtn.disabled = true; // no disconnecting mid-transfer
+    setConnectEnabled(false); // no disconnecting mid-transfer
     var pulled = 0, failed = 0, acked = [];
     /* The server sees one upload at a time and cannot tell a finished
        training day from a pause between files, so it waits before grading.
        This page DOES know: it is sending a known list, in order. Mark the
        last file of each day and that day is graded the moment it lands. */
+    // Which day a recording belongs to is the DEVICE's answer, not a fact
+    // about filenames: one watch names files by the clock, the other names
+    // them with opaque 8.3 codes. A transport that cannot say returns null:
+    // nothing is marked complete and the server's settle window decides when
+    // the day is done — which is exactly what that window is for.
     var lastOfDay = {};
     for (var k = 0; k < pullRows.length; k++) {
       if (pullRows[k].box.disabled || !pullRows[k].box.checked) continue;
-      lastOfDay[(pullRows[k].act.name || "").slice(0, 10)] = k;
+      var kd = t.dayOf(pullRows[k].act);
+      if (kd) lastOfDay[kd] = k;
     }
     for (var i = 0; i < pullRows.length; i++) {
       var pr = pullRows[i];
@@ -838,7 +881,8 @@
           failed++;
           continue;
         }
-        var complete = lastOfDay[(pr.act.name || "").slice(0, 10)] === i;
+        var day = t.dayOf(pr.act);
+        var complete = day !== null && lastOfDay[day] === i;
         var resp = await fetch("/api/activity?name=" + encodeURIComponent(pr.act.name) +
           (complete ? "&now=1" : ""), { method: "POST", body: bytes });
         if (resp.status === 204) {
@@ -860,14 +904,14 @@
           for (var j = i + 1; j < pullRows.length; j++) {
             if (!pullRows[j].box.disabled && pullRows[j].box.checked) rowState(pullRows[j].tr, "fail", "not attempted");
           }
-          connectBtn.disabled = false; // Disconnect still frees the claim
+          setConnectEnabled(true); // Disconnect still frees the device
           return;
         }
       }
     }
     // Reads roll back nothing, so the connection stays open here — only
     // writes need closing before unplug, and the send path owns that.
-    if (t) { sendBtn.disabled = false; connectBtn.disabled = false; }
+    if (t) { sendBtn.disabled = !t.canSend; setConnectEnabled(true); }
     var stored;
     try {
       stored = await fetchStored();
@@ -895,7 +939,7 @@
   async function sendAll() {
     sendBtn.disabled = true;
     pullBtn.disabled = true; // one MTP transaction at a time; connect re-arms pull
-    connectBtn.disabled = true; // no disconnecting mid-transfer
+    setConnectEnabled(false); // no disconnecting mid-transfer
     var sent = 0, failed = 0;
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
@@ -923,7 +967,7 @@
           for (var j = i + 1; j < rows.length; j++) {
             if (rows[j].querySelector("input").checked) rowState(rows[j], "fail", "not attempted");
           }
-          connectBtn.disabled = false; // Disconnect still frees the claim
+          setConnectEnabled(true); // Disconnect still frees the device
           return;
         }
       }
@@ -936,8 +980,9 @@
         var listed = await t.newFilesCount();
         await t.disconnect();
         t = null;
+        activeMake = null;
         setConnectUI(false);
-        connectBtn.disabled = false;
+        setConnectEnabled(true);
         say(sent + " sent" + (failed ? ", " + failed + " failed" : "") +
           (listed === null
             ? " — written. Eject the watch, then unplug, and the workouts appear under Training → Workouts."
@@ -946,7 +991,7 @@
       } catch (e) {
         say("Sent " + sent + ", but the closing handshake failed: " + e.message, true);
         sendBtn.disabled = false;
-        connectBtn.disabled = false;
+        setConnectEnabled(true);
       }
     }
   }
@@ -994,17 +1039,48 @@
     tabPull.addEventListener("keydown", tabKeys);
     if (location.hash === "#pull") showTab(true);
 
-    // Whether this browser at this address can reach a watch at all is the
-    // transport's question — it knows which API it needs and that the
+    // Which transports this browser at this address can offer is each
+    // transport's own question — it knows which API it needs, and that the
     // secure-context gate has to be asked first.
-    var av = makeTransport.available();
-    if (!av.ok) {
-      say(av.why, true);
+    var offered = [], why = "";
+    (window.rcTransports || [mtpTransport]).forEach(function (make) {
+      var av = make.available();
+      if (av.ok) offered.push(make);
+      else if (!why) why = av.why;
+    });
+    if (!offered.length) {
+      say(why || "No way to reach a watch from this browser. The zip download still works.", true);
       connectBtn.disabled = true;
       pullBtn.disabled = true;
       return;
     }
-    connectBtn.addEventListener("click", function () { if (t) disconnect(); else connect(); });
+
+    // One transport renders as the page always did: the single button already
+    // in the markup, still saying "Connect watch". A chooser appears only
+    // when there is something to choose, the same rule the Blocks nav follows.
+    if (offered.length === 1) {
+      choices = [{ btn: connectBtn, make: offered[0], label: "Connect watch" }];
+    } else {
+      var host = connectBtn.parentNode;
+      while (host.firstChild) host.removeChild(host.firstChild);
+      choices = offered.map(function (make) {
+        // make.label, NOT make().label. A registered factory may BE the thing
+        // that calls the picker — the mass-storage one is — so constructing an
+        // instance to read a button caption would open a directory chooser at
+        // page load. The name is a property of the factory for that reason.
+        var b = document.createElement("button");
+        b.className = "wbtn";
+        b.textContent = make.label;
+        host.appendChild(b);
+        return { btn: b, make: make, label: make.label };
+      });
+    }
+    choices.forEach(function (c) {
+      c.btn.addEventListener("click", function () {
+        if (t && c.make === activeMake) disconnect();
+        else if (!t) connect(c.make);
+      });
+    });
     sendBtn.addEventListener("click", sendAll);
     pullBtn.addEventListener("click", pullAll);
     if (wpall) {

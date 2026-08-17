@@ -1,8 +1,9 @@
 {{define "watch.html"}}{{template "head" .}}
 {{template "archive" .Archive}}
 <h1 class="page">Watch</h1>
-<p class="page-sub">Plug the watch in (USB mode: MTP), connect, then send
-workouts or pull recorded activities. Needs Chrome or Edge; the
+<p class="page-sub">Plug the watch in, connect, then send workouts or pull
+recorded activities. A watch that speaks MTP connects over USB; one that mounts
+as a drive is chosen with the directory picker. Needs Chrome or Edge; the
 <a href="/fit.zip{{with .Archive}}{{.Query}}{{end}}" download>zip download</a>
 works in any browser.</p>
 
@@ -75,5 +76,10 @@ replaces the same-named workout on the watch.</p>
   <pre id="wtrace">(nothing yet — connect first)</pre>
 </details>
 
+<!-- Load order fixes the order of the connect buttons, and nothing else:
+     each script registers its transport and the page reads the registry at
+     DOMContentLoaded, after both have run. USB first because it is the path
+     that has been proven on hardware. -->
 <script src="{{asset "webmtp.js"}}" defer></script>
+<script src="{{asset "webmsc.js"}}" defer></script>
 {{template "foot" .}}{{end}}
