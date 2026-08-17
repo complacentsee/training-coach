@@ -340,6 +340,16 @@
     if (when) chips.push(esc(when));
     h += '<p class="dchips">' + chips.join(" · ") + "</p>";
 
+    /* Where the streams came from — the file's own connected-device list.
+       One line, so a trainer ride and a power-meter ride stop reading
+       identically the day both exist. */
+    if (d.sources && (d.sources.hr || d.sources.power)) {
+      var src = [];
+      if (d.sources.hr) src.push("HR " + esc(d.sources.hr));
+      if (d.sources.power) src.push("power " + esc(d.sources.power));
+      h += '<p class="dsensors">' + src.join(" · ") + "</p>";
+    }
+
     /* What the day asked for, above what the recording did. This is the join
        a general activity site cannot make: the block knows what step 1 was. */
     if (d.session && d.session.label) {

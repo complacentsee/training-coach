@@ -719,6 +719,99 @@ func steppedRun(t *testing.T, repPaces []float64) []byte {
 	return encodeActivityFixture(t, msgs...)
 }
 
+// TestSensorSources pins the sources line: the file's connected-device list
+// read into words. A strap names itself; a power METER is its own device
+// type and beats a trainer the moment both are present — the differentiation
+// the line exists for; wrist is claimed only when heart rate was recorded
+// and no HR sensor was named.
+func TestSensorSources(t *testing.T) {
+	dev := func(idx int, typ uint8, src typedef.SourceType, maker typedef.Manufacturer, name string) proto.Message {
+		return mesgdef.NewDeviceInfo(nil).
+			SetDeviceIndex(typedef.DeviceIndex(idx)).
+			SetDeviceType(typ).
+			SetSourceType(src).
+			SetManufacturer(maker).
+			SetProductName(name).ToMesg(nil)
+	}
+	ride := func(extra ...proto.Message) *activityDetail {
+		msgs := []proto.Message{
+			mesgdef.NewRecord(nil).SetTimestamp(fixtureT0).SetHeartRate(120).SetPower(150).ToMesg(nil),
+			mesgdef.NewRecord(nil).SetTimestamp(fixtureT0.Add(time.Second)).SetHeartRate(121).SetPower(151).ToMesg(nil),
+		}
+		msgs = append(msgs, extra...)
+		msgs = append(msgs, mesgdef.NewSession(nil).SetSport(typedef.SportCycling).
+			SetStartTime(fixtureT0).SetTimestamp(fixtureT0.Add(time.Minute)).
+			SetTotalDistance(100_00).ToMesg(nil))
+		d, err := decodeDetail(encodeActivityFixture(t, msgs...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	// Strap + trainer, today's actual shape.
+	d := ride(
+		dev(2, antHeartRate, typedef.SourceTypeAntplus, typedef.ManufacturerGarmin, "HRM-Pro Plus"),
+		dev(5, antFitnessEquip, typedef.SourceTypeAntplus, typedef.ManufacturerWahooFitness, ""))
+	src := sensorSources(d, true, true)
+	if src == nil || src.HR != "HRM-Pro Plus" || src.Power != "Wahoo Fitness trainer" {
+		t.Fatalf("strap+trainer = %+v", src)
+	}
+
+	// Add a power meter: it wins over the trainer, which is the whole point.
+	d = ride(
+		dev(2, antHeartRate, typedef.SourceTypeAntplus, typedef.ManufacturerGarmin, "HRM-Pro Plus"),
+		dev(5, antFitnessEquip, typedef.SourceTypeAntplus, typedef.ManufacturerWahooFitness, ""),
+		dev(6, antBikePower, typedef.SourceTypeBluetoothLowEnergy, typedef.ManufacturerFaveroElectronics, "Assioma"))
+	// BLE numbers its types differently: 11 means nothing there, so the
+	// device classifies as nothing and the trainer answer stands.
+	if src = sensorSources(d, true, true); src == nil || src.Power != "Wahoo Fitness trainer" {
+		t.Fatalf("ANT+ number on a BLE device must not read as a meter: %+v", src)
+	}
+	d = ride(
+		dev(2, antHeartRate, typedef.SourceTypeAntplus, typedef.ManufacturerGarmin, "HRM-Pro Plus"),
+		dev(5, antFitnessEquip, typedef.SourceTypeAntplus, typedef.ManufacturerWahooFitness, ""),
+		dev(6, bleBikePower, typedef.SourceTypeBluetoothLowEnergy, typedef.ManufacturerFaveroElectronics, "Assioma"))
+	if src = sensorSources(d, true, true); src == nil || src.Power != "Assioma power meter" {
+		t.Fatalf("meter must beat trainer: %+v", src)
+	}
+
+	// A watch with no external sensors still writes ITSELF as the creator —
+	// every archived file carries the row — and that Garmin creator is what
+	// licenses "wrist" and "watch estimate".
+	d = ride(dev(0, 0, typedef.SourceTypeLocal, typedef.ManufacturerGarmin, "Epix Gen2 Pro 47"))
+	d.Sport = "running"
+	// Run watts with no meter attribute to the watch and say no more: the
+	// file never labels a stream measured-versus-modelled, so neither does
+	// the line — strict by the athlete's call.
+	if src = sensorSources(d, true, true); src == nil || src.HR != "Epix Gen2 Pro 47" || src.Power != "Epix Gen2 Pro 47" {
+		t.Fatalf("bare run = %+v", src)
+	}
+	// A creator that names no product still claims by maker, never by the
+	// hardcoded word "watch".
+	d = ride(dev(0, 0, typedef.SourceTypeLocal, typedef.ManufacturerGarmin, ""))
+	d.Sport = "running"
+	if src = sensorSources(d, true, true); src == nil || src.HR != "Garmin" || src.Power != "Garmin" {
+		t.Fatalf("nameless creator = %+v", src)
+	}
+	if src = sensorSources(d, false, false); src != nil {
+		t.Fatalf("nothing recorded, yet sources = %+v", src)
+	}
+	if src = sensorSources(ride(), true, true); src != nil {
+		t.Fatalf("no creator row at all, yet sources = %+v", src)
+	}
+
+	// A Zwift file: the only device row is Zwift itself, and its HR came
+	// through Zwift from somewhere unstated. Claiming "wrist" would be
+	// false — measured on the archive's own Zwift rides, whose single
+	// device_info is creator=zwift — so an un-Garmin creator says nothing.
+	d = ride(dev(0, 0, typedef.SourceTypeAnt, typedef.ManufacturerZwift, ""))
+	d.Sport = "cycling"
+	if src = sensorSources(d, true, true); src != nil {
+		t.Fatalf("a Zwift file claimed a source: %+v", src)
+	}
+}
+
 // TestChartPowerBand pins the watts panel's target selection: the longest
 // active step's band, repeats and powerless steps ignored, the %FTP labels
 // derived from the anchor and absent when no FTP is declared. The example

@@ -484,6 +484,11 @@ td .rec:hover,td .rec:focus-visible{border-color:var(--accent);color:var(--accen
 .dgo[disabled],.dcancel[disabled]{opacity:.6;cursor:default}
 .dchips{margin:0 0 .8rem;font:700 .64rem/1 var(--mono);letter-spacing:.09em;
   text-transform:uppercase;color:var(--ink-3)}
+/* The sensors line under the chips: quiet context, not a headline.
+   NOT .dsrc — the popover already owns that class for its filename footer,
+   and its writer sets textContent on the FIRST .dsrc in the document, which
+   was this line. The name that reads as available must still be grepped. */
+.dsensors{margin:-.55rem 0 .8rem;font-size:.72rem;color:var(--ink-3)}
 /* Auto-fit rather than a fixed column count: four stats on a phone, six on a
    laptop, and a bike day with no climb simply has fewer. */
 .dstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(6.2rem,1fr));

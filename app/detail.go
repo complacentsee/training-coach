@@ -125,6 +125,20 @@ type activityDetail struct {
 	Splits          []detailSplit
 	Track           []trackPoint
 	Series          []sample // per record, for the chart only
+	// Sensors is every device_info the file carries, merged by device index.
+	// The file records what was CONNECTED, never which sample came from
+	// which — the page's sources line is an inference from presence, and
+	// says only what presence can honestly say.
+	Sensors []sensorInfo
+}
+
+// sensorInfo is one connected device as the file states it.
+type sensorInfo struct {
+	Index      int
+	DeviceType uint8 // meaning depends on Source: ANT+ and BLE number their types differently
+	Source     string
+	Maker      string
+	Product    string // resolved name when the file gives one; "" otherwise
 }
 
 // sample is one record's worth of what a chart draws: the clock, the heart,
@@ -248,6 +262,43 @@ func decodeDetailOpt(data []byte, skipCRC bool) (*activityDetail, error) {
 					sm.vel = float64(r.Speed) / 1000
 				}
 				series = append(series, sm)
+			case mesgnum.DeviceInfo:
+				di := mesgdef.NewDeviceInfo(m)
+				if di.DeviceIndex == typedef.DeviceIndexInvalid {
+					break
+				}
+				si := sensorInfo{Index: int(di.DeviceIndex), DeviceType: di.DeviceType,
+					Source: di.SourceType.String()}
+				if di.Manufacturer != typedef.ManufacturerInvalid {
+					si.Maker = di.Manufacturer.String()
+				}
+				if di.ProductName != "" {
+					si.Product = di.ProductName
+				} else if di.Manufacturer == typedef.ManufacturerGarmin && di.Product != basetype.Uint16Invalid {
+					si.Product = typedef.GarminProduct(di.Product).String()
+				}
+				// A device reports repeatedly (battery updates); merge on the
+				// index, keeping the first non-empty answer for each field.
+				merged := false
+				for i := range out.Sensors {
+					if out.Sensors[i].Index != si.Index {
+						continue
+					}
+					if out.Sensors[i].Maker == "" {
+						out.Sensors[i].Maker = si.Maker
+					}
+					if out.Sensors[i].Product == "" {
+						out.Sensors[i].Product = si.Product
+					}
+					if out.Sensors[i].DeviceType == 0 {
+						out.Sensors[i].DeviceType = si.DeviceType
+					}
+					merged = true
+					break
+				}
+				if !merged {
+					out.Sensors = append(out.Sensors, si)
+				}
 			case mesgnum.Lap:
 				laps = append(laps, mesgdef.NewLap(m))
 			case mesgnum.Session:
@@ -459,6 +510,136 @@ type trackOut struct {
 	Segments []trackSeg `json:"segments"`
 }
 
+// sourcesOut is the sensors line, resolved to words on the server so the
+// page renders and never reasons. PAGE ONLY — which sensor fed a stream is
+// context for a reader, and the grader gets nothing here by the payload
+// split. Presence-based and honest about it: "wrist" is claimed only when
+// the file carries heart rate and names no HR sensor.
+type sourcesOut struct {
+	HR    string `json:"hr,omitempty"`
+	Power string `json:"power,omitempty"`
+}
+
+// Device-type numbers, from the FIT profile. ANT+ and BLE number their
+// device types differently, so the source decides which table a number is
+// read against.
+const (
+	antHeartRate    = 120
+	antBikePower    = 11
+	antFitnessEquip = 17
+	bleHeartRate    = 1
+	bleBikePower    = 2
+	bleBikeTrainer  = 7
+)
+
+// prettyProduct turns an enum spelling into something an athlete reads:
+// "hrm_pro_plus" → "HRM Pro Plus", "wahoo_fitness" → "Wahoo Fitness".
+func prettyProduct(s string) string {
+	words := strings.Split(strings.ReplaceAll(s, "_", " "), " ")
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		if w == "hrm" || w == "gps" || w == "gnss" {
+			words[i] = strings.ToUpper(w)
+			continue
+		}
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
+	}
+	return strings.Join(words, " ")
+}
+
+// sensorName is the best name the file gives a device: product, else maker.
+func sensorName(si sensorInfo) string {
+	if si.Product != "" && !strings.HasPrefix(si.Product, "unknown") {
+		return prettyProduct(si.Product)
+	}
+	if si.Maker != "" && !strings.HasPrefix(si.Maker, "unknown") {
+		return prettyProduct(si.Maker)
+	}
+	return ""
+}
+
+// sensorSources reads the connected-device list into the two answers the
+// page shows. The file says what was connected, not which sample came from
+// which; everything here is presence, worded so it stays true.
+func sensorSources(d *activityDetail, hasHR, hasWatts bool) *sourcesOut {
+	isType := func(si sensorInfo, ant, ble uint8) bool {
+		switch si.Source {
+		case "antplus", "ant":
+			return si.DeviceType == ant
+		case "bluetooth_low_energy", "bluetooth":
+			return si.DeviceType == ble
+		}
+		return false
+	}
+	out := &sourcesOut{}
+	for _, si := range d.Sensors {
+		switch {
+		case isType(si, antHeartRate, bleHeartRate) && out.HR == "":
+			// The name alone: "HRM Pro Plus" already says strap to anyone
+			// who owns one, and the device type said it to the code.
+			if n := sensorName(si); n != "" {
+				out.HR = n
+			} else {
+				out.HR = "chest strap"
+			}
+		case isType(si, antBikePower, bleBikePower) && out.Power == "":
+			// The differentiation this line exists for: a meter is its own
+			// device type, never confusable with a trainer.
+			if n := sensorName(si); n != "" {
+				out.Power = n + " power meter"
+			} else {
+				out.Power = "power meter"
+			}
+		}
+	}
+	if out.Power == "" {
+		for _, si := range d.Sensors {
+			if isType(si, antFitnessEquip, bleBikeTrainer) {
+				if n := sensorName(si); n != "" {
+					out.Power = n + " trainer"
+				} else {
+					out.Power = "trainer"
+				}
+				break
+			}
+		}
+	}
+	// The fallbacks are claims about a WATCH, and a file can come from
+	// something else entirely: a Zwift ride's only device row is Zwift
+	// itself, and its unattributed HR came through Zwift, not off a wrist.
+	// Both fallbacks therefore require the file's creator to be a Garmin
+	// device, and both carry ONLY what the file states — the creator row's
+	// own name. "Wrist" survives because it is stated by absence (heart rate
+	// with no HR sensor named leaves only the watch's own sensor); the word
+	// "estimate" did not survive, by the athlete's call (17 Aug 2026): the
+	// file never labels a stream measured-versus-modelled, so run watts are
+	// attributed to the watch and characterised no further. The register's
+	// refusal to divide run watts by FTP already carries that judgment where
+	// judgment lives.
+	watch := ""
+	for _, si := range d.Sensors {
+		if si.Index == 0 && si.Maker == "garmin" {
+			if watch = sensorName(si); watch == "" {
+				watch = "Garmin"
+			}
+		}
+	}
+	// The watch's own name IS the wrist statement — an Epix as the HR
+	// source can only mean its optical sensor.
+	if out.HR == "" && hasHR && watch != "" {
+		out.HR = watch
+	}
+	if out.Power == "" && hasWatts && d.Sport == "running" && watch != "" {
+		out.Power = watch
+	}
+	if out.HR == "" && out.Power == "" {
+		return nil
+	}
+	return out
+}
+
 type detailOut struct {
 	Name       string      `json:"name"`
 	Date       string      `json:"date"`
@@ -479,6 +660,7 @@ type detailOut struct {
 	Splits     []splitOut  `json:"splits,omitempty"`
 	Track      *trackOut   `json:"track,omitempty"`
 	Session    *sessionOut `json:"session,omitempty"`
+	Sources    *sourcesOut `json:"sources,omitempty"`
 	Chart      *chartOut   `json:"chart,omitempty"`
 	Notes      []noteOut   `json:"notes,omitempty"`
 	// CanRegrade says the server would accept a re-grade of this day, which
@@ -631,6 +813,12 @@ func (s *server) detailPayload(name, blockID string) (*detailOut, int, string) {
 		out.Track = &trackOut{Points: len(d.Track), Segments: cutByLap(d.Track, d.Laps)}
 	}
 	out.Chart = buildChart(d, u)
+	hasHR, hasWatts := false, false
+	for _, sm := range d.Series {
+		hasHR = hasHR || sm.hr > 0
+		hasWatts = hasWatts || sm.watts > 0
+	}
+	out.Sources = sensorSources(d, hasHR, hasWatts)
 	s.joinPrescription(out, d, blockID)
 	// What the athlete said about the day. On 12 Aug 2026 the recording shows
 	// two of four reps and a 296 s stop inside the second; only the note says
