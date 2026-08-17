@@ -584,6 +584,14 @@
     if (mt && mt.grade_input) cap = mt.grade_input.grade_cap_bpm || mt.grade_input.hr_cap_bpm || null;
     if (cap && hrr) { hrr.lo = Math.min(hrr.lo, cap - 2); hrr.hi = Math.max(hrr.hi, cap + 2); }
 
+    /* The band the grade is judged inside, from the same source as the cap:
+       the grade_input the metrics payload resolves against the anchors as
+       they stand now. Only bikes carry one — a run's grade is its share
+       under the cap, so a run draws nothing new here. */
+    var band = null;
+    if (mt && mt.grade_input && mt.grade_input.hr_band_bpm) band = mt.grade_input.hr_band_bpm;
+    if (band && hrr) { hrr.lo = Math.min(hrr.lo, band[0] - 2); hrr.hi = Math.max(hrr.hi, band[1] + 2); }
+
     var g = [];
     panels.forEach(function (p, i) {
       var top = T + i * (ph + GAP);
@@ -599,6 +607,26 @@
       // A panel the eye can tell from its neighbour.
       g.push('<rect x="' + L + '" y="' + top + '" width="' + pw + '" height="' + ph +
         '" fill="var(--sunk)" opacity="0.5" rx="2"/>');
+      if (p.hr && band) {
+        /* The band the grade wants the trace inside, tinted so the in-band
+           share — the number the bike grade IS — can be judged at a glance.
+           Drawn before the cap so the cap's line and label sit on top.
+           Accent against the trace's --hard measures dE2000 36.8 with
+           tools/palette.py, and the words carry the meaning regardless. */
+        var yLo = y(band[0]), yHi = y(band[1]);
+        g.push('<rect x="' + L + '" y="' + yHi.toFixed(1) + '" width="' + pw + '" height="' + Math.max(0, yLo - yHi).toFixed(1) +
+          '" fill="var(--accent)" opacity="0.08"/>');
+        [band[0], band[1]].forEach(function (b) {
+          var yb = y(b).toFixed(1);
+          g.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + yb + '" y2="' + yb +
+            '" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.75"/>');
+        });
+        /* Right-anchored where the cap's label is left-anchored: on a bike
+           the cap sits a few beats above the band top, and two left labels
+           would collide in a 58 px panel. */
+        g.push('<text x="' + (L + pw - 3) + '" y="' + (yHi - 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--ink-3)">band ' +
+          band[0] + "–" + band[1] + "</text>");
+      }
       if (p.hr && cap) {
         /* Time above the cap is what costs the grade, so that is the region
            the eye should find first. */
