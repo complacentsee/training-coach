@@ -636,7 +636,11 @@
           g.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + yb + '" y2="' + yb +
             '" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.75"/>');
         });
-        g.push('<text x="' + (L + pw - 3) + '" y="' + (yWHi - 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--ink-3)">target ' +
+        /* Above the upper edge when there is room; tucked inside the strip
+           when there is not — a band riding the top of the range put this
+           label on top of the panel's own WATTS caption. */
+        var wLabelY = yWHi - 3 < top + 9 ? yWHi + 10 : yWHi - 3;
+        g.push('<text x="' + (L + pw - 3) + '" y="' + wLabelY.toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--ink-3)">target ' +
           wband[0] + "–" + wband[1] + " W" + (wpct ? " · " + wpct[0] + "–" + wpct[1] + "% FTP" : "") + "</text>");
       }
       if (p.hr && band) {
@@ -656,7 +660,8 @@
         /* Right-anchored where the cap's label is left-anchored: on a bike
            the cap sits a few beats above the band top, and two left labels
            would collide in a 58 px panel. */
-        g.push('<text x="' + (L + pw - 3) + '" y="' + (yHi - 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--ink-3)">band ' +
+        var bLabelY = yHi - 3 < top + 9 ? yHi + 10 : yHi - 3; // same caption-collision rule as the watts label
+        g.push('<text x="' + (L + pw - 3) + '" y="' + bLabelY.toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--ink-3)">band ' +
           band[0] + "–" + band[1] + "</text>");
       }
       if (p.hr && cap) {
