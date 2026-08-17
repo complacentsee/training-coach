@@ -150,6 +150,17 @@
     return new Uint8Array(b).buffer;
   }
 
+  // fatal marks an error that ends the session rather than one row of it.
+  // The batch loops used to decide this by searching the message for "no
+  // answer" and "desynced", which made the copy load-bearing: rewording a
+  // sentence would have quietly turned a stop-everything into a retry-next.
+  // The flag says it once, here, where the condition is known.
+  function fatal(msg) {
+    var e = new Error(msg);
+    e.fatal = true;
+    return e;
+  }
+
   // withTimeout turns a hung USB transfer into a diagnosis. A stalled MTP
   // responder simply never answers, and an await with no deadline is a page
   // stuck on "sending…" forever — the error must name the phase that died.
@@ -158,7 +169,7 @@
     ms = ms || 15000;
     return new Promise(function (resolve, reject) {
       var t = setTimeout(function () {
-        reject(new Error(what + ": no answer from the watch after " + Math.round(ms / 1000) + " s — unplug, replug, reconnect"));
+        reject(fatal(what + ": no answer from the watch after " + Math.round(ms / 1000) + " s — unplug, replug, reconnect"));
       }, ms);
       promise.then(
         function (v) { clearTimeout(t); resolve(v); },
@@ -288,14 +299,14 @@
     for (;;) {
       c = await this.readContainer(what + " (response)", ms);
       if (c.tid === tid) break;
-      if (++stale > 3) throw new Error(what + ": session desynced (stale responses) — unplug, replug, reconnect");
+      if (++stale > 3) throw fatal(what + ": session desynced (stale responses) — unplug, replug, reconnect");
     }
     if (c.type === TYPE_DATA) {
       data = c.payload;
       for (;;) {
         c = await this.readContainer(what + " (response)", ms);
         if (c.tid === tid) break;
-        if (++stale > 3) throw new Error(what + ": session desynced (stale responses) — unplug, replug, reconnect");
+        if (++stale > 3) throw fatal(what + ": session desynced (stale responses) — unplug, replug, reconnect");
       }
     } else if (expectData && c.type === TYPE_RESPONSE) {
       // A responder may legally skip the data phase on error; fall through.
@@ -422,6 +433,165 @@
     await this.ok("SendObject", OP.SendObject, [], bytes);
   };
 
+  /* ── the transport seam ────────────────────────────────────────────── */
+
+  /* A TRANSPORT is what the page talks to instead of a protocol. Everything
+     below this line is written against these eight members and never says
+     MTP, USB, handle or folder again:
+
+       id, label
+       available()             -> {ok, why}   secure context FIRST, then API
+       async connect()         -> {title, deviceId}
+       async listActivities()  -> [{id, name, size}]     id opaque to the page
+       async readActivity(entry) -> Uint8Array
+       async sendWorkout(name, bytes)
+       async newFilesCount()   -> number | null   null = cannot be observed
+       async disconnect()
+       onLost                  the page assigns; called when the device goes
+
+     HARD CONSTRAINT, not style: connect() must call its picker as the FIRST
+     statement, before any await. Transient activation is about 4.9 seconds
+     and is LOST across an await, so a picker called after one throws
+     SecurityError. `await t.connect()` is safe — the body runs synchronously
+     up to its first await, and the picker is inside that prefix — but an
+     await placed before the picker, in either the page or the transport, is
+     not. */
+
+  // mtpTransport drives the Epix: MTP over WebUSB, the Mtp object above.
+  // The wire code is untouched; this is the adapter that answers the eight
+  // questions in the transport's vocabulary rather than PTP's.
+  function mtpTransport() {
+    var mtp = null, storage = 0, newFiles = 0, garminFolder = 0, watchGone = null;
+    // Whether the device is still believed to be listening. A fatal error
+    // means it is not, and disconnect() must then free the claim at once
+    // rather than spend another timeout saying goodbye to something that
+    // has already stopped answering.
+    var listening = false;
+
+    function live(p) {
+      return p.catch(function (e) {
+        if (e.fatal) listening = false;
+        throw e;
+      });
+    }
+
+    var self = {
+      id: "mtp",
+      label: "Epix over USB", // how a transport names itself to the athlete
+      onLost: null,
+      available: mtpTransport.available,
+
+      connect: async function () {
+        // FIRST statement. Nothing may be awaited before this line.
+        var device = await navigator.usb.requestDevice({ filters: [{ vendorId: GARMIN_VENDOR }] });
+        mtp = new Mtp(device);
+        await live(mtp.connect());
+        await live(mtp.openSession());
+        listening = true;
+        var info = await live(mtp.deviceInfo());
+        var stores = await live(mtp.storageIDs());
+        if (!stores.length) throw new Error("the watch reports no storage");
+        storage = stores[0];
+        trace("ops supported: " + Array.from(mtp.ops || []).map(function (o) { return "0x" + o.toString(16); }).sort().join(" "));
+        var garmin = await live(mtp.findFolder(storage, ALL_HANDLES, "GARMIN"));
+        if (!garmin) throw new Error("no GARMIN folder on the watch's storage");
+        newFiles = await live(mtp.findFolder(storage, garmin, "NewFiles"));
+        if (!newFiles) throw new Error("no GARMIN/NewFiles folder — is this the right device mode?");
+        garminFolder = garmin;
+
+        // The device vanishing is a platform event, so the transport owns
+        // listening for it. Registered per connect, and removed by whichever
+        // comes first — the device going, or disconnect() — because the page
+        // builds a fresh transport for every connect and a listener per
+        // cycle would accumulate.
+        watchGone = function (e) {
+          if (!mtp || e.device !== mtp.device) return;
+          navigator.usb.removeEventListener("disconnect", watchGone);
+          watchGone = null;
+          mtp = null;
+          listening = false;
+          if (self.onLost) self.onLost();
+        };
+        navigator.usb.addEventListener("disconnect", watchGone);
+
+        // deviceId is the device's own identity, separate from the sentence
+        // shown to the athlete. Nothing reads it while there is one transport
+        // and one watch; it is here because the page must be able to say
+        // WHICH device it is talking to without asking a protocol.
+        return {
+          deviceId: info.manufacturer + " " + info.model,
+          title: info.manufacturer + " " + info.model + " — GARMIN/NewFiles found. Writes via " +
+            (mtp.ops && mtp.ops.has(OP.SendObjectPropList) ? "SendObjectPropList." : "SendObjectInfo."),
+        };
+      },
+
+      listActivities: async function () {
+        var activity = await live(mtp.findFolder(storage, garminFolder, "Activity"));
+        if (!activity) throw new Error("no Activity folder on this device");
+        var handles = await live(mtp.handlesUnder(storage, activity));
+        var out = [];
+        for (var i = 0; i < handles.length; i++) {
+          var info = await live(mtp.objectNameFormat(handles[i]));
+          if (info.format === FMT_FOLDER) continue;
+          out.push({ id: handles[i], name: info.name, size: info.size });
+        }
+        return out;
+      },
+
+      readActivity: async function (entry) {
+        return live(mtp.getObject(entry.id, entry.size));
+      },
+
+      sendWorkout: async function (name, bytes) {
+        return live(mtp.sendFile(storage, newFiles, name, bytes));
+      },
+
+      // The device's own count of what is waiting to be imported. MTP can be
+      // asked; a transport that only wrote into a mounted filesystem cannot
+      // know what the device made of it, and answers null.
+      newFilesCount: async function () {
+        return (await live(mtp.handlesUnder(storage, newFiles))).length;
+      },
+
+      disconnect: async function () {
+        if (watchGone) {
+          navigator.usb.removeEventListener("disconnect", watchGone);
+          watchGone = null;
+        }
+        if (!mtp) return;
+        // Objects written in a session that dies uncleanly are rolled back,
+        // so the session is closed before the claim is freed — always, not
+        // only after a send. Unless the device has already stopped
+        // answering, in which case the goodbye would only cost another
+        // timeout and the claim is what matters.
+        if (listening) {
+          try { await mtp.transact(OP.CloseSession, [], null, false, "CloseSession"); } catch (e) { /* a dead session has nothing left to close */ }
+        }
+        listening = false;
+        await mtp.close();
+        mtp = null;
+      },
+    };
+    return self;
+  }
+
+  // available is a property of the factory as well as of an instance, so the
+  // page can ask before it has anything to connect with.
+  mtpTransport.available = function () {
+    // Order matters: browsers hide navigator.usb entirely on an insecure
+    // origin, so the API-presence check would misdiagnose Chrome-over-HTTP as
+    // the wrong browser instead of the wrong address. It is also the shared
+    // requirement — every transport a browser can offer needs a secure
+    // context — so its message names no API.
+    if (!window.isSecureContext) {
+      return { ok: false, why: "This page has to be reached over HTTPS to talk to a watch. The zip download works here." };
+    }
+    if (!navigator.usb) {
+      return { ok: false, why: "This needs WebUSB, which only Chrome and Edge implement. The zip download still works everywhere." };
+    }
+    return { ok: true, why: "" };
+  };
+
   /* ── the page ──────────────────────────────────────────────────────── */
 
   var $ = function (sel) { return document.querySelector(sel); };
@@ -439,27 +609,48 @@
     el.textContent = text;
   }
 
-  var mtp = null, storage = 0, newFiles = 0;
+  // makeTransport builds the one the page uses. There is a single
+  // implementation today, and the seam above is what lets a second one be
+  // chosen here rather than threaded through everything below.
+  var makeTransport = mtpTransport;
+
+  // t is the CONNECTED transport, null when there is none. It replaced
+  // `mtp, storage, newFiles` — three variables that were all one fact
+  // (whether a device is reachable) written in one protocol's nouns.
+  var t = null;
 
   // The one button is a toggle and names the action it will take next.
   function setConnectUI(connected) {
     connectBtn.textContent = connected ? "Disconnect" : "Connect watch";
   }
 
-  // disconnect releases the watch deliberately: session closed, USB claim
-  // freed — so other MTP tools can reach the device without this tab closing.
+  // disconnect releases the watch deliberately, so other tools can reach the
+  // device without this tab closing. What "release" means is the transport's
+  // business.
   async function disconnect() {
     connectBtn.disabled = true;
     sendBtn.disabled = true;
     pullBtn.disabled = true;
-    try { await mtp.transact(OP.CloseSession, [], null, false, "CloseSession"); } catch (e) { /* a dead session has nothing left to close */ }
-    await mtp.close();
-    mtp = null;
+    await t.disconnect();
+    t = null;
     setConnectUI(false);
     connectBtn.disabled = false;
     say("Disconnected. Unplug when ready, or connect again to transfer.");
   }
-  var pullRows = []; // {tr, box, act:{handle,name,size}} — rebuilt on every connect
+  // watchWentAway is what the transport calls when the device disappears
+  // under it. Unplugging IS the workflow — the watch imports on disconnect —
+  // so the page must come back ready to connect again, not dead until a
+  // reload. Which platform event means "gone" is the transport's to know.
+  function watchWentAway() {
+    t = null;
+    sendBtn.disabled = true;
+    pullBtn.disabled = true;
+    setConnectUI(false);
+    connectBtn.disabled = false;
+    say("Watch unplugged — it imports anything just sent. Check Training → Workouts; reconnect to send again.");
+  }
+
+  var pullRows = []; // {tr, box, act:{id,name,size}} — rebuilt on every connect
 
   function humanSize(n) {
     if (n < 1024) return n + " B";
@@ -557,38 +748,32 @@
     newWrap.hidden = pullBody.children.length === 0;
     pullInfo.textContent = fresh ? fresh + " new on the watch." : "Nothing new on the watch.";
     syncPall();
-    pullBtn.disabled = !mtp || fresh === 0;
+    pullBtn.disabled = !t || fresh === 0;
     return fresh;
   }
 
   async function connect() {
     connectBtn.disabled = true;
+    // Built and armed synchronously: the transport's picker must be reached
+    // with the click's transient activation still live, and an await here
+    // would spend it.
+    var next = makeTransport();
+    next.onLost = watchWentAway;
     try {
-      var device = await navigator.usb.requestDevice({ filters: [{ vendorId: GARMIN_VENDOR }] });
-      mtp = new Mtp(device);
-      await mtp.connect();
-      await mtp.openSession();
-      var info = await mtp.deviceInfo();
-      var stores = await mtp.storageIDs();
-      if (!stores.length) throw new Error("the watch reports no storage");
-      storage = stores[0];
-      trace("ops supported: " + Array.from(mtp.ops || []).map(function (o) { return "0x" + o.toString(16); }).sort().join(" "));
-      var garmin = await mtp.findFolder(storage, ALL_HANDLES, "GARMIN");
-      if (!garmin) throw new Error("no GARMIN folder on the watch's storage");
-      newFiles = await mtp.findFolder(storage, garmin, "NewFiles");
-      if (!newFiles) throw new Error("no GARMIN/NewFiles folder — is this the right device mode?");
-      var senderLine = "Connected: " + info.manufacturer + " " + info.model + " — GARMIN/NewFiles found. Writes via " +
-        (mtp.ops && mtp.ops.has(OP.SendObjectPropList) ? "SendObjectPropList." : "SendObjectInfo.");
+      var info = await next.connect();
+      t = next;
+      var senderLine = "Connected: " + info.title;
       say(senderLine);
       // Send stays dark until the pull listing is done: two live buttons
       // would interleave two transaction streams on one session.
-      await setupPull(garmin, senderLine);
+      await setupPull(senderLine);
       sendBtn.disabled = false;
       setConnectUI(true);
       connectBtn.disabled = false;
     } catch (e) {
       say(e.message, true);
-      if (mtp) { await mtp.close(); mtp = null; }
+      await next.disconnect();
+      t = null;
       setConnectUI(false);
       connectBtn.disabled = false;
       sendBtn.disabled = true;
@@ -596,26 +781,16 @@
     }
   }
 
-  // setupPull lists GARMIN/Activity once per connect, diffs it against the
-  // server, and arms the pull card. Read-only on the watch.
-  async function setupPull(garmin, senderLine) {
+  // setupPull lists the watch's recordings once per connect, diffs them
+  // against the server, and arms the pull card. Read-only on the device.
+  async function setupPull(senderLine) {
     buildPullRows([]);
     pullBtn.disabled = true;
     var acts = [];
     try {
-      var activity = await mtp.findFolder(storage, garmin, "Activity");
-      if (!activity) {
-        pullInfo.textContent = "No Activity folder on this watch.";
-        return;
-      }
-      var handles = await mtp.handlesUnder(storage, activity);
-      for (var i = 0; i < handles.length; i++) {
-        var info = await mtp.objectNameFormat(handles[i]);
-        if (info.format === FMT_FOLDER) continue;
-        acts.push({ handle: handles[i], name: info.name, size: info.size });
-      }
+      acts = await t.listActivities();
     } catch (e) {
-      pullInfo.textContent = "Could not list GARMIN/Activity (" + e.message + ") — reconnect to pull.";
+      pullInfo.textContent = "Could not list the watch's recordings (" + e.message + ") — reconnect to pull.";
       return;
     }
     acts.sort(function (a, b) { return a.name < b.name ? 1 : a.name > b.name ? -1 : 0; }); // names are timestamps: newest first
@@ -650,14 +825,14 @@
     for (var i = 0; i < pullRows.length; i++) {
       var pr = pullRows[i];
       if (pr.box.disabled || !pr.box.checked) continue;
-      if (!mtp) {
+      if (!t) {
         rowState(pr.tr, "fail", "watch disconnected");
         failed++;
         continue;
       }
       rowState(pr.tr, "busy", "pulling…");
       try {
-        var bytes = await mtp.getObject(pr.act.handle, pr.act.size);
+        var bytes = await t.readActivity(pr.act);
         if (bytes.length !== pr.act.size) {
           rowState(pr.tr, "fail", "size changed on the watch — reconnect");
           failed++;
@@ -680,7 +855,7 @@
       } catch (e) {
         rowState(pr.tr, "fail", e.message);
         failed++;
-        if (e.message.indexOf("no answer") >= 0 || e.message.indexOf("desynced") >= 0) {
+        if (e.fatal) {
           say("Stopped: the watch stopped answering. Unplug, replug, reconnect, then pull the remaining files.", true);
           for (var j = i + 1; j < pullRows.length; j++) {
             if (!pullRows[j].box.disabled && pullRows[j].box.checked) rowState(pullRows[j].tr, "fail", "not attempted");
@@ -690,9 +865,9 @@
         }
       }
     }
-    // Reads roll back nothing, so the session stays open here — only writes
-    // need CloseSession before unplug, and the send path owns that.
-    if (mtp) { sendBtn.disabled = false; connectBtn.disabled = false; }
+    // Reads roll back nothing, so the connection stays open here — only
+    // writes need closing before unplug, and the send path owns that.
+    if (t) { sendBtn.disabled = false; connectBtn.disabled = false; }
     var stored;
     try {
       stored = await fetchStored();
@@ -725,9 +900,9 @@
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
       if (!row.querySelector("input").checked) continue;
-      // The disconnect listener nulls mtp the moment the watch goes away;
-      // fail the remaining rows plainly instead of racing dead transfers.
-      if (!mtp) {
+      // watchWentAway nulls t the moment the device goes; fail the remaining
+      // rows plainly instead of racing dead transfers.
+      if (!t) {
         rowState(row, "fail", "watch disconnected");
         failed++;
         continue;
@@ -737,13 +912,13 @@
         var resp = await fetch(row.dataset.url);
         if (!resp.ok) throw new Error("download failed (" + resp.status + ")");
         var bytes = await resp.arrayBuffer();
-        await mtp.sendFile(storage, newFiles, row.dataset.slug, bytes);
+        await t.sendWorkout(row.dataset.slug, bytes);
         rowState(row, "sent", "on the watch");
         sent++;
       } catch (e) {
         rowState(row, "fail", e.message);
         failed++;
-        if (e.message.indexOf("no answer") >= 0 || e.message.indexOf("desynced") >= 0) {
+        if (e.fatal) {
           say("Stopped: the watch stopped answering. Unplug, replug, reconnect, then send the remaining files.", true);
           for (var j = i + 1; j < rows.length; j++) {
             if (rows[j].querySelector("input").checked) rowState(rows[j], "fail", "not attempted");
@@ -753,20 +928,21 @@
         }
       }
     }
-    if (mtp) {
-      // The count shown must be the device's own, and the session must be
+    if (t) {
+      // The count shown must be the device's own, and the connection must be
       // closed before the cable moves — a responder may roll back objects
       // from a session that dies uncleanly.
       try {
-        var listed = (await mtp.handlesUnder(storage, newFiles)).length;
-        await mtp.transact(OP.CloseSession, [], null, false, "CloseSession");
-        await mtp.close();
-        mtp = null;
+        var listed = await t.newFilesCount();
+        await t.disconnect();
+        t = null;
         setConnectUI(false);
         connectBtn.disabled = false;
         say(sent + " sent" + (failed ? ", " + failed + " failed" : "") +
-          " — the watch itself lists " + listed + " file(s) in NewFiles. Session closed: unplug now, " +
-          "and the workouts appear under Training → Workouts.");
+          (listed === null
+            ? " — written. Eject the watch, then unplug, and the workouts appear under Training → Workouts."
+            : " — the watch itself lists " + listed + " file(s) in NewFiles. Session closed: unplug now, " +
+              "and the workouts appear under Training → Workouts."));
       } catch (e) {
         say("Sent " + sent + ", but the closing handshake failed: " + e.message, true);
         sendBtn.disabled = false;
@@ -818,22 +994,17 @@
     tabPull.addEventListener("keydown", tabKeys);
     if (location.hash === "#pull") showTab(true);
 
-    // Order matters: browsers hide navigator.usb entirely on an insecure
-    // origin, so the missing-API check would misdiagnose Chrome-over-HTTP
-    // as the wrong browser instead of the wrong address.
-    if (!window.isSecureContext) {
-      say("WebUSB only runs over HTTPS. The zip download works here.", true);
+    // Whether this browser at this address can reach a watch at all is the
+    // transport's question — it knows which API it needs and that the
+    // secure-context gate has to be asked first.
+    var av = makeTransport.available();
+    if (!av.ok) {
+      say(av.why, true);
       connectBtn.disabled = true;
       pullBtn.disabled = true;
       return;
     }
-    if (!navigator.usb) {
-      say("This needs WebUSB, which only Chrome and Edge implement. The zip download still works everywhere.", true);
-      connectBtn.disabled = true;
-      pullBtn.disabled = true;
-      return;
-    }
-    connectBtn.addEventListener("click", function () { if (mtp) disconnect(); else connect(); });
+    connectBtn.addEventListener("click", function () { if (t) disconnect(); else connect(); });
     sendBtn.addEventListener("click", sendAll);
     pullBtn.addEventListener("click", pullAll);
     if (wpall) {
@@ -861,18 +1032,6 @@
       });
       syncWall(); // the server pre-selects a fortnight, so the master starts mixed
     }
-    // Unplugging IS the workflow — the watch imports on disconnect — so the
-    // page must come back ready to connect again, not dead until a reload.
-    navigator.usb.addEventListener("disconnect", function (e) {
-      if (mtp && e.device === mtp.device) {
-        mtp = null;
-        sendBtn.disabled = true;
-        pullBtn.disabled = true;
-        setConnectUI(false);
-        connectBtn.disabled = false;
-        say("Watch unplugged — it imports anything just sent. Check Training → Workouts; reconnect to send again.");
-      }
-    });
-    window.addEventListener("beforeunload", function () { if (mtp) mtp.close(); });
+    window.addEventListener("beforeunload", function () { if (t) t.disconnect(); });
   });
 })();
