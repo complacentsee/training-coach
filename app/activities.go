@@ -12,6 +12,7 @@ package main
 // perturb a reload or fail `make verify`.
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,69 @@ func validActivityName(name string) bool {
 		}
 	}
 	return true
+}
+
+// The FIT container's two legal header sizes: 12 bytes, or 14 with the
+// header's own CRC in the last two. Both put ".FIT" at 8–11, which is why
+// the magic check never had to care which it was reading.
+const (
+	fitHeaderMin = 12
+	fitHeaderMax = 14
+)
+
+// fitFramingErr reports why body is not a well-framed FIT container, or nil
+// when it is. The header states how many data bytes follow it, so the whole
+// file's length is arithmetic: header + data + the two-byte trailing CRC. A
+// file that stops short of what its own header promised is a torn read.
+//
+// This is an INGEST gate, not part of the measurement register — it lives
+// here rather than in decode.go deliberately, so it carries no python-mirror
+// obligation and no acceptance-gate run. It computes nothing about a
+// workout; it reads the container's own arithmetic back to it.
+//
+// Why it exists now: under MTP the transport was transactional and the page
+// compared what it received against the device's own GetObjectInfo, so a
+// short read had a second opinion. Under mass storage both numbers come from
+// one host read of one FAT directory entry — the comparison becomes
+// self-consistent by construction and proves nothing. The oracle has to come
+// from inside the bytes.
+//
+// Chained files (several FIT parts back to back) are walked in full, the same
+// shape decode.go walks: every part must be whole and the last must end
+// exactly at the final byte, so "header + data + CRC == len(body)" is the
+// single-part case of one rule rather than a special one.
+func fitFramingErr(body []byte) error {
+	if len(body) == 0 {
+		return errors.New("empty body")
+	}
+	for o, part := 0, 1; o < len(body); part++ {
+		left := len(body) - o
+		if left < fitHeaderMin+2 {
+			return fmt.Errorf("part %d: %d bytes left, too short for a header and a CRC", part, left)
+		}
+		// The magic is asked first on purpose: it is the question "is this a
+		// FIT file at all", and a caller who sent something else entirely
+		// should hear that rather than a complaint about byte 0 as a header
+		// size. Both legal header sizes put the magic in the same place.
+		if string(body[o+8:o+12]) != ".FIT" {
+			return fmt.Errorf("part %d: no .FIT magic at offset %d", part, o+8)
+		}
+		hs := int(body[o])
+		if hs != fitHeaderMin && hs != fitHeaderMax {
+			return fmt.Errorf("part %d: header size %d, want %d or %d", part, hs, fitHeaderMin, fitHeaderMax)
+		}
+		if left < hs+2 {
+			return fmt.Errorf("part %d: %d bytes left, too short for a %d-byte header and a CRC", part, left, hs)
+		}
+		dsize := int(binary.LittleEndian.Uint32(body[o+4 : o+8]))
+		end := o + hs + dsize + 2 // header, data, trailing CRC
+		if end > len(body) {
+			return fmt.Errorf("part %d: header declares %d data bytes, so the file needs %d and holds %d — truncated by %d",
+				part, dsize, end, len(body), end-len(body))
+		}
+		o = end
+	}
+	return nil
 }
 
 func (s *server) activitiesDir() string {
@@ -163,8 +227,12 @@ func (s *server) postActivity(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if len(body) < 12 || string(body[8:12]) != ".FIT" {
-		http.Error(w, "not a FIT file", http.StatusBadRequest)
+	// One gate, not two: the framing walk asks the magic question first and
+	// then the one the old check could not — whether all the bytes arrived.
+	// Its message names which, because "not a FIT file" and "truncated by 44
+	// bytes" want different things done about them.
+	if err := fitFramingErr(body); err != nil {
+		http.Error(w, "not a well-framed FIT file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	dir := s.activitiesDir()

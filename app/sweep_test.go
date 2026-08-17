@@ -1,11 +1,121 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
+
+// TestSweepIngestGate is the gate on turning the ingest checks on: run
+// fitFramingErr and wholeFileFITCRCOK over every file in a real archive and
+// demand that every one passes. A refusal here is a finding about the
+// ARCHIVE, not a bug in the check — these bytes are already stored, already
+// measured and already graded against, so a file that fails is a file the
+// register has been reading past a framing error all along, and that is
+// something to report before anything starts refusing uploads.
+//
+// It needs an archive, which is not in the repo (personal health data), so it
+// activates only when RC_ARCHIVE names a directory of .fit files.
+//
+//	RC_ARCHIVE=/path/to/activities go test -run TestSweepIngestGate -v .
+func TestSweepIngestGate(t *testing.T) {
+	dir := os.Getenv("RC_ARCHIVE")
+	if dir == "" {
+		t.Skip("RC_ARCHIVE not set — the whole-archive ingest sweep runs only where an archive lives")
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	var names []string
+	for _, e := range ents {
+		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".fit") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		t.Fatalf("archive %s holds no .fit files", dir)
+	}
+
+	// Shape counts, so the sweep says what the archive IS and not only that it
+	// passed: how many parts a file is chained from, which header size it
+	// carries, and which of the two CRC conventions its trailing bytes match.
+	// The last one is the measured Zwift wart, counted rather than assumed.
+	parts, headers := map[int]int{}, map[int]int{}
+	dataOnlyCRC, wholePartCRC, bothCRC := 0, 0, 0
+	framingBad, crcBad := 0, 0
+
+	for _, n := range names {
+		body, err := os.ReadFile(filepath.Join(dir, n))
+		if err != nil {
+			t.Fatalf("%s: %v", n, err)
+		}
+		if err := fitFramingErr(body); err != nil {
+			t.Errorf("FRAMING %s (%d bytes): %v", n, len(body), err)
+			framingBad++
+			continue
+		}
+		if !wholeFileFITCRCOK(body) {
+			t.Errorf("CRC %s (%d bytes): neither the data-only nor the whole-part convention matches", n, len(body))
+			crcBad++
+		}
+		np, hs, dataOnly, wholePart := fitShape(body)
+		parts[np]++
+		headers[hs]++
+		switch {
+		case dataOnly && wholePart:
+			bothCRC++
+		case dataOnly:
+			dataOnlyCRC++
+		case wholePart:
+			wholePartCRC++
+		}
+	}
+
+	t.Logf("ingest sweep: %d files, %d framing refusals, %d CRC refusals", len(names), framingBad, crcBad)
+	t.Logf("  parts per file: %s", countsLine(parts))
+	t.Logf("  header size:    %s", countsLine(headers))
+	t.Logf("  trailing CRC:   %d data-only, %d whole-part (the Zwift convention), %d satisfy both",
+		dataOnlyCRC, wholePartCRC, bothCRC)
+}
+
+// fitShape reports a well-framed file's part count, its FIRST part's header
+// size, and which CRC conventions its LAST part satisfies. Only the sweep
+// needs this; nothing in the serving path asks a file to describe itself.
+func fitShape(body []byte) (parts, headerSize int, dataOnly, wholePart bool) {
+	for o := 0; o < len(body); parts++ {
+		hs := int(body[o])
+		if parts == 0 {
+			headerSize = hs
+		}
+		dsize := int(binary.LittleEndian.Uint32(body[o+4 : o+8]))
+		end := o + hs + dsize + 2
+		trailing := binary.LittleEndian.Uint16(body[end-2 : end])
+		dataOnly = fitCRC16(0, body[o+hs:end-2]) == trailing
+		wholePart = fitCRC16(0, body[o:end-2]) == trailing
+		o = end
+	}
+	return parts, headerSize, dataOnly, wholePart
+}
+
+// countsLine renders a small histogram in ascending key order.
+func countsLine(m map[int]int) string {
+	keys := make([]int, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	var out []string
+	for _, k := range keys {
+		out = append(out, fmt.Sprintf("%d×%d", m[k], k))
+	}
+	return strings.Join(out, ", ")
+}
 
 // TestSweepComingUp is a viewer, not an assertion: it prints the card for every
 // day of the block so a rule about *when* rows appear can be read rather than

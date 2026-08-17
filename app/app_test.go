@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -2497,11 +2498,25 @@ func post(mux *http.ServeMux, url string, body []byte) *httptest.ResponseRecorde
 	return rec
 }
 
-// fitBytes is a body that passes the magic check: eight header bytes, ".FIT"
-// at 8–11, then whatever payload distinguishes one fake recording from
-// another. The server never decodes past the magic, so this is enough.
+// fitBytes is a well-framed FIT container around a payload that is not a
+// recording: a 14-byte header declaring exactly len(payload) data bytes, its
+// own header CRC, the payload, and the trailing file CRC. The ingest gate is
+// satisfied and the decoder still refuses it, which is the fixture these
+// tests want — a file that stores but does not measure.
+//
+// It used to be a hand-typed twelve bytes whose header claimed a 14-byte
+// header it did not have and zero data bytes it did have. That passed the
+// magic check because the magic check read four bytes and asked nothing of
+// the rest.
 func fitBytes(payload string) []byte {
-	return append([]byte("\x0e\x10\x43\x08\x00\x00\x00\x00.FIT"), payload...)
+	b := make([]byte, 14, 16+len(payload))
+	b[0], b[1] = 14, 0x10
+	binary.LittleEndian.PutUint16(b[2:4], 2115)
+	binary.LittleEndian.PutUint32(b[4:8], uint32(len(payload)))
+	copy(b[8:12], ".FIT")
+	binary.LittleEndian.PutUint16(b[12:14], fitCRC16(0, b[:12]))
+	b = append(b, payload...)
+	return binary.LittleEndian.AppendUint16(b, fitCRC16(0, b[14:]))
 }
 
 // Activities are health data beside the plan, not part of it: the data Rev
@@ -2593,6 +2608,101 @@ func TestActivityPostRefusals(t *testing.T) {
 		}
 	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
+	}
+}
+
+// zwiftConvention rewrites a file the way Zwift writes one: header CRC slot
+// zero, trailing CRC spanning header+data. 485 of the live archive's 1,369
+// files match only this convention, so it is the normal case here, not the
+// exotic one.
+func zwiftConvention(b []byte) []byte {
+	z := bytes.Clone(b)
+	z[12], z[13] = 0, 0
+	crc := fitCRC16(0, z[:len(z)-2])
+	z[len(z)-2], z[len(z)-1] = byte(crc), byte(crc>>8)
+	return z
+}
+
+// twelveByteHeader rewrites a 14-byte-header file with the OTHER legal header
+// size — 12 bytes, no header-CRC slot at all. 360 of the live archive's 1,369
+// files are shaped this way, which is why the gate reads the header-size byte
+// instead of assuming 14: hardcoding it would refuse a quarter of the
+// archive.
+func twelveByteHeader(b []byte) []byte {
+	out := append([]byte{}, b[:12]...)
+	out[0] = 12
+	out = append(out, b[14:len(b)-2]...)
+	return binary.LittleEndian.AppendUint16(out, fitCRC16(0, out))
+}
+
+// TestFITFramingGate is the ingest oracle: the header states how many data
+// bytes follow, so a file that stops short of its own arithmetic is a torn
+// read. Under MTP the page had a second opinion — the device's own
+// GetObjectInfo — and under mass storage both numbers come from one host read
+// of one FAT directory entry, which is self-consistent by construction. So
+// the check has to come from inside the bytes.
+func TestFITFramingGate(t *testing.T) {
+	clean := tenSecondRun(t)
+	if len(clean) < 40 {
+		t.Fatalf("fixture is %d bytes — too small to truncate meaningfully", len(clean))
+	}
+
+	longDataSize := bytes.Clone(clean)
+	binary.LittleEndian.PutUint32(longDataSize[4:8], uint32(len(clean)))
+
+	flipped := bytes.Clone(clean)
+	flipped[len(flipped)/2] ^= 0xFF
+
+	for _, c := range []struct {
+		name string
+		body []byte
+		want string // "" = must pass; otherwise a substring of the refusal
+	}{
+		{"the encoder's own bytes", clean, ""},
+		{"a well-framed fake recording", fitBytes("not really fit"), ""},
+		{"Zwift's whole-file CRC convention", zwiftConvention(clean), ""},
+		{"a 12-byte header", twelveByteHeader(clean), ""},
+		{"two parts chained", append(bytes.Clone(clean), clean...), ""},
+		{"a flipped data byte", flipped, ""}, // framing cannot see it; the CRC can
+
+		{"empty", nil, "empty"},
+		{"the magic and nothing else", []byte(".FIT"), "too short"},
+		{"sixteen bytes of junk", []byte("0123456789abcdef"), "no .FIT magic"},
+		{"one byte short", clean[:len(clean)-1], "truncated by 1"},
+		{"cut to the header", clean[:20], "truncated"},
+		{"a header size of 13", func() []byte {
+			b := bytes.Clone(clean)
+			b[0] = 13
+			return b
+		}(), "header size 13"},
+		{"data_size larger than the file", longDataSize, "truncated"},
+		{"a byte appended after the CRC", append(bytes.Clone(clean), 0x00), "part 2"},
+		{"a whole second part truncated", append(bytes.Clone(clean), clean[:20]...), "part 2"},
+	} {
+		err := fitFramingErr(c.body)
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: refused: %v", c.name, err)
+		case c.want != "" && err == nil:
+			t.Errorf("%s: accepted, want a refusal naming %q", c.name, c.want)
+		case c.want != "" && err != nil && !strings.Contains(err.Error(), c.want):
+			t.Errorf("%s: refused with %q, want it to name %q", c.name, err, c.want)
+		}
+	}
+
+	// The gate is at ingest, and a refusal stores nothing.
+	dir := t.TempDir()
+	mux := fitTestMux(t, dir)
+	if rec := post(mux, "/api/activity?name=2026-08-16-07-00-00.fit", clean[:len(clean)-1]); rec.Code != http.StatusBadRequest {
+		t.Errorf("truncated upload = %d, want 400", rec.Code)
+	} else if !strings.Contains(rec.Body.String(), "truncated") {
+		t.Errorf("refusal body %q does not say what was wrong", strings.TrimSpace(rec.Body.String()))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "activities")); !os.IsNotExist(err) {
+		t.Errorf("a refused upload created the store (stat: %v)", err)
+	}
+	if rec := post(mux, "/api/activity?name=2026-08-16-07-00-00.fit", clean); rec.Code != http.StatusNoContent {
+		t.Errorf("whole upload = %d, want 204: %s", rec.Code, rec.Body.String())
 	}
 }
 
