@@ -83,7 +83,15 @@
     m.body.innerHTML = '<p class="hint">Reading the recording…</p>';
     getJSON("/api/activities?date=" + encodeURIComponent(st.date))
       .then(function (list) {
-        st.list = list || [];
+        list = list || [];
+        /* The day's recordings, filtered the way the grader filters them: a
+           walk on a bike day is not part of the ride, and its pill was noise
+           beside the session's own files. The session's sport comes from the
+           cell; a day that prescribes none, or whose recordings all mismatch
+           (an unimported file has no sport to match), shows everything —
+           hiding the only thing recorded would read as "nothing recorded". */
+        var match = st.sport ? list.filter(function (a) { return a.sport === st.sport; }) : [];
+        st.list = match.length ? match : list;
         if (!st.list.length) {
           m.body.innerHTML = "<p>Nothing was recorded on this day.</p>";
           return;
