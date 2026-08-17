@@ -851,6 +851,12 @@ func (s *server) joinPrescription(out *detailOut, d *activityDetail, blockID str
 		l.Prescribed = p
 	}
 
+	// The watts panel's target, for the chart to draw the way the HR panel
+	// draws its grade band.
+	if d.Sport == "cycling" && out.Chart != nil {
+		out.Chart.PowerBandW, out.Chart.PowerBandPct = chartPowerBand(em, ds.Athlete.Power["ftp"])
+	}
+
 	// The session line: what one rep was, how many were asked for, and how
 	// many the recording actually carries.
 	for i, e := range em {
@@ -870,6 +876,34 @@ func (s *server) joinPrescription(out *detailOut, d *activityDetail, blockID str
 		}
 		break // the first work repeat is the session's headline
 	}
+}
+
+// chartPowerBand is the watts panel's target: the LONGEST active step's
+// power band, with the same band as a share of FTP when one is declared.
+// On a steady day the longest active step is the main set; on an interval
+// day it is the work band — what the trace aims at between recoveries.
+// Repeat markers and steps without power say nothing.
+func chartPowerBand(em []emittedStep, ftp int) (*[2]int, *[2]int) {
+	var band *[2]int
+	bestSecs := 0
+	for _, e := range em {
+		if e.IsRepeat || e.Leaf.Role != "active" || e.Leaf.PowerLo == 0 {
+			continue
+		}
+		if e.Leaf.Secs > bestSecs {
+			bestSecs = e.Leaf.Secs
+			band = &[2]int{e.Leaf.PowerLo, e.Leaf.PowerHi}
+		}
+	}
+	if band == nil {
+		return nil, nil
+	}
+	if ftp <= 0 {
+		return band, nil
+	}
+	pct := [2]int{int(pyRound(float64(band[0])/float64(ftp)*100, 0)),
+		int(pyRound(float64(band[1])/float64(ftp)*100, 0))}
+	return band, &pct
 }
 
 // delivered reports whether a lap covered enough of its step to count as
@@ -984,6 +1018,14 @@ type chartOut struct {
 	HR    []*int     `json:"hr,omitempty"`
 	Pace  []*float64 `json:"pace,omitempty"` // seconds per Unit
 	Watts []*int     `json:"watts,omitempty"`
+	// The day's prescribed power band, for the watts panel to draw the way
+	// the HR panel draws its grade band: the longest active step's, resolved
+	// by the same joinPrescription pass that pins the laps — one derivation,
+	// never a second one in the browser. Pct is the same band as a share of
+	// FTP at view time, so a retest re-labels every past chart honestly.
+	// Bikes with steps only; a run's power panel draws no band.
+	PowerBandW   *[2]int `json:"power_band_w,omitempty"`
+	PowerBandPct *[2]int `json:"power_band_pct,omitempty"`
 }
 
 func medianInts(xs []int) *int {

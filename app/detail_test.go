@@ -719,6 +719,39 @@ func steppedRun(t *testing.T, repPaces []float64) []byte {
 	return encodeActivityFixture(t, msgs...)
 }
 
+// TestChartPowerBand pins the watts panel's target selection: the longest
+// active step's band, repeats and powerless steps ignored, the %FTP labels
+// derived from the anchor and absent when no FTP is declared. The example
+// block carries no bike steps day, so this tests the selection directly —
+// the resolution path it feeds from is TestPrescribedJoinsLapsToSteps's.
+func TestChartPowerBand(t *testing.T) {
+	step := func(role string, secs, lo, hi int) emittedStep {
+		return emittedStep{Leaf: resolvedStep{Role: role, Secs: secs, PowerLo: lo, PowerHi: hi}}
+	}
+	em := []emittedStep{
+		step("warmup", 300, 107, 133),   // a warm-up band is not the target
+		step("active", 240, 180, 200),   // a shorter interval…
+		step("active", 2700, 133, 146),  // …loses to the main set
+		step("recovery", 120, 100, 120), // recoveries say nothing
+		{IsRepeat: true, Leaf: resolvedStep{Role: "active", Secs: 9999, PowerLo: 1, PowerHi: 2}},
+		step("active", 600, 0, 0), // no power band, nothing to draw
+	}
+	band, pct := chartPowerBand(em, 214)
+	if band == nil || band[0] != 133 || band[1] != 146 {
+		t.Fatalf("band = %v, want [133 146]", band)
+	}
+	// 133/214 = 62.1%, 146/214 = 68.2% — the numbers the grade note quotes.
+	if pct == nil || pct[0] != 62 || pct[1] != 68 {
+		t.Errorf("pct = %v, want [62 68]", pct)
+	}
+	if _, pctFree := chartPowerBand(em, 0); pctFree != nil {
+		t.Error("an athlete with no FTP got a pct-of-FTP label")
+	}
+	if bandFree, _ := chartPowerBand(em[3:], 200); bandFree != nil {
+		t.Errorf("no active step with power, yet band = %v", bandFree)
+	}
+}
+
 // TestPrescribedJoinsLapsToSteps is the phase's whole point: a lap the watch
 // drove says which prescribed step it was, and the block says what that step
 // asked for. Prescribed against delivered, rep by rep — the reading a general

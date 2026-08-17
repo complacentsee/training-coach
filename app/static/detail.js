@@ -566,7 +566,7 @@
          chart actually asks a reader to tell apart is the effort trace from
          the heart-rate trace, and that pair measures 36.8. */
       panels.push({ vals: c.watts, range: wr, colour: "var(--accent)", invert: false,
-                    label: "watts", fmt: Math.round });
+                    label: "watts", fmt: Math.round, watts: true });
     }
     if (hrr) panels.push({ vals: hr, range: hrr, colour: "var(--hard)", invert: false,
                            label: "heart rate", fmt: Math.round, hr: true });
@@ -592,6 +592,13 @@
     if (mt && mt.grade_input && mt.grade_input.hr_band_bpm) band = mt.grade_input.hr_band_bpm;
     if (band && hrr) { hrr.lo = Math.min(hrr.lo, band[0] - 2); hrr.hi = Math.max(hrr.hi, band[1] + 2); }
 
+    /* The day's prescribed power band, resolved server-side from the same
+       steps that pin the laps. Bikes with steps only; nothing else carries
+       one, so a run's chart is untouched by construction. */
+    var wband = c.power_band_w || null;
+    var wpct = c.power_band_pct || null;
+    if (wband && wr) { wr.lo = Math.min(wr.lo, wband[0] - 4); wr.hi = Math.max(wr.hi, wband[1] + 4); }
+
     var g = [];
     panels.forEach(function (p, i) {
       var top = T + i * (ph + GAP);
@@ -607,6 +614,23 @@
       // A panel the eye can tell from its neighbour.
       g.push('<rect x="' + L + '" y="' + top + '" width="' + pw + '" height="' + ph +
         '" fill="var(--sunk)" opacity="0.5" rx="2"/>');
+      if (p.watts && wband) {
+        /* Same idiom as the HR band one panel down. The edges are dashed in
+           the trace's own colour — the cap line's precedent: within a panel,
+           the dash pattern is what separates a guide from the trace, which no
+           colour vision is needed to see. The words carry the numbers, in
+           watts and as a share of FTP. */
+        var yWLo = y(wband[0]), yWHi = y(wband[1]);
+        g.push('<rect x="' + L + '" y="' + yWHi.toFixed(1) + '" width="' + pw + '" height="' + Math.max(0, yWLo - yWHi).toFixed(1) +
+          '" fill="var(--accent)" opacity="0.08"/>');
+        [wband[0], wband[1]].forEach(function (bnd) {
+          var yb = y(bnd).toFixed(1);
+          g.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + yb + '" y2="' + yb +
+            '" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.75"/>');
+        });
+        g.push('<text x="' + (L + pw - 3) + '" y="' + (yWHi - 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--ink-3)">target ' +
+          wband[0] + "–" + wband[1] + " W" + (wpct ? " · " + wpct[0] + "–" + wpct[1] + "% FTP" : "") + "</text>");
+      }
       if (p.hr && band) {
         /* The band the grade wants the trace inside, tinted so the in-band
            share — the number the bike grade IS — can be judged at a glance.
