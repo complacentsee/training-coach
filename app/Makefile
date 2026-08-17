@@ -372,8 +372,15 @@ verify-dev:     ## confirm the dev stack serves this exact build
 # user cannot read them — and dev's postActivity validating each byte it
 # takes is a feature, not a workaround. 409 means already seeded, so
 # re-seeding is idempotent. blocks/ and library/ are replaced wholesale,
-# same as push-files. entries.jsonl is REPLACED on every seed: dev's log is
-# disposable by design, and re-seeding is the reset.
+# same as push-files.
+#
+# entries.jsonl and grading-notes.md are MEANT to be replaced -- dev's log is
+# disposable by design -- but the container writes them, so they are root-owned
+# and the ssh user cannot overwrite them. That copy used to end in `|| true`,
+# so it failed silently every time and dev's log drifted from live's for weeks
+# (356 entries against 428, measured 17 Aug 2026). It is now the target's exit
+# status, checked LAST: the seed still does everything it can, and then says
+# plainly what it could not do.
 seed-dev:       ## populate the dev stack's data from live (partial activities)
 	@set -e; \
 	CURATED=""; \
@@ -388,8 +395,11 @@ seed-dev:       ## populate the dev stack's data from live (partial activities)
 	  cp \$$SRC/athlete.json \$$DST/athlete.json; \
 	  cp -R \$$SRC/blocks \$$DST/blocks; \
 	  cp -R \$$SRC/library \$$DST/library; \
-	  cp \$$SRC/entries.jsonl \$$DST/entries.jsonl 2>/dev/null || true; \
-	  cp \$$SRC/grading-notes.md \$$DST/grading-notes.md 2>/dev/null || true; \
+	  UNRESET=""; \
+	  for f in entries.jsonl grading-notes.md; do \
+	    [ -f \$$SRC/\$$f ] || continue; \
+	    cp \$$SRC/\$$f \$$DST/\$$f 2>/dev/null || UNRESET=\$$UNRESET,\$$f; \
+	  done; \
 	  CUT=\$$(date -d '$(SEED_DAYS) days ago' +%Y-%m-%d); \
 	  LISTING=\$$(curl -s -m 30 --fail http://localhost:$(PORT)/api/activities) \
 	    || { echo 'FAILED: live /api/activities unreachable — nothing seeded' >&2; exit 1; }; \
@@ -408,10 +418,18 @@ seed-dev:       ## populate the dev stack's data from live (partial activities)
 	  done; \
 	  rm -f \$$T; \
 	  [ \$$F = 0 ] || { echo \"FAILED: \$$F activities did not seed\" >&2; exit 1; }; \
-	  echo \"seeded        \$$N new activities this run\""; \
+	  echo \"seeded        \$$N new activities this run\"; \
+	  [ -z \"\$$UNRESET\" ] || echo \"NOT reset    \$$(echo \$$UNRESET | tr -s , ' ')\""; \
 	curl -s -m 10 --fail -X POST http://$(HOST):$(DEVPORT)/api/reload >/dev/null \
 	  || { echo "FAILED: dev /api/reload rejected the seeded plan" >&2; exit 1; }; \
-	echo "seed          done — dev serving the seeded plan"
+	echo "seed          done — dev serving the seeded plan"; \
+	BAD=$$($(SSH) $(REMOTE) 'for f in entries.jsonl grading-notes.md; do [ -f $(DEST)/data/$$f ] || continue; cp $(DEST)/data/$$f $(DEVDEST)/data/$$f 2>/dev/null || printf "%s " $$f; done'); \
+	[ -z "$$BAD" ] || { \
+	  echo "FAILED: could not replace dev's $$BAD- the seed is otherwise complete" >&2; \
+	  echo "        the container wrote those files, so they are root-owned and the ssh" >&2; \
+	  echo "        user cannot overwrite them. Everything else above DID seed; those" >&2; \
+	  echo "        files still hold whatever dev had, and this used to fail silently." >&2; \
+	  exit 1; }
 
 logs-dev:       ## tail the dev container log
 	$(SSH) $(REMOTE) 'docker logs -f running-coach-dev'
