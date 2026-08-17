@@ -199,6 +199,9 @@
     var self = {
       id: "msc",
       label: "Watch as a drive",
+      source: "on the watch",
+      after: "Eject the watch before unplugging it.",
+      pullLabel: "Pull selected",
       onLost: null,
       available: mscTransport.available,
 

@@ -482,6 +482,14 @@
       // model is on the other end is the device's own answer, and it arrives
       // in the status line after connecting.
       label: "Connect over USB",
+      // What the page calls the place recordings came from. Hardcoding "on the
+      // watch" was fine with one transport and is a lie about an upload.
+      source: "on the watch",
+      // The closing instruction, and what the button that starts a batch is
+      // called. Both are the transport's, because "unplug" and "pull" are
+      // true of a cable and false of a file on disk.
+      after: "Send workouts next, or unplug.",
+      pullLabel: "Pull selected",
       onLost: null,
       available: mtpTransport.available,
       canSend: true,
@@ -717,7 +725,9 @@
       tdBox.appendChild(box);
       var tdName = document.createElement("td");
       tdName.className = "wslug";
-      tdName.textContent = act.name;
+      // act.from is set by a transport that had to compute a storable name.
+      // Showing both is the whole promise: nothing is renamed invisibly.
+      tdName.textContent = act.from ? act.from + " → " + act.name : act.name;
       var tdSize = document.createElement("td");
       tdSize.className = "wday";
       tdSize.textContent = humanSize(act.size);
@@ -780,7 +790,8 @@
     savedSum.textContent = savedN + " already saved";
     savedBox.hidden = savedN === 0;
     newWrap.hidden = pullBody.children.length === 0;
-    pullInfo.textContent = fresh ? fresh + " new on the watch." : "Nothing new on the watch.";
+    var where = (t && t.source) || "on the watch";
+    pullInfo.textContent = fresh ? fresh + " new " + where + "." : "Nothing new " + where + ".";
     syncPall();
     pullBtn.disabled = !t || fresh === 0;
     return fresh;
@@ -798,6 +809,7 @@
       var info = await next.connect();
       t = next;
       activeMake = make;
+      if (next.pullLabel) pullBtn.textContent = next.pullLabel;
       var senderLine = "Connected: " + info.title;
       say(senderLine);
       // Send stays dark until the pull listing is done: two live buttons
@@ -842,7 +854,8 @@
       return;
     }
     var fresh = refreshPull(stored);
-    say(senderLine + " " + (fresh ? fresh + " new activit" + (fresh === 1 ? "y" : "ies") + " on the watch." : "Nothing new on the watch."));
+    var where = (t && t.source) || "on the watch";
+    say(senderLine + " " + (fresh ? fresh + " new activit" + (fresh === 1 ? "y" : "ies") + " " + where + "." : "Nothing new " + where + "."));
   }
 
   async function pullAll() {
@@ -932,7 +945,8 @@
     if (failed) {
       say(pulled + " pulled, " + failed + " failed — retry after reconnecting.", true);
     } else {
-      say("Pulled " + pulled + " — " + stored.length + " activit" + (stored.length === 1 ? "y" : "ies") + " saved in total. Send workouts next, or unplug.");
+      say("Pulled " + pulled + " — " + stored.length + " activit" + (stored.length === 1 ? "y" : "ies") +
+        " saved in total." + (t && t.after ? " " + t.after : ""));
     }
   }
 
@@ -1059,7 +1073,14 @@
     // in the markup, still saying "Connect watch". A chooser appears only
     // when there is something to choose, the same rule the Blocks nav follows.
     if (offered.length === 1) {
-      choices = [{ btn: connectBtn, make: offered[0], label: "Connect watch" }];
+      // The markup's own caption, unless the sole transport says otherwise.
+      // In a browser with no WebUSB and no directory picker the only way in is
+      // an upload, and a button reading "Connect watch" would be a lie about
+      // what it does. A watch transport sets no soloLabel and keeps the
+      // wording the page has always had.
+      var solo = offered[0].soloLabel || "Connect watch";  // factory property, not an instance
+      connectBtn.textContent = solo;
+      choices = [{ btn: connectBtn, make: offered[0], label: solo }];
     } else {
       var host = connectBtn.parentNode;
       while (host.firstChild) host.removeChild(host.firstChild);

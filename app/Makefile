@@ -58,7 +58,7 @@ SRC_HASH = $(shell cat Dockerfile go.mod go.sum $(GO_SRC) $(ASSETS) | shasum -a 
 # the server uses, so local and live are directly comparable.
 DATA_REV = go run . -validate -data ./data 2>&1 | sed -n 's/.*rev=\([0-9a-f]*\).*/\1/p'
 
-.PHONY: help run build image test src-hash watch-replay watch-drive check-hash validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
+.PHONY: help run build image test src-hash watch-replay watch-drive watch-upload check-hash validate check-schema schema new-block deploy push-files push-data verify logs fetch-log clean deploy-dev verify-dev seed-dev logs-dev
 
 help:           ## list targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /|/' | column -t -s'|'
@@ -131,22 +131,54 @@ watch-drive:    ## drive static/webmsc.js against a fake mounted volume
 	@set -e; \
 	command -v node >/dev/null || { echo "FAILED: node is needed to replay the watch page" >&2; exit 1; }; \
 	TMP=$$(mktemp -d); trap 'rm -rf $$TMP' EXIT INT TERM; \
-	for c in volume-root garmin-picked not-a-watch two-transports; do \
-	  EXTRA=""; CASE=$$c; \
-	  [ "$$c" = two-transports ] && { CASE=volume-root; EXTRA=--with-usb; }; \
-	  node ../tools/webmsc_replay.js ./static/webmtp.js ./static/webmsc.js --case=$$CASE $$EXTRA > $$TMP/$$c.txt 2>&1 \
+	for c in volume-root garmin-picked not-a-watch all-transports; do \
+	  EXTRA=""; CASE=$$c; SCRIPTS="./static/webmtp.js ./static/webmsc.js"; \
+	  [ "$$c" = all-transports ] && { CASE=volume-root; EXTRA=--with-usb; \
+	    SCRIPTS="$$SCRIPTS ./static/webfile.js"; }; \
+	  node ../tools/webmsc_replay.js $$SCRIPTS --case=$$CASE $$EXTRA > $$TMP/$$c.txt 2>&1 \
 	    || { echo "FAILED: $$c crashed" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
 	  grep -q 'manifest leak: none' $$TMP/$$c.txt || { \
 	    echo "FAILED: $$c leaked the device manifest" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
 	  case $$c in \
 	    not-a-watch) WANT='no GARMIN/GarminDevice.xml here';; \
-	    two-transports) WANT='(dark)';; \
+	    all-transports) WANT='"Upload files" (dark)';; \
 	    *) WANT='Pulled 2';; \
 	  esac; \
 	  grep -q "$$WANT" $$TMP/$$c.txt || { \
 	    echo "FAILED: $$c did not produce \"$$WANT\"" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
 	  printf 'watch-drive   %-14s ok  (%s)\n' $$c "$$(sed -n 's/^after connect: //p' $$TMP/$$c.txt | cut -c1-60)"; \
 	done
+
+# The upload path: files already on the computer, no device at all. Four cases
+# — names the archive takes as they are, names it will not take until they are
+# transliterated, a dismissed dialog, and a download that stopped early.
+#
+# The second half is the part that matters. webfile.js computes the name a file
+# will be archived under, which makes it a mirror of validActivityName in
+# another language, so every name it computes is handed to the Go rule itself.
+watch-upload:   ## drive static/webfile.js, then check its names against the Go rule
+	@set -e; \
+	command -v node >/dev/null || { echo "FAILED: node is needed to replay the watch page" >&2; exit 1; }; \
+	TMP=$$(mktemp -d); trap 'rm -rf $$TMP' EXIT INT TERM; \
+	: > $$TMP/names.tsv; \
+	for c in clean messy cancel torn; do \
+	  node ../tools/webfile_replay.js ./static/webmtp.js ./static/webfile.js \
+	    --case=$$c --names=$$TMP/$$c.tsv > $$TMP/$$c.txt 2>&1 \
+	    || { echo "FAILED: $$c crashed" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
+	  cat $$TMP/$$c.tsv >> $$TMP/names.tsv; \
+	  case $$c in \
+	    cancel) WANT='no files chosen';; \
+	    torn) WANT='save failed (400)';; \
+	    messy) WANT=' → ';; \
+	    *) WANT='Pulled 2';; \
+	  esac; \
+	  grep -qF "$$WANT" $$TMP/$$c.txt || { \
+	    echo "FAILED: $$c did not produce \"$$WANT\"" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
+	  printf 'watch-upload  %-8s ok\n' $$c; \
+	done; \
+	RC_UPLOAD_NAMES=$$TMP/names.tsv go test -run TestUploadNamesAreAcceptable -v . 2>&1 \
+	  | sed -n 's/^ *app_test.go:[0-9]*: /watch-upload  /p;/^--- FAIL/p;/^FAIL/p' ; \
+	RC_UPLOAD_NAMES=$$TMP/names.tsv go test -run TestUploadNamesAreAcceptable . >/dev/null
 
 # SRC_HASH's entire job is to notice that a source file changed, and the cases
 # it silently missed were both nested: a .go file in a subpackage, and an asset

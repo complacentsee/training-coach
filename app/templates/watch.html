@@ -3,9 +3,10 @@
 <h1 class="page">Watch</h1>
 <p class="page-sub">Plug the watch in, connect, then send workouts or pull
 recorded activities. A watch that speaks MTP connects over USB; one that mounts
-as a drive is chosen with the directory picker. Needs Chrome or Edge; the
-<a href="/fit.zip{{with .Archive}}{{.Query}}{{end}}" download>zip download</a>
-works in any browser.</p>
+as a drive is chosen with the directory picker. Files already on this computer
+can be uploaded from any browser; talking to a watch needs Chrome or Edge, and
+the <a href="/fit.zip{{with .Archive}}{{.Query}}{{end}}" download>zip download</a>
+works everywhere.</p>
 
 <p id="wstatus" class="wstatus">Not connected.</p>
 <p class="wbtns">
@@ -82,4 +83,5 @@ replaces the same-named workout on the watch.</p>
      that has been proven on hardware. -->
 <script src="{{asset "webmtp.js"}}" defer></script>
 <script src="{{asset "webmsc.js"}}" defer></script>
+<script src="{{asset "webfile.js"}}" defer></script>
 {{template "foot" .}}{{end}}

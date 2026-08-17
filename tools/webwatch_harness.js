@@ -240,7 +240,12 @@ function newPage(opts) {
     return tr;
   });
 
+  // document.body, for a transport that has to attach an element to open a
+  // dialog. Nothing in the page reads it.
+  const body = El("body");
+
   const document_ = {
+    body,
     listeners: {},
     addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
     getElementById(id) { return byId[id] || null; },
@@ -278,7 +283,7 @@ function newPage(opts) {
     throw new Error("fake fetch: unexpected " + url);
   }
 
-  return { byId, btnHost, workoutRows, document: document_, posts, saved, fetch: fakeFetch };
+  return { byId, btnHost, body, workoutRows, document: document_, posts, saved, fetch: fakeFetch };
 }
 
 // load runs the page's scripts in one context, with whatever device APIs the

@@ -2815,6 +2815,58 @@ func TestActivityCrossNameDedupe(t *testing.T) {
 	}
 }
 
+// TestUploadNamesAreAcceptable is the cross-language half of the upload
+// path's naming. static/webfile.js computes the name a chosen file will be
+// archived under, which means it mirrors validActivityName in another
+// language — and a mirror nobody checks is a mirror that drifts. So the
+// replay writes every name it computed and this feeds them to the rule
+// itself.
+//
+// Two assertions, and the second matters as much as the first: a name it
+// PRODUCED must be one the store takes, and a name it REFUSED must be one
+// the store would have refused too. Without the second, a namer that gave up
+// on everything would pass.
+//
+//	make watch-upload
+func TestUploadNamesAreAcceptable(t *testing.T) {
+	path := os.Getenv("RC_UPLOAD_NAMES")
+	if path == "" {
+		t.Skip("RC_UPLOAD_NAMES not set — `make watch-upload` runs the browser half first")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked, refused := 0, 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line == "" {
+			continue
+		}
+		local, archived, ok := strings.Cut(line, "\t")
+		if !ok {
+			t.Fatalf("malformed line %q — want local\\tarchived", line)
+		}
+		if archived == "" {
+			refused++
+			if validActivityName(local) {
+				t.Errorf("%q was refused a name, but the store would have taken it as it is", local)
+			}
+			continue
+		}
+		checked++
+		if !validActivityName(archived) {
+			t.Errorf("%q -> %q, which the store REFUSES", local, archived)
+		}
+		if strings.Contains(archived, "..") {
+			t.Errorf("%q -> %q, which contains .. — a traversal survived the namer", local, archived)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no accepted names in the file — the replay produced nothing to check")
+	}
+	t.Logf("upload names: %d accepted by the Go rule, %d correctly refused", checked, refused)
+}
+
 func TestActivityRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	mux := fitTestMux(t, dir)
