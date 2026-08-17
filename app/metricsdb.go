@@ -540,6 +540,25 @@ func (m *metricsDB) underCapShareSQL(name string, cap int) (*float64, error) {
 }
 
 // failureFor reports the recorded import failure for a name, "" when none.
+// nameForSHA256 names the activity already archived under exactly these
+// bytes, or "" when none is. The sha256 column has been written at every
+// import since the cache existed; this is the first thing to read it.
+//
+// ADVISORY, never a replacement for identity: identity is the device
+// filename, and this only answers "have I seen these exact bytes under a
+// different one". It is blind to a file whose import failed, because a
+// failure leaves no row — the hole is real and deliberate, since the store
+// must never refuse a recording on the word of a derived cache.
+func (m *metricsDB) nameForSHA256(sum, except string) (string, error) {
+	var name string
+	err := m.r.QueryRow(`SELECT name FROM activities WHERE sha256 = ? AND name <> ?
+		ORDER BY name LIMIT 1`, sum, except).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
+}
+
 func (m *metricsDB) failureFor(name string) (string, error) {
 	var msg string
 	err := m.r.QueryRow(`SELECT error FROM failures WHERE name=?`, name).Scan(&msg)

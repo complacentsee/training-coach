@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +51,11 @@ func TestSweepIngestGate(t *testing.T) {
 	parts, headers := map[int]int{}, map[int]int{}
 	dataOnlyCRC, wholePartCRC, bothCRC := 0, 0, 0
 	framingBad, crcBad := 0, 0
+	// What the cross-name dedupe would have caught had it always been there.
+	// Not a failure: these are already archived, already measured and already
+	// graded against, and nothing here rewrites the archive. It is a fact
+	// about the archive worth reading before the gate goes on.
+	bySum := map[string][]string{}
 
 	for _, n := range names {
 		body, err := os.ReadFile(filepath.Join(dir, n))
@@ -64,6 +71,10 @@ func TestSweepIngestGate(t *testing.T) {
 			t.Errorf("CRC %s (%d bytes): neither the data-only nor the whole-part convention matches", n, len(body))
 			crcBad++
 		}
+		sum := sha256.Sum256(body)
+		key := hex.EncodeToString(sum[:])
+		bySum[key] = append(bySum[key], n)
+
 		np, hs, dataOnly, wholePart := fitShape(body)
 		parts[np]++
 		headers[hs]++
@@ -82,6 +93,16 @@ func TestSweepIngestGate(t *testing.T) {
 	t.Logf("  header size:    %s", countsLine(headers))
 	t.Logf("  trailing CRC:   %d data-only, %d whole-part (the Zwift convention), %d satisfy both",
 		dataOnlyCRC, wholePartCRC, bothCRC)
+
+	dupGroups := 0
+	for _, group := range bySum {
+		if len(group) > 1 {
+			dupGroups++
+			sort.Strings(group)
+			t.Logf("  DUPLICATE bytes under %d names: %s", len(group), strings.Join(group, " "))
+		}
+	}
+	t.Logf("  cross-name duplicates: %d group(s) — what the sha256 gate would have refused", dupGroups)
 }
 
 // fitShape reports a well-framed file's part count, its FIRST part's header

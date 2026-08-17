@@ -12,7 +12,9 @@ package main
 // perturb a reload or fail `make verify`.
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -255,6 +257,22 @@ func (s *server) postActivity(w http.ResponseWriter, r *http.Request) {
 	if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 		s.retryFailedImport(name)
 		http.Error(w, "already stored", http.StatusConflict)
+		return
+	}
+	// The same recording under a second name. The device filename is still
+	// the identity — this is a second gate, never a replacement — but a
+	// transport that does not name files the way the Epix does can offer the
+	// same bytes twice without the name rule noticing, and the archive is
+	// append-only, so a double admission is permanent.
+	//
+	// A derived cache may not refuse a real recording: a DB error here logs
+	// and lets the upload through, and a file whose import failed carries no
+	// row for this to find.
+	sum := sha256.Sum256(body)
+	if other, err := s.metrics.nameForSHA256(hex.EncodeToString(sum[:]), name); err != nil {
+		log.Printf("activity %s: dedupe: %v", name, err)
+	} else if other != "" {
+		http.Error(w, "already archived as "+other, http.StatusConflict)
 		return
 	}
 	if err := publishActivity(dir, name, body); err != nil {

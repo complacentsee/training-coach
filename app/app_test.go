@@ -2755,6 +2755,66 @@ func TestFITCRCGate(t *testing.T) {
 	}
 }
 
+// TestActivityCrossNameDedupe: the same bytes under a second name are
+// refused, and the refusal names the file already holding them. Identity is
+// still the device filename — this is a second gate, never a replacement —
+// but a transport whose names do not come from the Epix's clock can offer
+// one recording twice without the name rule noticing, and the archive is
+// append-only, so a double admission is permanent.
+func TestActivityCrossNameDedupe(t *testing.T) {
+	dir := t.TempDir()
+	mux := fitTestMux(t, dir)
+	body := tenSecondRun(t)
+
+	const first = "2026-08-16-07-00-00.fit"
+	// An INVENTED 8.3 code — the shape is the whole point, and no real device
+	// filename belongs in a public test. What matters is that it carries no
+	// date, so nothing about it says which day it was recorded.
+	const second = "4T7B0091.FIT"
+	if rec := post(mux, "/api/activity?name="+first, body); rec.Code != http.StatusNoContent {
+		t.Fatalf("first upload = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+
+	rec := post(mux, "/api/activity?name="+second, body)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("same bytes under a second name = %d, want 409", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); !strings.Contains(got, first) {
+		t.Errorf("refusal %q does not name the file already holding these bytes", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "activities", second)); !os.IsNotExist(err) {
+		t.Errorf("the duplicate landed in the store anyway (stat: %v)", err)
+	}
+
+	// The name rule still answers first, and says its own thing: re-POSTing
+	// the SAME name is "already stored", the path that retries a failed
+	// import, not "already archived as".
+	rec = post(mux, "/api/activity?name="+first, body)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("same name again = %d, want 409", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "already stored" {
+		t.Errorf("same-name refusal = %q, want %q", got, "already stored")
+	}
+
+	// A different recording under a different name is untouched by any of it.
+	if rec := post(mux, "/api/activity?name=4T7B0092.FIT", fitBytes("a different one")); rec.Code != http.StatusNoContent {
+		t.Errorf("a distinct recording = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+
+	// The hole, pinned rather than left to be discovered: the gate reads the
+	// derived cache, and a file whose import failed leaves no row there. Such
+	// bytes go in twice. That is the deliberate trade — the store must never
+	// refuse a real recording on the word of a cache that can be deleted.
+	undecodable := fitBytes("well framed, not a recording")
+	if rec := post(mux, "/api/activity?name=4T7B0093.FIT", undecodable); rec.Code != http.StatusNoContent {
+		t.Fatalf("undecodable upload = %d, want 204", rec.Code)
+	}
+	if rec := post(mux, "/api/activity?name=4T7B0094.FIT", undecodable); rec.Code != http.StatusNoContent {
+		t.Errorf("unmeasured bytes under a second name = %d — the gate is advisory and cannot see them", rec.Code)
+	}
+}
+
 func TestActivityRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	mux := fitTestMux(t, dir)

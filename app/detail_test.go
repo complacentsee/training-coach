@@ -483,7 +483,10 @@ func TestActivitiesByDate(t *testing.T) {
 	mux := fitTestMux(t, t.TempDir())
 	post(mux, "/api/activity?name=2026-01-06-07-00-00.fit", gpsRun(t, typedef.SubSportGeneric))
 	post(mux, "/api/activity?name=2026-01-06-17-00-00.fit", bikeFixture(t))
-	post(mux, "/api/activity?name=2026-01-07-07-00-00.fit", gpsRun(t, typedef.SubSportGeneric))
+	// A DIFFERENT run on the second day. It used to be a second gpsRun, which
+	// is byte-identical to the first — two days holding one recording, which
+	// the cross-name dedupe now correctly refuses.
+	post(mux, "/api/activity?name=2026-01-07-07-00-00.fit", tenSecondRun(t))
 
 	var all []map[string]any
 	if err := json.Unmarshal(get(mux, "/api/activities", nil).Body.Bytes(), &all); err != nil {
