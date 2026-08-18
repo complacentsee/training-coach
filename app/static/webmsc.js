@@ -302,15 +302,16 @@
         generic = true;
         self.canSend = false;
         var c = { n: 0 };
-        await scanFIT(root, 3, 1, c, function () {});
+        await scanFIT(root, 3, 25, c, function () {}); // a shallow count for the note
         if (!c.n) {
           throw new Error("no FIT files here — choose the device's drive (or a folder holding its activities)");
         }
         label = "the chosen drive";
-        trace("no manifest — treating as a generic FIT drive");
+        trace("no manifest — treating as a generic FIT drive (best-effort, unverified layout)");
         return {
           deviceId: "drive",
-          title: "a drive with FIT activities — pull them below. (No manifest, so sending is off.)",
+          title: "a drive with FIT activities (" + c.n + "+ found) — best-effort read for a device without a " +
+            MANIFEST + " manifest, not tested against this hardware. Pull below; sending is off.",
         };
       },
 
