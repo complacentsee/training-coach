@@ -1,0 +1,119 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mode probe</title>
+<!--
+  The Phase 6 probe: does one vendor packet switch a Forerunner from its
+  proprietary USB mode to mass storage, removing the unplug-replug-and-tap
+  dance?
+
+  Not a transport and not a protocol port. Exactly one bulk-OUT write on the
+  vendor-specific interface (class 0xFF, which WebUSB can claim):
+
+      14 00 00 00 2f 04 00 00 01 00 00 00 00
+
+  Application layer 0x14, packet id 0x042F (1071 — undocumented, past the
+  Garmin spec's highest published 1066), size 1, payload 0x00. Two
+  independent open-source implementations write it and read nothing back.
+  Every published success is a 2016–2018 vívo-family band; on
+  Forerunner-class hardware it is UNMEASURED, and this page is the
+  measurement. Binary outcome: either the device re-enumerates and the
+  volume mounts, or nothing happens and the answer is no.
+
+  How to run it (Chrome or Edge; file:// is a secure context, so opening
+  this file directly works):
+    1. Put the watch in its proprietary mode (the mode with no volume) and
+       plug it in.
+    2. Open this file in Chrome, click the button, pick the Garmin device.
+    3. Watch the report — and the desktop, for the GARMIN volume.
+
+  The probe writes 13 bytes to a device interface and touches no file, no
+  storage and no watch data. If the packet does nothing, unplug and replug
+  as ever.
+-->
+<style>
+  :root{--ground:#F2F2EF;--surface:#FCFCFB;--rule:#D8D8D1;--ink:#16181C;--ink-3:#7C818B;
+    --accent:#3D4B96;--hard:#C9432B;--go:#1F7D5C}
+  @media (prefers-color-scheme:dark){:root{--ground:#0C1013;--surface:#12171B;--rule:#2A3239;
+    --ink:#E8EAEC;--ink-3:#757E88;--accent:#7C89D8;--hard:#DE5B40;--go:#3BAA82}}
+  body{margin:0;background:var(--ground);color:var(--ink);
+    font:16px/1.5 "Iowan Old Style",Charter,Georgia,serif}
+  main{max-width:34rem;margin:0 auto;padding:2.5rem 1rem}
+  h1{font:600 1.5rem/1.2 "Avenir Next Condensed","Roboto Condensed",sans-serif;margin:0 0 .4rem}
+  p{margin:.4rem 0}
+  .hint{color:var(--ink-3);font-size:.85rem}
+  button{font:600 1rem/1 inherit;padding:.6rem 1.1rem;border-radius:8px;
+    border:1px solid var(--rule);background:var(--surface);color:var(--accent);cursor:pointer}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+    padding: .8rem;font:.78rem/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;
+    overflow-x:auto;min-height:6rem}
+  .ok{color:var(--go)} .bad{color:var(--hard)}
+</style>
+<main>
+<h1>FR935 mode probe</h1>
+<p>Watch in proprietary USB mode, plugged in. One click, one 13-byte packet,
+one binary answer: does the GARMIN volume mount without touching the watch?</p>
+<p><button id="go">Probe the watch</button></p>
+<pre id="log">(nothing yet)</pre>
+<p class="hint">The packet switches USB modes on 2016–2018 vívo-family bands;
+on a Forerunner it is unmeasured until now. It writes nothing to storage.
+If nothing happens, unplug and replug as ever.</p>
+</main>
+<script>
+(function () {
+  "use strict";
+  var out = [];
+  function log(line, cls) {
+    out.push(cls ? { t: line, c: cls } : { t: line });
+    var el = document.getElementById("log");
+    el.innerHTML = out.map(function (l) {
+      var esc = l.t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      return l.c ? '<span class="' + l.c + '">' + esc + "</span>" : esc;
+    }).join("\n");
+  }
+
+  // The packet, byte for byte from the two implementations that agree.
+  var PACKET = new Uint8Array([0x14, 0, 0, 0, 0x2f, 0x04, 0, 0, 0x01, 0, 0, 0, 0]);
+
+  document.getElementById("go").addEventListener("click", function () {
+    // The picker is the first statement — transient activation is lost
+    // across an await, and this page exists to be run once.
+    var picked = navigator.usb.requestDevice({ filters: [{ vendorId: 0x091e }] });
+    out = [];
+    picked.then(async function (d) {
+      log("device: " + d.manufacturerName + " " + d.productName +
+        "  (" + hex4(d.vendorId) + ":" + hex4(d.productId) + ")");
+      if (d.productId !== 0x0003) {
+        log("productId is not 0003 — this is not the proprietary mode. If a volume is already mounted, there is nothing to probe.", "bad");
+        return;
+      }
+      navigator.usb.addEventListener("disconnect", function (e) {
+        if (e.device === d) {
+          log("device dropped off USB — RE-ENUMERATING. Watch the desktop for the GARMIN volume.", "ok");
+        }
+      });
+      await d.open();
+      if (d.configuration === null) await d.selectConfiguration(1);
+      var iface = d.configuration.interfaces[0];
+      var alt = iface.alternates[0];
+      var epOut = alt.endpoints.find(function (e) { return e.type === "bulk" && e.direction === "out"; });
+      if (!epOut) { log("no bulk-OUT endpoint on interface 0 — cannot probe", "bad"); return; }
+      log("interface 0 class " + hex2(alt.interfaceClass) + ", bulk-OUT ep " + epOut.endpointNumber);
+      await d.claimInterface(iface.interfaceNumber);
+      log("claimed. writing 13 bytes: 14 00 00 00 2f 04 00 00 01 00 00 00 00");
+      var r = await d.transferOut(epOut.endpointNumber, PACKET);
+      log("transferOut: " + r.status + ", " + r.bytesWritten + " bytes written");
+      log("now watching. a mode switch shows as the device dropping off USB within a few seconds;");
+      log("silence for ~10 s means the packet did nothing on this hardware, and the answer is no.");
+      setTimeout(function () {
+        log("(10 s — if nothing above says re-enumerating, the probe is a measured NO. Unplug and replug as ever.)");
+      }, 10000);
+    }).catch(function (e) {
+      log("probe failed: " + e.message, "bad");
+    });
+  });
+
+  function hex4(n) { return ("0000" + n.toString(16)).slice(-4).toUpperCase(); }
+  function hex2(n) { return "0x" + ("00" + n.toString(16)).slice(-2).toUpperCase(); }
+})();
+</script>
