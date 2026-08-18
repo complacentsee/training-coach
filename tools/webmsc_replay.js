@@ -301,10 +301,11 @@ const byId = page.byId;
   // GPS-mode bridge: click its button, assert the switch packet, then the
   // button becomes the follow-up that opens the drive.
   if (GPS) {
-    const gbtn = buttons.find((b) => b.textContent === "Connect (GPS mode)");
-    if (!gbtn) throw new Error("no GPS-mode button");
+    // The merged USB button detects the fake 0x0003 device and bridges.
+    const gbtn = buttons.find((b) => b.textContent === "Connect over USB" || b.textContent === "Connect watch");
+    if (!gbtn) throw new Error("no USB button to bridge through");
     gbtn.dispatch("click");
-    await H.waitFor(page, "the switch", () => gpsWrites.length > 0 && gbtn.textContent !== "Connect (GPS mode)");
+    await H.waitFor(page, "the switch", () => gpsWrites.length > 0 && gbtn.textContent === "Open the watch's drive");
     const pkt = gpsWrites[0] || [];
     const want = [0x14,0,0,0,0x2f,0x04,0,0,0x01,0,0,0,0];
     out.push("  mode-switch:  " + pkt.map((x) => x.toString(16).padStart(2,"0")).join(" ") +

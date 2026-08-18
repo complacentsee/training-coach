@@ -21,6 +21,13 @@
   /* ── PTP/MTP constants ─────────────────────────────────────────────── */
 
   var GARMIN_VENDOR = 0x091e;
+  // A Forerunner left in proprietary / "GPS mode" enumerates here, with no
+  // MTP interface and no volume. One bulk-OUT write re-enumerates it as a
+  // drive (measured on the FR935: 0x0003 → 0x0A83, volume mounts). This
+  // transport detects that productId after the pick and bridges to the drive
+  // rather than asking the athlete which mode their watch is in.
+  var GPS_MODE_PID = 0x0003;
+  var GPS_SWITCH = new Uint8Array([0x14, 0, 0, 0, 0x2f, 0x04, 0, 0, 0x01, 0, 0, 0, 0]);
 
   // The wire trace: every transfer, hex-dumped, rendered on the page — the
   // instrument that turns "it hangs" into bytes we can argue about.
@@ -462,6 +469,10 @@
   // questions in the transport's vocabulary rather than PTP's.
   function mtpTransport() {
     var mtp = null, storage = 0, newFiles = 0, garminFolder = 0, watchGone = null;
+    // When the picked device is in GPS mode, the transport becomes a bridge
+    // to a drive: bridged holds the inner drive transport and every operation
+    // forwards to it.
+    var bridged = null;
     // Whether the device is still believed to be listening. A fatal error
     // means it is not, and disconnect() must then free the claim at once
     // rather than spend another timeout saying goodbye to something that
@@ -497,6 +508,40 @@
       connect: async function () {
         // FIRST statement. Nothing may be awaited before this line.
         var device = await navigator.usb.requestDevice({ filters: [{ vendorId: GARMIN_VENDOR }] });
+
+        // GPS mode: no MTP here. Switch the device to a drive and hand off,
+        // detected from the device rather than chosen by the athlete. An MTP
+        // watch never has this productId, so everything below is unchanged
+        // for it — the reason the wire stays byte-identical.
+        if (device.productId === GPS_MODE_PID) {
+          await device.open();
+          if (device.configuration === null) await device.selectConfiguration(1);
+          var galt = device.configuration.interfaces[0].alternates[0];
+          var gout = galt.endpoints.find(function (e) { return e.type === "bulk" && e.direction === "out"; });
+          if (!gout) throw new Error("no bulk-OUT endpoint to switch this watch out of GPS mode");
+          await device.claimInterface(0);
+          await device.transferOut(gout.endpointNumber, GPS_SWITCH);
+          try { await device.releaseInterface(0); } catch (e) { /* re-enumerating */ }
+          try { await device.close(); } catch (e) { /* gone */ }
+          return {
+            deviceId: "Garmin (GPS mode)",
+            title: "in GPS mode — switching to a drive. When the GARMIN drive appears (a few seconds), open it.",
+            followup: {
+              label: "Open the watch's drive",
+              run: async function () {
+                bridged = window.rcBuildDrive(window.showDirectoryPicker({ id: "garmin-watch", mode: "read" }));
+                bridged.onLost = self.onLost;
+                var di = await bridged.connect();
+                self.canSend = bridged.canSend;
+                self.source = bridged.source;
+                self.after = bridged.after;
+                self.pullLabel = bridged.pullLabel;
+                return di;
+              },
+            },
+          };
+        }
+
         mtp = new Mtp(device);
         await live(mtp.connect());
         await live(mtp.openSession());
@@ -539,6 +584,7 @@
       },
 
       listActivities: async function () {
+        if (bridged) return bridged.listActivities();
         var activity = await live(mtp.findFolder(storage, garminFolder, "Activity"));
         if (!activity) throw new Error("no Activity folder on this device");
         var handles = await live(mtp.handlesUnder(storage, activity));
@@ -552,15 +598,18 @@
       },
 
       readActivity: async function (entry) {
+        if (bridged) return bridged.readActivity(entry);
         return live(mtp.getObject(entry.id, entry.size));
       },
 
       // Which training day a recording belongs to. This device names files by
       // the athlete's local clock, verified 13 Aug 2026, so the first ten
       // characters ARE the day and no decode is needed.
-      dayOf: function (entry) { return (entry.name || "").slice(0, 10); },
+      dayOf: function (entry) { return bridged ? bridged.dayOf(entry) : (entry.name || "").slice(0, 10); },
 
+      prepareSend: function () { return bridged && bridged.prepareSend ? bridged.prepareSend() : Promise.resolve(); },
       sendWorkout: async function (name, bytes) {
+        if (bridged) return bridged.sendWorkout(name, bytes);
         return live(mtp.sendFile(storage, newFiles, name, bytes));
       },
 
@@ -568,10 +617,22 @@
       // asked; a transport that only wrote into a mounted filesystem cannot
       // know what the device made of it, and answers null.
       newFilesCount: async function () {
+        if (bridged) return bridged.newFilesCount();
         return (await live(mtp.handlesUnder(storage, newFiles))).length;
+      },
+      // The closing sentence: the drive's when bridged, else MTP's own —
+      // byte-identical to what the page's fallback used to print, so a real
+      // MTP send reads exactly as before.
+      sendClose: function (l) {
+        if (bridged) return bridged.sendClose ? bridged.sendClose(l) : "";
+        return l === null
+          ? " — written. Eject the watch, then unplug, and the workouts appear under Training → Workouts."
+          : " — the watch itself lists " + l + " file(s) in NewFiles. Session closed: unplug now, " +
+            "and the workouts appear under Training → Workouts.";
       },
 
       disconnect: async function () {
+        if (bridged) { try { await bridged.disconnect(); } catch (e) { /* */ } bridged = null; }
         if (watchGone) {
           navigator.usb.removeEventListener("disconnect", watchGone);
           watchGone = null;

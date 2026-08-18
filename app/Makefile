@@ -135,8 +135,7 @@ watch-drive:    ## drive static/webmsc.js against a fake mounted volume
 	  EXTRA=""; CASE=$$c; SCRIPTS="./static/webmtp.js ./static/webmsc.js"; \
 	  [ "$$c" = all-transports ] && { CASE=volume-root; EXTRA=--with-usb; \
 	    SCRIPTS="$$SCRIPTS ./static/webfile.js"; }; \
-	  [ "$$c" = gps-bridge ] && { CASE=volume-root; EXTRA=--gps; \
-	    SCRIPTS="$$SCRIPTS ./static/webgdi.js"; }; \
+	  [ "$$c" = gps-bridge ] && { CASE=volume-root; EXTRA=--gps; }; \
 	  [ "$$c" = send ] && { CASE=volume-root; EXTRA=--send; }; \
 	  [ "$$c" = send-cap ] && { CASE=volume-root; EXTRA="--send --full-inbox"; }; \
 	  [ "$$c" = send-denied ] && { CASE=volume-root; EXTRA="--send --deny-write"; }; \
