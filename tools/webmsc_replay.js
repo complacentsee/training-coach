@@ -127,7 +127,37 @@ if (FULL) {
   for (let i = 1; i <= 25; i++) VOLUME.GARMIN.NEWFILES[`OLD${String(i).padStart(2, "0")}.FIT`] = H.fitFile(i, 16);
 }
 
-const NOT_A_WATCH = { Downloads: { "something.fit": H.fitFile(0x55, 16) } };
+const EDGE_MANIFEST = MANIFEST_XML
+  .replace("Forerunner (fixture)", "Edge 520 Plus (fixture)")
+  .replace("GARMIN/ACTIVITY", "Garmin/Activities")
+  .replace(/GARMIN\/WORKOUTS/g, "Garmin/Workouts")
+  .replace(/GARMIN\/NEWFILES/g, "Garmin/NewFiles");
+const EDGE_VOLUME = {
+  Garmin: {  // mixed case, exactly as the Edge writes it
+    "GarminDevice.xml": EDGE_MANIFEST,
+    Activities: {
+      "2026-01-24-160153.fit": H.fitFile(0x71, 64),
+      "2026-01-26-093012.fit": H.fitFile(0x72, 80),
+    },
+    Workouts: {},
+    NewFiles: {},
+  },
+};
+
+const NOT_A_WATCH = { Downloads: { "notes.txt": "not a recording" } };
+// A non-Garmin drive: no GarminDevice.xml, FIT activities in a brand-specific
+// folder (a Wahoo-style layout). The manifest-optional fallback must find
+// them. Junk and a deep system folder are present to prove the scan skips them.
+const GENERIC_DRIVE = {
+  ".fseventsd": { "x": "" },
+  "System Volume Information": { "deep": { "more": { "buried.fit": H.fitFile(0x60, 40) } } },
+  Activities: {
+    "2026-08-01-070000.fit": H.fitFile(0x61, 64),
+    "2026-08-03-181500.fit": H.fitFile(0x62, 48),
+    "._2026-08-03-181500.fit": "AppleDouble",
+    "ride.gpx": "not fit",
+  },
+};
 
 // A FileSystemDirectoryHandle over the object above, written to the spec:
 // getDirectoryHandle/getFileHandle reject with NotFoundError, values() is an
@@ -223,6 +253,8 @@ const picked = {
   "volume-root": () => dirHandle("GARMIN", VOLUME),
   "garmin-picked": () => dirHandle("GARMIN", VOLUME.GARMIN),
   "not-a-watch": () => dirHandle("Home", NOT_A_WATCH),
+  "generic-drive": () => dirHandle("WAHOO", GENERIC_DRIVE),
+  "edge": () => dirHandle("GARMIN", EDGE_VOLUME),
 }[CASE];
 if (!picked) {
   console.error("unknown --case: " + CASE);

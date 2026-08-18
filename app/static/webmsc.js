@@ -64,28 +64,44 @@
 
   /* ── reading the volume ────────────────────────────────────────────── */
 
-  // childDir walks a slash-separated path from a directory handle, returning
-  // null rather than throwing when a segment is missing — "is it there" is a
-  // question this file asks constantly.
+  // dirNamed / fileNamed find a child by name, CASE-INSENSITIVELY — a FAT
+  // volume stores "Garmin" or "GARMIN" as the mood took the firmware (the
+  // Edge 520 Plus writes "Garmin/Activities", the watches "GARMIN/ACTIVITY"),
+  // and the File System Access API matches names as stored. An exact
+  // getDirectoryHandle would find one device's layout and miss another's, so
+  // the directory is scanned and matched without regard to case. The exact
+  // handle is tried first, since it is one call when it hits.
+  async function dirNamed(dir, name) {
+    try { return await dir.getDirectoryHandle(name); } catch (e) { /* fall through */ }
+    var lc = name.toLowerCase();
+    for await (var entry of dir.values()) {
+      if (entry.kind === "directory" && entry.name.toLowerCase() === lc) return entry;
+    }
+    return null;
+  }
+  async function fileNamed(dir, name) {
+    try { return await (await dir.getFileHandle(name)).getFile(); } catch (e) { /* fall through */ }
+    var lc = name.toLowerCase();
+    for await (var entry of dir.values()) {
+      if (entry.kind === "file" && entry.name.toLowerCase() === lc) return await entry.getFile();
+    }
+    return null;
+  }
+
+  // childDir walks a slash-separated path, each segment matched
+  // case-insensitively, returning null when a segment is missing.
   async function childDir(dir, path) {
     var parts = path.split("/").filter(Boolean);
     var cur = dir;
     for (var i = 0; i < parts.length; i++) {
-      try {
-        cur = await cur.getDirectoryHandle(parts[i]);
-      } catch (e) {
-        return null;
-      }
+      cur = await dirNamed(cur, parts[i]);
+      if (!cur) return null;
     }
     return cur;
   }
 
   async function childFile(dir, name) {
-    try {
-      return await (await dir.getFileHandle(name)).getFile();
-    } catch (e) {
-      return null;
-    }
+    return fileNamed(dir, name);
   }
 
   // stillMounted asks the cheapest question that distinguishes "that file is
@@ -206,6 +222,30 @@
     return n;
   }
 
+  // scanFIT walks a volume for .fit files, bounded in depth and count, for a
+  // device that ships no GarminDevice.xml manifest — a non-Garmin computer,
+  // or a bare card. Garmin's own paths are read from the manifest and never
+  // reach here; this is the fallback that makes the drive brand-agnostic.
+  // Junk (dot-dirs, AppleDouble) is skipped, and known system folders are not
+  // descended. cb(name, fileHandle, size) per hit.
+  var SKIP_DIRS = { "system volume information": 1, ".spotlight-v100": 1,
+    ".fseventsd": 1, ".trashes": 1, "system": 1 };
+  async function scanFIT(dir, depth, cap, count, cb) {
+    if (depth < 0 || count.n >= cap) return;
+    for await (var entry of dir.values()) {
+      if (count.n >= cap) return;
+      if (entry.name.charAt(0) === ".") continue;
+      if (entry.kind === "directory") {
+        if (SKIP_DIRS[entry.name.toLowerCase()]) continue;
+        await scanFIT(entry, depth - 1, cap, count, cb);
+      } else if (/\.fit$/i.test(entry.name)) {
+        var f = await entry.getFile();
+        count.n++;
+        cb(entry.name, entry, f.size);
+      }
+    }
+  }
+
   // mscTransport is a PURE constructor: it takes a directory handle and asks
   // nothing of the user. That is what makes it testable — a handle can come
   // from a picker, from OPFS, or from a shim, and the transport cannot tell.
@@ -217,6 +257,8 @@
   function mscTransport(dirHandle) {
     var root = null, activityDir = null, manifest = null, label = "";
     var foundAt = null, inboxDir = null, inboxCount = -1;
+    var generic = false, genericFiles = null;
+    var MAX_SCAN = 500; // a volume with more than this is not one to enumerate
 
     var self = {
       id: "msc",
@@ -234,34 +276,59 @@
 
         var found = await findManifest(root);
         foundAt = found;
-        if (!found) {
-          // Without the manifest this is just a folder. The picker returns
-          // whatever was chosen, and a stale copy of a GARMIN directory on the
-          // Desktop is otherwise indistinguishable from a watch.
-          throw new Error("no GARMIN/" + MANIFEST + " here — choose the watch's volume, not a folder on the computer");
+        if (found) {
+          // A Garmin device: paths come from its manifest, exactly. StoreKey
+          // and Modulus in the same file are read past and never held.
+          manifest = parseManifest(found.text);
+          found.text = null;
+          var t4 = (manifest.types[TYPE_ACTIVITY] || {}).out;
+          var path = t4 ? t4.path : FALLBACK_ACTIVITY;
+          if (!t4) trace("manifest names no " + TYPE_ACTIVITY + " output — falling back to " + FALLBACK_ACTIVITY);
+          activityDir = await resolve(root, found, path);
+          if (!activityDir) throw new Error("the manifest names " + path + ", which is not on this volume");
+          // Send only where the manifest names an inbox.
+          self.canSend = !!((manifest.types["FIT_TYPE_5"] || {})["in"]);
+          label = manifest.description || "Garmin device";
+          trace("mounted " + label + ", activities in " + path);
+          return {
+            deviceId: label,
+            title: label + " — " + path + " found. " +
+              (self.canSend ? "Pull activities, or send workouts into its inbox." : "Pull activities."),
+          };
         }
-        // Parsed here and nowhere else. What comes back is a description and
-        // two directory names; the StoreKey and Modulus in the same file are
-        // read past and never held, never traced, never sent.
-        manifest = parseManifest(found.text);
-        found.text = null;
-
-        var t4 = (manifest.types[TYPE_ACTIVITY] || {}).out;
-        var path = t4 ? t4.path : FALLBACK_ACTIVITY;
-        if (!t4) trace("manifest names no " + TYPE_ACTIVITY + " output — falling back to " + FALLBACK_ACTIVITY);
-
-        activityDir = await resolve(root, found, path);
-        if (!activityDir) throw new Error("the manifest names " + path + ", which is not on this volume");
-
-        label = manifest.description || "Garmin watch";
-        trace("mounted " + label + ", activities in " + path);
+        // No manifest: any device that stores FIT on a drive — a Wahoo, a
+        // card, another brand. Find the files wherever they are; read-only,
+        // because without a manifest there is no known inbox to write to.
+        generic = true;
+        self.canSend = false;
+        var c = { n: 0 };
+        await scanFIT(root, 3, 1, c, function () {});
+        if (!c.n) {
+          throw new Error("no FIT files here — choose the device's drive (or a folder holding its activities)");
+        }
+        label = "the chosen drive";
+        trace("no manifest — treating as a generic FIT drive");
         return {
-          deviceId: label,
-          title: label + " — " + path + " found. Pull activities, or send workouts into its inbox.",
+          deviceId: "drive",
+          title: "a drive with FIT activities — pull them below. (No manifest, so sending is off.)",
         };
       },
 
       listActivities: async function () {
+        if (generic) {
+          genericFiles = {};
+          var g = [];
+          var c = { n: 0 };
+          await scanFIT(root, 3, MAX_SCAN, c, function (name, fh, size) {
+            // Names can repeat across folders; disambiguate the id, but show
+            // the plain name. The server keys identity on the archived name.
+            var id = genericFiles[name] ? name + "#" + c.n : name;
+            genericFiles[id] = fh;
+            g.push({ id: id, name: name, size: size });
+          });
+          g.sort(function (a, b) { return a.name < b.name ? 1 : a.name > b.name ? -1 : 0; });
+          return g;
+        }
         var want = "." + ((manifest.types[TYPE_ACTIVITY] || {}).out || { ext: "FIT" }).ext.toLowerCase();
         var out = [];
         for await (var entry of activityDir.values()) {
@@ -283,6 +350,11 @@
       },
 
       readActivity: async function (entry) {
+        if (generic) {
+          var gh = genericFiles && genericFiles[entry.id];
+          if (!gh) throw new Error("that file is no longer listed — reconnect");
+          return new Uint8Array(await (await gh.getFile()).arrayBuffer());
+        }
         var f = await childFile(activityDir, entry.id);
         if (!f) {
           // One missing file and a vanished volume look identical from here —
@@ -378,7 +450,8 @@
       },
 
       disconnect: async function () {
-        root = activityDir = manifest = null;
+        root = activityDir = manifest = genericFiles = null;
+        generic = false;
       },
     };
     return self;

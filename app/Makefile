@@ -131,7 +131,7 @@ watch-drive:    ## drive static/webmsc.js against a fake mounted volume
 	@set -e; \
 	command -v node >/dev/null || { echo "FAILED: node is needed to replay the watch page" >&2; exit 1; }; \
 	TMP=$$(mktemp -d); trap 'rm -rf $$TMP' EXIT INT TERM; \
-	for c in volume-root garmin-picked not-a-watch all-transports send send-cap send-denied gps-bridge; do \
+	for c in volume-root garmin-picked not-a-watch generic-drive edge all-transports send send-cap send-denied gps-bridge; do \
 	  EXTRA=""; CASE=$$c; SCRIPTS="./static/webmtp.js ./static/webmsc.js"; \
 	  [ "$$c" = all-transports ] && { CASE=volume-root; EXTRA=--with-usb; \
 	    SCRIPTS="$$SCRIPTS ./static/webfile.js"; }; \
@@ -145,7 +145,9 @@ watch-drive:    ## drive static/webmsc.js against a fake mounted volume
 	  grep -q 'manifest leak: none' $$TMP/$$c.txt || { \
 	    echo "FAILED: $$c leaked the device manifest" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
 	  case $$c in \
-	    not-a-watch) WANT='no GARMIN/GarminDevice.xml here';; \
+	    not-a-watch) WANT='no FIT files here';; \
+	    generic-drive) WANT='Pulled 2';; \
+	    edge) WANT='Edge 520 Plus';; \
 	    all-transports) WANT='"Upload files" (dark)';; \
 	    send) WANT='2 sent — 2 file(s) now in the watch'"'"'s inbox. EJECT';; \
 	    send-cap) WANT='it would silently delete this one';; \
