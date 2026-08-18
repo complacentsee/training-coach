@@ -951,10 +951,24 @@
   }
 
   async function sendAll() {
+    /* FIRST statement: a transport that must ask to write needs this click's
+       transient activation, and the batch's first write sits behind a fetch
+       that would spend it. MTP has no prepareSend and skips this entirely. */
+    var prepared = t && t.prepareSend ? t.prepareSend() : null;
     sendBtn.disabled = true;
     pullBtn.disabled = true; // one MTP transaction at a time; connect re-arms pull
     setConnectEnabled(false); // no disconnecting mid-transfer
     var sent = 0, failed = 0;
+    if (prepared) {
+      try {
+        await prepared;
+      } catch (e) {
+        say(e.message, true);
+        sendBtn.disabled = false;
+        setConnectEnabled(true);
+        return;
+      }
+    }
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
       if (!row.querySelector("input").checked) continue;
@@ -990,6 +1004,7 @@
       // The count shown must be the device's own, and the connection must be
       // closed before the cable moves — a responder may roll back objects
       // from a session that dies uncleanly.
+      var t2 = t;
       try {
         var listed = await t.newFilesCount();
         await t.disconnect();
@@ -997,11 +1012,15 @@
         activeMake = null;
         setConnectUI(false);
         setConnectEnabled(true);
+        /* The closing sentence is the transport's: MTP closed a session and
+           can claim the device acknowledged; a drive wrote files the watch
+           has not looked at, and its sentence says eject instead. */
         say(sent + " sent" + (failed ? ", " + failed + " failed" : "") +
-          (listed === null
-            ? " — written. Eject the watch, then unplug, and the workouts appear under Training → Workouts."
-            : " — the watch itself lists " + listed + " file(s) in NewFiles. Session closed: unplug now, " +
-              "and the workouts appear under Training → Workouts."));
+          (t2.sendClose ? t2.sendClose(listed)
+            : (listed === null
+              ? " — written. Eject the watch, then unplug, and the workouts appear under Training → Workouts."
+              : " — the watch itself lists " + listed + " file(s) in NewFiles. Session closed: unplug now, " +
+                "and the workouts appear under Training → Workouts.")));
       } catch (e) {
         say("Sent " + sent + ", but the closing handshake failed: " + e.message, true);
         sendBtn.disabled = false;

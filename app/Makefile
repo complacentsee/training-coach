@@ -131,10 +131,13 @@ watch-drive:    ## drive static/webmsc.js against a fake mounted volume
 	@set -e; \
 	command -v node >/dev/null || { echo "FAILED: node is needed to replay the watch page" >&2; exit 1; }; \
 	TMP=$$(mktemp -d); trap 'rm -rf $$TMP' EXIT INT TERM; \
-	for c in volume-root garmin-picked not-a-watch all-transports; do \
+	for c in volume-root garmin-picked not-a-watch all-transports send send-cap send-denied; do \
 	  EXTRA=""; CASE=$$c; SCRIPTS="./static/webmtp.js ./static/webmsc.js"; \
 	  [ "$$c" = all-transports ] && { CASE=volume-root; EXTRA=--with-usb; \
 	    SCRIPTS="$$SCRIPTS ./static/webfile.js"; }; \
+	  [ "$$c" = send ] && { CASE=volume-root; EXTRA=--send; }; \
+	  [ "$$c" = send-cap ] && { CASE=volume-root; EXTRA="--send --full-inbox"; }; \
+	  [ "$$c" = send-denied ] && { CASE=volume-root; EXTRA="--send --deny-write"; }; \
 	  node ../tools/webmsc_replay.js $$SCRIPTS --case=$$CASE $$EXTRA > $$TMP/$$c.txt 2>&1 \
 	    || { echo "FAILED: $$c crashed" >&2; cat $$TMP/$$c.txt >&2; exit 1; }; \
 	  grep -q 'manifest leak: none' $$TMP/$$c.txt || { \
@@ -142,6 +145,9 @@ watch-drive:    ## drive static/webmsc.js against a fake mounted volume
 	  case $$c in \
 	    not-a-watch) WANT='no GARMIN/GarminDevice.xml here';; \
 	    all-transports) WANT='"Upload files" (dark)';; \
+	    send) WANT='2 sent — 2 file(s) now in the watch'"'"'s inbox. EJECT';; \
+	    send-cap) WANT='it would silently delete this one';; \
+	    send-denied) WANT='writing to the watch was not allowed';; \
 	    *) WANT='Pulled 2';; \
 	  esac; \
 	  grep -q "$$WANT" $$TMP/$$c.txt || { \

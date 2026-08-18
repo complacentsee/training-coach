@@ -32,9 +32,16 @@
   window.rcTransports = window.rcTransports || [];
 
   // The manifest names its directories relative to the volume root. Everything
-  // else here is derived from it rather than assumed — except this fallback,
+  // else here is derived from it rather than assumed — except these fallbacks,
   // for a device whose manifest cannot be read at all.
   var FALLBACK_ACTIVITY = "GARMIN/ACTIVITY";
+  var FALLBACK_INBOX = "GARMIN/NEWFILES";
+
+  // The watch stores at most 25 workouts and silently deletes the overflow
+  // from its inbox — measured 12 Aug 2026, when 63 files slot-filled to
+  // exactly 25. Refusing to write past the cap here turns a silent deletion
+  // into a visible refusal.
+  var WORKOUT_CAP = 25;
   var MANIFEST = "GarminDevice.xml";
 
   // FIT_TYPE_4 is recorded activities, FIT_TYPE_5 is workouts. The names are
@@ -185,6 +192,20 @@
 
   /* ── the transport ─────────────────────────────────────────────────── */
 
+  // countFIT is the inbox census: real .fit files, junk ignored — a FAT
+  // volume that has met macOS carries ._name side-files and .DS_Store, and
+  // neither is a workout the watch will import.
+  async function countFIT(dir) {
+    var n = 0;
+    for await (var entry of dir.values()) {
+      if (entry.kind !== "file") continue;
+      if (entry.name.charAt(0) === ".") continue;
+      if (!/\.fit$/i.test(entry.name)) continue;
+      n++;
+    }
+    return n;
+  }
+
   // mscTransport is a PURE constructor: it takes a directory handle and asks
   // nothing of the user. That is what makes it testable — a handle can come
   // from a picker, from OPFS, or from a shim, and the transport cannot tell.
@@ -195,6 +216,7 @@
   // is awaited later, inside connect, where an await costs nothing.
   function mscTransport(dirHandle) {
     var root = null, activityDir = null, manifest = null, label = "";
+    var foundAt = null, inboxDir = null, inboxCount = -1;
 
     var self = {
       id: "msc",
@@ -211,6 +233,7 @@
         if (!root) throw new Error("no directory was chosen");
 
         var found = await findManifest(root);
+        foundAt = found;
         if (!found) {
           // Without the manifest this is just a folder. The picker returns
           // whatever was chosen, and a stale copy of a GARMIN directory on the
@@ -234,7 +257,7 @@
         trace("mounted " + label + ", activities in " + path);
         return {
           deviceId: label,
-          title: label + " — " + path + " found. Read-only: this page pulls activities, and does not yet write workouts to a drive.",
+          title: label + " — " + path + " found. Pull activities, or send workouts into its inbox.",
         };
       },
 
@@ -285,12 +308,74 @@
       // browser, and this repo has one register on purpose.
       dayOf: function () { return null; },
 
-      canSend: false,
-      sendWorkout: async function () {
-        throw new Error("sending to a drive is not built yet — use the zip download, or the Epix over USB");
+      canSend: true,
+
+      // prepareSend runs as the send click's FIRST statement, because asking
+      // to write needs the click's transient activation and the batch loop's
+      // first write sits behind a fetch. The picker asked for read only —
+      // pulls stay read-only — so the same handle is upgraded here, once.
+      prepareSend: function () {
+        if (!root || !root.requestPermission) return Promise.resolve();
+        return root.queryPermission({ mode: "readwrite" }).then(function (st) {
+          if (st === "granted") return;
+          return root.requestPermission({ mode: "readwrite" }).then(function (st2) {
+            if (st2 !== "granted") {
+              throw fatal("writing to the watch was not allowed — allow it when the browser asks, then send again");
+            }
+          });
+        });
       },
 
-      newFilesCount: async function () { return null; },
+      // sendWorkout writes into the manifest's InputToUnit inbox. The row
+      // counts as sent only when this resolves, and this resolves only after
+      // close() — Chromium's commit: it writes <name>.crswap beside the
+      // target and renames on close, so an unclosed write is a file that
+      // never existed, MTP's rollback by a different mechanism.
+      sendWorkout: async function (name, bytes) {
+        if (!inboxDir) {
+          var t5 = (manifest.types["FIT_TYPE_5"] || {})["in"];
+          var path = t5 ? t5.path : FALLBACK_INBOX;
+          if (!t5) trace("manifest names no FIT_TYPE_5 inbox — falling back to " + FALLBACK_INBOX);
+          inboxDir = await resolve(root, foundAt, path);
+          if (!inboxDir) throw fatal("the manifest names " + path + ", which is not on this volume");
+          inboxCount = await countFIT(inboxDir);
+          trace("inbox " + path + " holds " + inboxCount + " file(s)");
+        }
+        // The cap: a same-named write replaces and costs no slot; a new name
+        // past 25 would be silently deleted by the watch, so refuse it here
+        // where the refusal can be seen.
+        var replacing = !!(await childFile(inboxDir, name));
+        if (!replacing && inboxCount >= WORKOUT_CAP) {
+          throw new Error("the watch stores at most " + WORKOUT_CAP + " workouts and its inbox already holds " +
+            inboxCount + " — it would silently delete this one");
+        }
+        var fh = await inboxDir.getFileHandle(name, { create: true });
+        var w = await fh.createWritable();
+        await w.write(bytes);
+        await w.close();
+        // Read back what landed: close() resolving is Chromium's promise,
+        // and this is the check that the promise was kept.
+        var f = await fh.getFile();
+        if (f.size !== bytes.byteLength) {
+          throw new Error("wrote " + bytes.byteLength + " bytes but the volume holds " + f.size + " — do not trust this file");
+        }
+        if (!replacing) inboxCount++;
+      },
+
+      // What the inbox holds, counted from the volume. Unlike MTP this is
+      // not the device acknowledging anything — it is files sitting in a
+      // folder the watch has not looked at yet, which is why the closing
+      // sentence says eject rather than claiming success.
+      newFilesCount: async function () {
+        return inboxDir ? countFIT(inboxDir) : null;
+      },
+
+      // The half MTP cannot mislead about here: there is no session and no
+      // observable import. Eject is the athlete's promise, said plainly.
+      sendClose: function (listed) {
+        return (listed === null ? " — written." : " — " + listed + " file(s) now in the watch's inbox.") +
+          " EJECT the watch before unplugging; it imports on its own and the files appear under Training → Workouts.";
+      },
 
       disconnect: async function () {
         root = activityDir = manifest = null;
