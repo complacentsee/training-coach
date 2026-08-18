@@ -310,8 +310,7 @@
         trace("no manifest — treating as a generic FIT drive (best-effort, unverified layout)");
         return {
           deviceId: "drive",
-          title: "a drive with FIT activities (" + c.n + "+ found) — best-effort read for a device without a " +
-            MANIFEST + " manifest, not tested against this hardware. Pull below; sending is off.",
+          title: "a drive with FIT activities (" + c.n + "+ found) — pull below. Sending is off.",
         };
       },
 

@@ -489,6 +489,9 @@ td .rec:hover,td .rec:focus-visible{border-color:var(--accent);color:var(--accen
    and its writer sets textContent on the FIRST .dsrc in the document, which
    was this line. The name that reads as available must still be grepped. */
 .dsensors{margin:-.55rem 0 .8rem;font-size:.72rem;color:var(--ink-3)}
+/* The supported-devices note at the foot of /watch: quiet, factual. */
+.wsupported{margin:1.4rem 0 0;font-size:.76rem;line-height:1.5;color:var(--ink-3)}
+.wsupported b{color:var(--ink-2);font-weight:600}
 /* Auto-fit rather than a fixed column count: four stats on a phone, six on a
    laptop, and a bike day with no climb simply has fewer. */
 .dstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(6.2rem,1fr));
