@@ -416,4 +416,11 @@
   mscTransport.fromPicker.label = "Connect as a drive";
 
   window.rcTransports.push(mscTransport.fromPicker);
+
+  // Exposed for the GPS-mode bridge (webgdi.js): after it switches a watch
+  // from proprietary to mass storage, it builds a drive transport around the
+  // now-mounted volume and delegates every operation to it. One
+  // implementation of the drive, two ways in.
+  window.rcBuildDrive = function (handleOrPromise) { return mscTransport(handleOrPromise); };
+  window.rcDrivePicker = mscTransport.fromPicker;
 })();

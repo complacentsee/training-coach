@@ -641,6 +641,9 @@
   var t = null;
   // The factory t was built from, so the right button can say "Disconnect".
   var activeMake = null;
+  // A two-phase transport's second gesture, parked here between its two
+  // clicks; the chooser consults it before its normal connect/disconnect.
+  var pendingFollowup = null;
   // One entry per transport the browser can actually offer: {btn, make}.
   // With one, it is the page's original single button, unchanged.
   var choices = [];
@@ -797,6 +800,38 @@
     return fresh;
   }
 
+  // awaitFollowup arms one button to run a two-phase transport's second
+  // gesture. Only the bridge uses it; a one-phase connect never calls it, so
+  // nothing here touches the MTP or drive paths.
+  function awaitFollowup(make, followup) {
+    var c = choices.filter(function (x) { return x.make === make; })[0];
+    if (!c) return;
+    setConnectEnabled(false);
+    c.btn.disabled = false;
+    c.btn.textContent = followup.label;
+    var run = function () {
+      setConnectEnabled(false);
+      followup.run().then(function (info2) {
+        c.btn.textContent = c.label;
+        if (t.pullLabel) pullBtn.textContent = t.pullLabel;
+        say("Connected: " + info2.title);
+        return setupPull("Connected: " + info2.title).then(function () {
+          sendBtn.disabled = !t.canSend;
+          setConnectUI(true);
+          setConnectEnabled(true);
+        });
+      }).catch(function (e) {
+        say(e.message, true);
+        if (t) { try { t.disconnect(); } catch (x) {} }
+        t = null; activeMake = null;
+        c.btn.textContent = c.label;
+        setConnectUI(false);
+        setConnectEnabled(true);
+      });
+    };
+    pendingFollowup = run;
+  }
+
   async function connect(make) {
     setConnectEnabled(false);
     // Built and armed synchronously: the transport's picker must be reached
@@ -809,6 +844,15 @@
       var info = await next.connect();
       t = next;
       activeMake = make;
+      // A two-phase transport (the GPS-mode bridge) does its first gesture in
+      // connect() and needs a second one for what follows. It returns a
+      // `followup`; the page runs it on the next click. A one-phase transport
+      // returns none, and everything below is byte-identical to before.
+      if (info.followup) {
+        say("Connected: " + info.title);
+        awaitFollowup(make, info.followup);
+        return;
+      }
       if (next.pullLabel) pullBtn.textContent = next.pullLabel;
       var senderLine = "Connected: " + info.title;
       say(senderLine);
@@ -1117,6 +1161,7 @@
     }
     choices.forEach(function (c) {
       c.btn.addEventListener("click", function () {
+        if (pendingFollowup) { var f = pendingFollowup; pendingFollowup = null; f(); return; }
         if (t && c.make === activeMake) disconnect();
         else if (!t) connect(c.make);
       });

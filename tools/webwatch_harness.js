@@ -161,7 +161,8 @@ function El(tag) {
     get parentNode() { return this.parent || null; },
     setAttribute(k, v) { this.attrs[k] = v; },
     addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
-    dispatch(ev, arg) { (this.listeners[ev] || []).forEach((f) => f(arg || {})); },
+    removeEventListener(ev, fn) { this.listeners[ev] = (this.listeners[ev] || []).filter((f) => f !== fn); },
+    dispatch(ev, arg) { (this.listeners[ev] || []).slice().forEach((f) => f(arg || {})); },
     // appendChild MOVES a node: the real DOM detaches it from wherever it was
     // first. Without that a row filed under "already saved" stayed in the new
     // table too, and `pullBody.children.length === 0` — which decides whether

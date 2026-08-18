@@ -44,6 +44,10 @@ const DENY = process.argv.indexOf("--deny-write") >= 0;
 // --full-inbox preloads the inbox to the watch's 25-workout cap, so a new
 // name must be refused where the watch would have silently deleted it.
 const FULL = process.argv.indexOf("--full-inbox") >= 0;
+// --gps drives the GPS-mode bridge: a fake 0x0003 device that accepts the
+// mode-switch write, then the drive picker takes over. Proves switch → bridge
+// → the same drive flow, headless.
+const GPS = process.argv.indexOf("--gps") >= 0;
 // --with-usb pretends this browser also has WebUSB, so the page offers TWO
 // transports and has to draw a chooser instead of using the single button
 // already in the markup. The USB side is rigged to throw: clicking the drive
@@ -228,8 +232,22 @@ if (!picked) {
 // One recording already archived, so the page has a real diff to do rather
 // than pulling everything blindly.
 const page = H.newPage({ alreadySaved: { "4T7B0092.FIT": VOLUME.GARMIN.ACTIVITY["4T7B0092.FIT"].length } });
+// A fake watch in GPS mode: vendor 0x091e, product 0x0003, one vendor
+// interface with a bulk-OUT the mode-switch is written to. The write is
+// recorded so the replay can assert the exact 13 bytes went out.
+const gpsWrites = [];
+const gpsDevice = {
+  vendorId: 0x091e, productId: 0x0003, configuration: { interfaces: [{
+    interfaceNumber: 0, alternates: [{ interfaceClass: 0xff, endpoints: [
+      { type: "bulk", direction: "out", endpointNumber: 2, packetSize: 512 }] }] }] },
+  open: async () => {}, close: async () => {}, selectConfiguration: async () => {},
+  claimInterface: async () => {}, releaseInterface: async () => {},
+  transferOut: async (ep, bytes) => { gpsWrites.push(Array.from(new Uint8Array(bytes))); return { status: "ok" }; },
+};
 H.load(page, {
-  usb: WITH_USB ? {
+  usb: GPS ? {
+    requestDevice: async () => gpsDevice, addEventListener() {}, removeEventListener() {},
+  } : WITH_USB ? {
     requestDevice: async () => { throw new Error("the USB transport was reached by mistake"); },
     addEventListener() {}, removeEventListener() {},
   } : undefined, // without it, one transport: the page keeps its single button
@@ -244,9 +262,34 @@ const byId = page.byId;
   const out = [];
   const status = () => byId.wstatus.textContent;
 
-  out.push("case:          " + CASE + (WITH_USB ? " (both transports offered)" : ""));
+  out.push("case:          " + CASE + (WITH_USB ? " (both transports offered)" : "") + (GPS ? " (GPS-mode bridge)" : ""));
   const buttons = page.btnHost.children;
   out.push("connect:       " + buttons.map((b) => JSON.stringify(b.textContent)).join(" "));
+
+  // GPS-mode bridge: click its button, assert the switch packet, then the
+  // button becomes the follow-up that opens the drive.
+  if (GPS) {
+    const gbtn = buttons.find((b) => b.textContent === "Connect (GPS mode)");
+    if (!gbtn) throw new Error("no GPS-mode button");
+    gbtn.dispatch("click");
+    await H.waitFor(page, "the switch", () => gpsWrites.length > 0 && gbtn.textContent !== "Connect (GPS mode)");
+    const pkt = gpsWrites[0] || [];
+    const want = [0x14,0,0,0,0x2f,0x04,0,0,0x01,0,0,0,0];
+    out.push("  mode-switch:  " + pkt.map((x) => x.toString(16).padStart(2,"0")).join(" ") +
+      (JSON.stringify(pkt) === JSON.stringify(want) ? "  ✓ exact packet" : "  ✗ WRONG"));
+    out.push("  follow-up:    " + JSON.stringify(gbtn.textContent));
+    gbtn.dispatch("click"); // second gesture: open the drive
+    await H.waitFor(page, "the drive", () => status().indexOf("Pulled") === 0 || byId.wpullrows.children.length > 0 || status().indexOf("new") > 0);
+    out.push("after bridge:  " + status());
+    if (!byId.wpull.disabled) {
+      byId.wpull.dispatch("click");
+      await H.waitFor(page, "the pull", () => status().indexOf("Pulled") === 0 || status().indexOf("failed") > 0);
+      out.push("after pull:    " + status());
+    }
+    out.push("manifest leak: " + (byId.wtrace.textContent.indexOf("STOREKEY") >= 0 ? "FAILED" : "none"));
+    console.log(out.join("\n"));
+    return;
+  }
 
   // Click the drive button, wherever the chooser put it.
   const driveBtn = buttons.length === 1 ? buttons[0]
