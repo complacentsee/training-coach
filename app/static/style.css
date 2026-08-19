@@ -173,8 +173,11 @@ td.k-rest .amt{color:var(--ink-3)}
 .fitbtn::after{content:"";position:absolute;inset:-.6rem}
 .fitbtn:hover,.fitbtn:focus-visible{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 /* inside a calendar cell: smaller, and a tighter tap halo so a near-miss
-   still opens the day's popup rather than downloading */
-td .fitbtn{height:1.05rem;padding:0 .35rem;margin:0;font-size:.55rem;top:0}
+   still opens the day's popup rather than downloading. Border drops to the
+   1px stroke everything else in the cell draws — the grade letter and VIEW
+   are 1px, and 1.5px at this size rounds to 1 or 2 device pixels by
+   subpixel position, so pills in one row rendered as different weights */
+td .fitbtn{height:1.05rem;padding:0 .35rem;margin:0;font-size:.55rem;top:0;border-width:1px}
 td .fitbtn::after{inset:-.3rem}
 /* a cell's export pills and its VIEW affordance share one row pinned to the
    cell's bottom edge; cells in a table row share the row's height, so every
@@ -454,7 +457,7 @@ td.skipped .amt{color:var(--ink-3)}
    say. */
 td .rec{position:relative;display:inline-flex;align-items:center;justify-content:center;
   height:1.05rem;padding:0 .35rem;margin:0;border-radius:2px;
-  border:1px solid var(--rule);background:transparent;color:var(--ink-3);
+  border:1px solid var(--ink-3);background:transparent;color:var(--ink-3);
   font:700 .55rem/1 var(--mono);letter-spacing:.06em;cursor:pointer;
   -webkit-appearance:none;appearance:none}
 td .rec::after{content:"";position:absolute;inset:-.3rem}
