@@ -1201,11 +1201,19 @@ const chartPoints = 200
 type chartOut struct {
 	// Unit is what a pace value counts: seconds per mile or per kilometre,
 	// in the athlete's own units, so the drawing needs no conversion table.
-	Unit  string     `json:"unit,omitempty"`
-	Secs  []int      `json:"secs"`
-	HR    []*int     `json:"hr,omitempty"`
-	Pace  []*float64 `json:"pace,omitempty"` // seconds per Unit
-	Watts []*int     `json:"watts,omitempty"`
+	Unit string     `json:"unit,omitempty"`
+	Secs []int      `json:"secs"`
+	HR   []*int     `json:"hr,omitempty"`
+	Pace []*float64 `json:"pace,omitempty"` // seconds per Unit
+	// The pace envelope: each bucket's fastest and slowest despiked speed as
+	// pace, Lo the numerically smaller (faster) edge. The median line cannot
+	// show an effort shorter than its window — a 20 s stride is a minority
+	// in every 30 s window, and a median ignores minorities — so the
+	// extremes ride behind the line as their own series. A min or max
+	// survives any bucket width, which is why this needs no extra density.
+	PaceLo []*float64 `json:"pace_lo,omitempty"`
+	PaceHi []*float64 `json:"pace_hi,omitempty"`
+	Watts  []*int     `json:"watts,omitempty"`
 	// The day's prescribed power band, for the watts panel to draw the way
 	// the HR panel draws its grade band: the longest active step's, resolved
 	// by the same joinPrescription pass that pins the laps — one derivation,
@@ -1248,6 +1256,14 @@ func medianFloats(xs []float64) *float64 {
 // prescribed as. The smoothing matches each sensor's noise rather than
 // blurring everything equally.
 const paceMedianWindowS = 30
+
+// despikeWindowS guards the envelope's extremes, not the line: a bad GPS fix
+// is one or two samples, so a five-second rolling median removes it, while a
+// 15–20 s stride is three to four windows long and passes through at full
+// height. Measured on the 18 Aug strides run: the fastest envelope point
+// after this filter is 4:50/mi against a raw best-15 s of 5:10/mi, and the
+// steady-mile envelope stays ~2 s/mi thin at its median.
+const despikeWindowS = 5.0
 
 // buildChart buckets the samples into an even grid and takes each bucket's
 // median, widening the window for speed alone. Heart rate keeps the
@@ -1304,6 +1320,38 @@ func buildChart(d *activityDetail, u Units) *chartOut {
 		}
 	}
 
+	// The envelope's extremes, from a despiked copy of the speed stream. No
+	// window reach here: a bucket's envelope comes from its own samples
+	// alone, so the band breaks at a stop at least as readily as the line.
+	loB := make([]float64, n)
+	hiB := make([]float64, n)
+	var vt, vv []float64
+	for _, sm := range d.Series {
+		if sm.vel > 0 {
+			vt = append(vt, sm.t.Sub(t0).Seconds())
+			vv = append(vv, sm.vel)
+		}
+	}
+	for i, a, b := 0, 0, 0; i < len(vv); i++ {
+		for vt[a] < vt[i]-despikeWindowS/2 {
+			a++
+		}
+		for b < len(vv) && vt[b] <= vt[i]+despikeWindowS/2 {
+			b++
+		}
+		v := *medianFloats(vv[a:b])
+		bi := int(vt[i] / width)
+		if bi < 0 || bi >= n {
+			continue
+		}
+		if loB[bi] == 0 || v < loB[bi] {
+			loB[bi] = v
+		}
+		if v > hiB[bi] {
+			hiB[bi] = v
+		}
+	}
+
 	out := &chartOut{Secs: make([]int, n)}
 	per := metresPerMile
 	out.Unit = "/mi"
@@ -1328,6 +1376,14 @@ func buildChart(d *activityDetail, u Units) *chartOut {
 				p = &secs
 			}
 			out.Pace = append(out.Pace, p)
+			var pl, ph *float64
+			if hiB[i] > 0 {
+				l := pyRound(per/hiB[i], 1)
+				h := pyRound(per/loB[i], 1)
+				pl, ph = &l, &h
+			}
+			out.PaceLo = append(out.PaceLo, pl)
+			out.PaceHi = append(out.PaceHi, ph)
 		}
 	}
 	if !haveV {

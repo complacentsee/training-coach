@@ -547,6 +547,24 @@
     return out;
   }
 
+  /* One polygon per unbroken run of envelope samples — the lo edge forward,
+     the hi edge back. A null breaks the band exactly where segments()
+     breaks the line. */
+  function bandPolys(secs, los, his, x, y) {
+    var out = [], up = [], down = [];
+    function flush() {
+      if (up.length > 1) out.push(up.concat(down.reverse()).join(" "));
+      up = []; down = [];
+    }
+    for (var i = 0; i < los.length; i++) {
+      if (los[i] == null || his[i] == null) { flush(); continue; }
+      up.push(x(secs[i]).toFixed(1) + "," + y(los[i]).toFixed(1));
+      down.push(x(secs[i]).toFixed(1) + "," + y(his[i]).toFixed(1));
+    }
+    flush();
+    return out;
+  }
+
   function mmss(secs) {
     var s = Math.round(secs);
     return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + (s % 60);
@@ -557,6 +575,17 @@
     if (!c || !c.secs || c.secs.length < 2) return "";
     var hr = c.hr;
     var pr = run && c.pace && c.pace.length ? rangeOf(c.pace) : null;
+    /* The envelope's fast edge joins the axis: the range is a percentile
+       clip of the median line, and the strides the envelope exists to show
+       are precisely what a percentile clip discards. The slow edge stays
+       clipped — it clamps to the panel floor exactly as the walk breaks
+       always have. */
+    var env = run && c.pace_lo && c.pace_lo.length ? { lo: c.pace_lo, hi: c.pace_hi } : null;
+    if (env && pr) {
+      var fastest = null;
+      env.lo.forEach(function (v) { if (v != null && (fastest == null || v < fastest)) fastest = v; });
+      if (fastest != null && fastest < pr.lo) pr.lo = fastest - (pr.hi - fastest) * 0.03;
+    }
     var hrr = hr && hr.length ? rangeOf(hr) : null;
 
     /* Two panels stacked on one clock rather than two lines in one box. On
@@ -567,7 +596,7 @@
     var pw = W - L - R;
     var panels = [];
     if (run && pr) {
-      panels.push({ vals: c.pace, range: pr, colour: "var(--accent)", invert: true,
+      panels.push({ vals: c.pace, range: pr, env: env, colour: "var(--accent)", invert: true,
                     label: "pace" + (c.unit || ""), fmt: mmss });
     }
     /* Watts on a run as well as a ride. On the bike ERG sets the level, so
@@ -683,6 +712,16 @@
         g.push('<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + yc.toFixed(1) + '" y2="' + yc.toFixed(1) +
           '" stroke="var(--hard)" stroke-width="1" stroke-dasharray="3 3" opacity="0.75"/>');
         g.push('<text x="' + (L + 3) + '" y="' + (yc - 3).toFixed(1) + '" font-size="9" fill="var(--ink-3)">cap ' + cap + "</text>");
+      }
+      if (p.env) {
+        /* The spread behind the line: each bucket's fastest and slowest
+           despiked pace, in the line's own ink at a fraction of its opacity
+           — one entity, line and spread, never a second series. No edge
+           stroke: within a panel a dashed line is a guide and a solid one
+           is the trace, and the band is neither. */
+        bandPolys(c.secs, p.env.lo, p.env.hi, x, y).forEach(function (pts) {
+          g.push('<polygon points="' + pts + '" fill="' + p.colour + '" opacity="0.15"/>');
+        });
       }
       segments(c.secs, p.vals, x, y).forEach(function (pts) {
         g.push('<polyline points="' + pts + '" fill="none" stroke="' + p.colour +

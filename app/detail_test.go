@@ -1133,6 +1133,81 @@ func TestChartBucketsMedianAndBreaks(t *testing.T) {
 	}
 }
 
+// TestChartPaceEnvelope: the median line cannot show an effort shorter than
+// its window — a 20 s stride is a minority in every 30 s window, and a
+// median ignores minorities — so each bucket also ships its fastest and
+// slowest despiked speed as an envelope. The despike is a 5 s median: one
+// bad fix is one or two samples and dies there, a 20 s stride is four
+// windows long and passes through at full height. The envelope takes no
+// window reach, so it is null in a gap at least as readily as the line.
+func TestChartPaceEnvelope(t *testing.T) {
+	var msgs []proto.Message
+	add := func(sec int, speedRaw uint16) {
+		msgs = append(msgs, mesgdef.NewRecord(nil).
+			SetTimestamp(fixtureT0.Add(time.Duration(sec)*time.Second)).
+			SetHeartRate(140).SetSpeed(speedRaw).ToMesg(nil))
+	}
+	// Five steady minutes at 3 m/s carrying a 20 s stride at 5.5 m/s and,
+	// later, a single 20 m/s GPS spike. Then a five-minute gap, then five
+	// more steady minutes.
+	for sec := 0; sec <= 300; sec++ {
+		switch {
+		case sec >= 100 && sec < 120:
+			add(sec, 5500)
+		case sec == 200:
+			add(sec, 20000)
+		default:
+			add(sec, 3000)
+		}
+	}
+	for sec := 600; sec <= 900; sec++ {
+		add(sec, 3000)
+	}
+	msgs = append(msgs, mesgdef.NewSession(nil).
+		SetSport(typedef.SportRunning).
+		SetStartTime(fixtureT0).SetTimestamp(fixtureT0.Add(time.Minute)).
+		SetTotalElapsedTime(900_000).SetTotalTimerTime(900_000).
+		SetTotalDistance(200_000).ToMesg(nil))
+
+	d := detailOf(t, encodeActivityFixture(t, msgs...))
+	c := d.Chart
+	if c == nil {
+		t.Fatal("no chart series")
+	}
+	if len(c.PaceLo) != len(c.Secs) || len(c.PaceHi) != len(c.Secs) {
+		t.Fatalf("envelope length %d/%d against %d buckets", len(c.PaceLo), len(c.PaceHi), len(c.Secs))
+	}
+	at := func(sec int) int {
+		best := 0
+		for i, s := range c.Secs {
+			if s <= sec {
+				best = i
+			}
+		}
+		return best
+	}
+	// The stride: the median line holds the steady pace — 3 m/s is
+	// 333.3 s/km — while the envelope's fast edge shows the 5.5 m/s the
+	// stride was actually run at, 181.8 s/km.
+	if p := c.Pace[at(110)]; p == nil || math.Abs(*p-333.3) > 2 {
+		t.Errorf("median pace at the stride = %v, want ~333.3 — the line should not show a 20 s effort", p)
+	}
+	if lo := c.PaceLo[at(110)]; lo == nil || *lo > 185 {
+		t.Errorf("envelope fast edge at the stride = %v, want ~181.8 — the envelope exists to show this", lo)
+	}
+	// The spike: a single 20 m/s sample is not a 50 s/km pace anybody ran.
+	// The 5 s despike leaves the bucket's fast edge at the steady 333.3.
+	if lo := c.PaceLo[at(200)]; lo == nil || *lo < 300 {
+		t.Errorf("envelope fast edge at the spike = %v, want ~333.3 — one bad fix set an extreme", lo)
+	}
+	// The gap: no samples, no envelope.
+	for _, sec := range []int{420, 480, 540} {
+		if c.PaceLo[at(sec)] != nil || c.PaceHi[at(sec)] != nil {
+			t.Errorf("%d s sits inside the gap and carries an envelope", sec)
+		}
+	}
+}
+
 // TestRouteIsCutAtLapBoundaries: his outdoor runs are out-and-backs — 57 to
 // 87% of their points retrace themselves within 15 m — so a single stroke
 // says nothing about which stretch was which. The route is served cut at the
