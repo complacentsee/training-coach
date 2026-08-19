@@ -19,7 +19,7 @@
               data-when="Week {{$w.N}}" aria-label="Week {{$w.N}} graded {{.WeekGrade}} — read why">{{.WeekGrade}}</button>{{end}}</span>
       </th>
       {{range $i, $c := .Cells}}
-        <td class="{{kindCls $c.Session.Kind}}{{if $c.Grade}} graded{{end}}{{if $c.Skipped}} skipped{{end}}{{if and (eq $w.N $.TodayW) (eq $i $.TodayD)}} now{{end}}"
+        <td class="{{kindCls $c.Session.Kind}}{{if $c.Grade}} graded{{end}}{{if $c.Skipped}} skipped{{end}}{{if or $c.FitURL $c.Recorded}} has-chips{{end}}{{if and (eq $w.N $.TodayW) (eq $i $.TodayD)}} now{{end}}"
             {{if $c.Guide}}data-guide="{{$c.Guide}}"{{end}}
             {{if $c.Note}}title="{{$c.Note}}"{{end}}>
           {{if $c.Grade}}<button type="button" class="g g{{lower $c.Grade}}"
@@ -28,9 +28,9 @@
           {{if $c.Session.Tag}}<span class="tag">{{$c.Session.Tag}}</span>{{end}}
           <span class="amt">{{amount $c.Session}}</span>
           <span class="lbl">{{emph $c.Session.Label}}</span>
-          {{if $c.FitURL}}<a class="fitbtn" href="{{$c.FitURL}}" download>FIT</a>{{end}}{{if $c.ZwoURL}} <a class="fitbtn" href="{{$c.ZwoURL}}" download>ZWO</a>{{end}}{{if $c.Recorded}}{{if $c.FitURL}} {{end}}<button type="button" class="rec" data-detail="{{iso $c.Date}}"
+          {{if or $c.FitURL $c.Recorded}}<span class="chips">{{if $c.FitURL}}<a class="fitbtn" href="{{$c.FitURL}}" download>FIT</a>{{end}}{{if $c.ZwoURL}}<a class="fitbtn" href="{{$c.ZwoURL}}" download>ZWO</a>{{end}}{{if $c.Recorded}}<button type="button" class="rec" data-detail="{{iso $c.Date}}"
               data-sport="{{$c.Sport}}" data-block="{{$.Block}}" data-grade="{{$c.Grade}}" data-note="{{$c.Note}}"
-              aria-label="View the activity recorded on {{date $c.Date}}" title="View activity">VIEW</button>{{end}}
+              aria-label="View the activity recorded on {{date $c.Date}}" title="View activity">VIEW</button>{{end}}</span>{{end}}
         </td>
       {{end}}
     </tr>

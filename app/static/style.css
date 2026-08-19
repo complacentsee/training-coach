@@ -172,10 +172,23 @@ td.k-rest .amt{color:var(--ink-3)}
   vertical-align:middle;top:-.14em}
 .fitbtn::after{content:"";position:absolute;inset:-.6rem}
 .fitbtn:hover,.fitbtn:focus-visible{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
-/* inside a calendar cell: smaller, on its own line, and a tighter tap halo so
-   a near-miss still opens the day's popup rather than downloading */
-td .fitbtn{height:1.05rem;padding:0 .35rem;margin:.25rem 0 0;font-size:.55rem;top:0}
+/* inside a calendar cell: smaller, and a tighter tap halo so a near-miss
+   still opens the day's popup rather than downloading */
+td .fitbtn{height:1.05rem;padding:0 .35rem;margin:0;font-size:.55rem;top:0}
 td .fitbtn::after{inset:-.3rem}
+/* a cell's export pills and its VIEW affordance share one row pinned to the
+   cell's bottom edge; cells in a table row share the row's height, so every
+   FIT/ZWO pill in a week sits on one line and every VIEW (pushed to the right
+   edge) on the same line in its own column, whatever the label height above.
+   has-chips reserves the space — the row is out of flow, so without it a
+   two-line label would slide underneath. */
+td .chips{position:absolute;left:.4rem;right:.4rem;bottom:.3rem;
+  display:flex;align-items:center;gap:.3rem}
+td .chips .rec{margin-left:auto}
+table.cal td.has-chips{padding-bottom:1.6rem;min-width:5.6rem}
+/* out of flow also means the chips no longer widen the column, so the floor
+   must cover the widest set: FIT + ZWO + VIEW */
+table.cal td:has(.chips > :nth-child(3)){min-width:8rem}
 .fitall{font:.72rem/1.5 var(--mono);color:var(--ink-3);margin:.4rem 0 0}
 .fitall .fitbtn{margin-left:0;margin-right:.35rem}
 
@@ -435,11 +448,12 @@ td.skipped .amt{color:var(--ink-3)}
 .detbtn:hover,.detbtn:focus-visible{border-color:var(--accent);color:var(--accent);
   background:var(--accent-soft)}
 .today-grade + .detline{margin-top:.7rem}
-/* A calendar cell's affordance sits in the chip row with the exports, in
-   flow: absolutely positioned in a corner it landed on top of the amount,
-   which is the number the cell exists to say. */
+/* A calendar cell's affordance sits in the chip row with the exports, over
+   space has-chips reserves: pinned in a corner WITHOUT that reservation it
+   once landed on top of the amount, which is the number the cell exists to
+   say. */
 td .rec{position:relative;display:inline-flex;align-items:center;justify-content:center;
-  height:1.05rem;padding:0 .35rem;margin:.25rem 0 0;border-radius:2px;
+  height:1.05rem;padding:0 .35rem;margin:0;border-radius:2px;
   border:1px solid var(--rule);background:transparent;color:var(--ink-3);
   font:700 .55rem/1 var(--mono);letter-spacing:.06em;cursor:pointer;
   -webkit-appearance:none;appearance:none}
