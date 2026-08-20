@@ -20,11 +20,17 @@ package main
 // a rest day, or a run may take an easy bike day's slot (swap);
 // graded/recorded days and down/taper/race weeks are immutable; a
 // benchmark tag may be stripped ("plain") — a missed DEC is dead until the
-// next cycle; sessions carrying steps are refused entirely, because an
-// amendment is invisible to the data Rev and a moved steps day would serve
-// different FIT bytes under an unchanged workout identity. That refusal is
-// the identity law, not policy, and lifts when fitIdentity learns to fold
-// the amendment state in.
+// next cycle.
+//
+// Structured sessions TRAVEL WITH their steps. The identity law forbids a
+// standing serial serving changed bytes, and amendments are invisible to
+// the data Rev — but a date that never served a workout may start to, and
+// one that stops serving tells no lie, so a session's steps follow it onto
+// a rest day or through a run↔bike swap. What stays refused is two
+// structured days trading places: both dates' bytes would change under
+// unchanged serials. That case waits for fitIdentity to fold amendment
+// state in. The proofs dryRun runs at load — the on-watch name set and the
+// day's encode — relocate to the POST gate for the slots an op touches.
 
 import (
 	"encoding/json"
@@ -119,9 +125,6 @@ func amendCheck(blocks []*Block, loc *time.Location, taken map[string]amendInfo,
 	if src.Kind == KindRest {
 		return "a rest day has nothing to rework"
 	}
-	if len(src.Steps) > 0 {
-		return "carries a structured workout"
-	}
 	switch op.Op {
 	case "cancel":
 		if op.Arg != "" {
@@ -146,17 +149,110 @@ func amendCheck(blocks []*Block, loc *time.Location, taken map[string]amendInfo,
 			return "destination already amended"
 		}
 		dst := dwk.Days[ddi]
-		if len(dst.Steps) > 0 {
-			return "destination carries a structured workout"
-		}
 		if op.Op == "move" && dst.Kind != KindRest {
 			return "destination is not a rest day"
 		}
 		if op.Op == "swap" && !(src.Kind.IsRun() && dst.Kind == KindBikeEasy) {
 			return "a swap is a run taking an easy bike day"
 		}
+		// The identity rule, precisely: gaining or losing a structured
+		// workout is safe, two structured days trading places is not.
+		if len(src.Steps) > 0 && len(dst.Steps) > 0 {
+			return "both days carry structured workouts — the watch identity cannot follow two trading places"
+		}
+		// A structured session in a new slot takes a new on-watch name;
+		// the block's 15-character dedupe set must stay collision-free.
+		replaced := map[int]Session{di: {Kind: KindRest}, ddi: src}
+		if op.Op == "swap" {
+			replaced[di] = dst
+		}
+		if reason := amendNameProof(blocks[bi], wk.N, replaced); reason != "" {
+			return reason
+		}
 	default:
 		return "unknown op " + strings.TrimSpace(op.Op)
+	}
+	return ""
+}
+
+// amendNameProof re-runs the loader's on-watch name uniqueness check over
+// the block as the op would leave it. Relocated from dryRun, not replaced
+// by an argument — the check is cheap and the name scheme may change.
+func amendNameProof(b *Block, wkN int, replaced map[int]Session) string {
+	seen := map[string]string{}
+	for _, w := range b.Weeks {
+		for di, sess := range w.Days {
+			if w.N == wkN {
+				if r, ok := replaced[di]; ok {
+					sess = r
+				}
+			}
+			if len(sess.Steps) == 0 {
+				continue
+			}
+			name, err := fitName(w.N, di, sess.Label)
+			if err != nil {
+				return "the moved workout cannot be named for the watch: " + err.Error()
+			}
+			p := name
+			if len(p) > 15 {
+				p = p[:15]
+			}
+			if other, dup := seen[p]; dup {
+				return "the moved workout's watch name collides with " + other
+			}
+			seen[p] = name
+		}
+	}
+	return ""
+}
+
+// amendEncodeProof relocates dryRun's per-day encode to the gate: a
+// session arriving in a new slot must still assemble a valid .fit (and
+// .zwo for a bike) exactly as the loader would have proved at startup.
+// Same-week ops resolve in the same variable context, so in practice this
+// re-proves what load proved — which is the point: prove, never argue.
+func amendEncodeProof(d *dataset, op amendOp) string {
+	if op.Op != "move" && op.Op != "swap" {
+		return ""
+	}
+	bi, wk, di, ok := locateISO(d.Blocks, d.Loc, op.Date)
+	_, dwk, ddi, ok2 := locateISO(d.Blocks, d.Loc, op.Arg)
+	if !ok || !ok2 {
+		return ""
+	}
+	blk := d.Blocks[bi]
+	type placement struct {
+		di   int
+		sess Session
+	}
+	var arriving []placement
+	if s := wk.Days[di]; len(s.Steps) > 0 {
+		arriving = append(arriving, placement{ddi, s})
+	}
+	if s := dwk.Days[ddi]; op.Op == "swap" && len(s.Steps) > 0 {
+		arriving = append(arriving, placement{di, s})
+	}
+	for _, p := range arriving {
+		sess := p.sess
+		sc := blk.ctxFor(d.Athlete, wk.N).forSession(&sess)
+		rs, err := resolveSteps(sc, sess)
+		if err != nil {
+			return "the steps no longer resolve in the new slot: " + err.Error()
+		}
+		name, err := fitName(wk.N, p.di, sess.Label)
+		if err != nil {
+			return "the moved workout cannot be named for the watch: " + err.Error()
+		}
+		serial, created := fitIdentity("dryrun", blk.ID, blk.DayOf(wk.N-1, p.di))
+		if _, err := fitWorkoutFor(name, rs, fitSportFor(sess.Kind), serial, created).Encode(); err != nil {
+			return "the moved workout does not assemble: " + err.Error()
+		}
+		if sess.Kind.IsBike() {
+			if _, err := zwoFor(name, rs, d.Athlete.Power["ftp"]); err != nil {
+				return "the moved workout's zwo does not assemble: " + err.Error()
+			}
+		}
 	}
 	return ""
 }
@@ -377,6 +473,10 @@ func (s *server) postAmend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, reason, http.StatusBadRequest)
 		return
 	}
+	if reason := amendEncodeProof(d, op); reason != "" {
+		http.Error(w, reason, http.StatusBadRequest)
+		return
+	}
 	// Only the block being trained amends: an archived block's calendar is
 	// a record. A standing amendment survives its block archiving — the
 	// gate is on posting, the way graded/recorded gates are.
@@ -506,24 +606,33 @@ func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
 		if _, graded := grades[dISO]; graded {
 			continue
 		}
-		if s.anyRecorded(dISO) || len(ds.Steps) > 0 {
+		if s.anyRecorded(dISO) {
 			continue
 		}
 		day := amendDayName(dISO, d.Loc)
+		var cand reworkCandidate
 		switch {
 		case ds.Kind == KindRest:
-			out.Candidates = append(out.Candidates, reworkCandidate{
+			cand = reworkCandidate{
 				Op: "move", Arg: dISO,
 				Title:  "Move to " + day,
 				Detail: "a rest day — nothing is displaced",
-			})
+			}
 		case src.Kind.IsRun() && ds.Kind == KindBikeEasy:
-			out.Candidates = append(out.Candidates, reworkCandidate{
+			cand = reworkCandidate{
 				Op: "swap", Arg: dISO,
 				Title:  "Swap with " + day + "'s bike",
 				Detail: stripEmph(ds.Label) + " takes " + out.Day + " instead",
-			})
+			}
+		default:
+			continue
 		}
+		// Offered only where the gate would accept it — the candidate list
+		// probes the real validator rather than restating its rules.
+		if amendCheck(d.Blocks, d.Loc, e.info, amendOp{Date: iso, Op: cand.Op, Arg: cand.Arg}) != "" {
+			continue
+		}
+		out.Candidates = append(out.Candidates, cand)
 	}
 	if src.Tag != "" {
 		out.Candidates = append(out.Candidates, reworkCandidate{

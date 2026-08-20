@@ -52,7 +52,8 @@ func TestAmendCheckRefusals(t *testing.T) {
 		reason string
 	}{
 		{"rest source", amendOp{Date: "2026-01-05", Op: "cancel"}, none, "rest day"},
-		{"steps source", amendOp{Date: "2026-01-06", Op: "cancel"}, none, "structured workout"},
+		{"cancel a structured day", amendOp{Date: "2026-01-06", Op: "cancel"}, none, ""},
+		{"structured session moves to rest", amendOp{Date: "2026-01-06", Op: "move", Arg: "2026-01-08"}, none, ""},
 		{"outside block", amendOp{Date: "2025-06-01", Op: "cancel"}, none, "outside any block"},
 		{"unknown op", amendOp{Date: "2026-01-07", Op: "teleport"}, none, "unknown op"},
 		{"cross week", amendOp{Date: "2026-01-07", Op: "move", Arg: "2026-01-15"}, none, "outside the week"},
@@ -204,10 +205,6 @@ func TestPostAmendGates(t *testing.T) {
 		Arg  string `json:"arg"`
 		Note string `json:"note"`
 	}
-	if rec := amend(req{Date: "2026-01-06", Op: "cancel"}); rec.Code != http.StatusBadRequest ||
-		!strings.Contains(rec.Body.String(), "structured workout") {
-		t.Errorf("steps day: %d %s", rec.Code, rec.Body.String())
-	}
 	if rec := amend(req{Date: "2026-01-07", Op: "revoke"}); rec.Code != http.StatusBadRequest {
 		t.Errorf("revoke with nothing standing: %d", rec.Code)
 	}
@@ -351,10 +348,54 @@ func TestReworkCandidates(t *testing.T) {
 			t.Errorf("candidates missing %s: %s", want, body)
 		}
 	}
-	// The steps day explains itself rather than listing candidates.
+	// A structured day reworks too — its steps travel with it.
 	tue := blk.DayOf(0, 1).Format("2006-01-02")
 	rec = get(ts.mux, "/api/rework?date="+tue, nil)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"can":false`) {
-		t.Errorf("steps day rework = %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"can":true`) ||
+		!strings.Contains(rec.Body.String(), `"move"`) {
+		t.Errorf("structured day rework = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAStructuredSessionTravelsWithItsSteps: the identity law forbids a
+// standing serial serving changed bytes — but a date that never served a
+// workout may start to, and one that stops serving tells no lie. So the
+// quality session's steps follow it onto Thursday's rest day: /fit serves
+// the workout at its new date and 404s the old one.
+func TestAStructuredSessionTravelsWithItsSteps(t *testing.T) {
+	dir := futureBlockDir(t)
+	ts := fitTestMuxServer(t, dir)
+	blk := ts.s.data.Load().Blocks[0]
+	tue := blk.DayOf(0, 1).Format("2006-01-02") // quality, carries steps
+	thu := blk.DayOf(0, 3).Format("2006-01-02") // rest
+
+	rec := postJSON(ts.mux, "/api/amend", map[string]string{
+		"date": tue, "op": "move", "arg": thu, "note": "conflict"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("moving a structured session = %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := get(ts.mux, "/fit/"+thu, nil); rec.Code != http.StatusOK {
+		t.Errorf("/fit/%s (landed) = %d — the steps did not travel", thu, rec.Code)
+	}
+	if rec := get(ts.mux, "/fit/"+tue, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("/fit/%s (vacated) = %d, want 404", tue, rec.Code)
+	}
+}
+
+// TestSwapOfTwoStructuredDaysIsRefused: the one case the identity law
+// genuinely forbids — both dates' bytes would change under standing
+// serials — stays refused until fitIdentity folds amendment state in.
+func TestSwapOfTwoStructuredDaysIsRefused(t *testing.T) {
+	loc := chicago(t)
+	b := &Block{ID: "x", Start: "2026-01-05", Weeks: []*Week{{N: 1, Days: []Session{
+		{Kind: KindBikeEasy, Label: "Spin", Steps: []WorkoutStep{{}}},
+		{Kind: KindQuality, Label: "Reps", Steps: []WorkoutStep{{}}},
+		{Kind: KindRest}, {Kind: KindRest}, {Kind: KindRest}, {Kind: KindRest}, {Kind: KindRest},
+	}}}}
+	b.SetLocation(loc)
+	got := amendCheck([]*Block{b}, loc, map[string]amendInfo{},
+		amendOp{Date: "2026-01-06", Op: "swap", Arg: "2026-01-05"})
+	if !strings.Contains(got, "both days carry structured workouts") {
+		t.Errorf("two structured days trading places = %q, want the identity refusal", got)
 	}
 }
