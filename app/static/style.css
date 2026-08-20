@@ -135,7 +135,7 @@ th.wk{min-width:5.6rem}
 th.wk a{font-family:var(--display);font-size:.85rem;letter-spacing:.03em;text-decoration:none;color:var(--ink);display:block}
 th.wk span{display:block;font-weight:400;font-size:.6rem;color:var(--ink-3)}
 table.cal td{background:var(--sunk);border-radius:3px;padding:.3rem .4rem;vertical-align:top;
-  border:1px solid transparent;min-width:5.2rem}
+  border:1px solid transparent;min-width:5.2rem;--chip-stroke:1px}
 td.now{outline:2px solid var(--accent);outline-offset:1px}
 td .amt{display:block;font:600 .74rem/1.1 var(--mono)}
 td .lbl{display:block;font-size:.62rem;color:var(--ink-3);line-height:1.25;margin-top:.15rem;
@@ -155,29 +155,41 @@ td.k-rest .amt{color:var(--ink-3)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
+/* ── action chips ──────────────────────────────────────────
+   One skin for every take-an-action chip — the guide ?, the export pills,
+   View activity, a cell's VIEW, the watch page's buttons — declared once,
+   so a stroke or hover change is one edit that lands on every page.
+   Geometry (shape, size, halo) stays with each class. A calendar cell sets
+   --chip-stroke to 1px: 1.5px at cell size rounds to 1 or 2 device pixels
+   by subpixel position, so pills in one row rendered as different weights.
+   The QUIET controls — skip, re-grade, the set pills, the issue scale, the
+   popover's own buttons — keep their rule-coloured skins on purpose: armed
+   states are the ones that shout. */
+.gbtn,.fitbtn,.detbtn,td .rec,.wbtn{
+  border:var(--chip-stroke,1.5px) solid var(--ink-3);
+  background:transparent;color:var(--ink-3);
+  text-decoration:none;cursor:pointer}
+.gbtn:hover,.gbtn:focus-visible,.fitbtn:hover,.fitbtn:focus-visible,
+.detbtn:hover,.detbtn:focus-visible,td .rec:hover,td .rec:focus-visible,
+.wbtn:not(:disabled):hover{
+  border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+
 /* ── guides ────────────────────────────────────────────── */
 .gbtn{position:relative;display:inline-flex;align-items:center;justify-content:center;
   width:1.3rem;height:1.3rem;margin-left:.35rem;border-radius:50%;
-  border:1.5px solid var(--ink-3);background:transparent;color:var(--ink-3);
-  font:700 .72rem/1 var(--mono);cursor:pointer;padding:0;
+  font:700 .72rem/1 var(--mono);padding:0;
   vertical-align:middle;top:-.14em}
 /* invisible 44px tap target without disturbing layout */
 .gbtn::after{content:"";position:absolute;inset:-.6rem}
-.gbtn:hover,.gbtn:focus-visible{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 /* the .fit download pill: the gbtn's language, pill-shaped for a word */
 .fitbtn{position:relative;display:inline-flex;align-items:center;justify-content:center;
   height:1.3rem;margin-left:.35rem;padding:0 .5rem;border-radius:.65rem;
-  border:1.5px solid var(--ink-3);background:transparent;color:var(--ink-3);
-  font:700 .62rem/1 var(--mono);letter-spacing:.06em;text-decoration:none;
+  font:700 .62rem/1 var(--mono);letter-spacing:.06em;
   vertical-align:middle;top:-.14em}
 .fitbtn::after{content:"";position:absolute;inset:-.6rem}
-.fitbtn:hover,.fitbtn:focus-visible{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 /* inside a calendar cell: smaller, and a tighter tap halo so a near-miss
-   still opens the day's popup rather than downloading. Border drops to the
-   1px stroke everything else in the cell draws — the grade letter and VIEW
-   are 1px, and 1.5px at this size rounds to 1 or 2 device pixels by
-   subpixel position, so pills in one row rendered as different weights */
-td .fitbtn{height:1.05rem;padding:0 .35rem;margin:0;font-size:.55rem;top:0;border-width:1px}
+   still opens the day's popup rather than downloading */
+td .fitbtn{height:1.05rem;padding:0 .35rem;margin:0;font-size:.55rem;top:0}
 td .fitbtn::after{inset:-.3rem}
 /* a cell's export pills and its VIEW affordance share one row pinned to the
    cell's bottom edge; cells in a table row share the row's height, so every
@@ -201,9 +213,7 @@ table.cal td:has(.chips > :nth-child(3)){min-width:8rem}
 .wstatus.err{color:var(--hard)}
 .wbtns{display:flex;gap:.6rem;margin:0 0 1rem}
 .wbtn{font:700 .78rem/1 var(--mono);letter-spacing:.04em;padding:.55rem .9rem;
-  border-radius:3px;border:1.5px solid var(--ink-3);background:transparent;
-  color:var(--ink);cursor:pointer}
-.wbtn:not(:disabled):hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  border-radius:3px;color:var(--ink)}
 .wbtn:disabled{opacity:.45;cursor:default}
 .wtabs{display:flex;gap:1.2rem;margin:1rem 0 .8rem;border-bottom:1px solid var(--rule)}
 .wtab{font:700 .74rem var(--mono);letter-spacing:.06em;text-transform:uppercase;
@@ -446,10 +456,7 @@ td.skipped .amt{color:var(--ink-3)}
 .detline{margin:.9rem 0 0}
 .detline + .today-grade{margin-top:.9rem}
 .detbtn{display:inline-block;padding:.32rem .7rem;border-radius:3px;
-  border:1px solid var(--rule);background:transparent;color:var(--ink-2);
-  font:700 .64rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
-.detbtn:hover,.detbtn:focus-visible{border-color:var(--accent);color:var(--accent);
-  background:var(--accent-soft)}
+  font:700 .64rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase}
 .today-grade + .detline{margin-top:.7rem}
 /* A calendar cell's affordance sits in the chip row with the exports, over
    space has-chips reserves: pinned in a corner WITHOUT that reservation it
@@ -457,12 +464,9 @@ td.skipped .amt{color:var(--ink-3)}
    say. */
 td .rec{position:relative;display:inline-flex;align-items:center;justify-content:center;
   height:1.05rem;padding:0 .35rem;margin:0;border-radius:2px;
-  border:1px solid var(--ink-3);background:transparent;color:var(--ink-3);
-  font:700 .55rem/1 var(--mono);letter-spacing:.06em;cursor:pointer;
+  font:700 .55rem/1 var(--mono);letter-spacing:.06em;
   -webkit-appearance:none;appearance:none}
 td .rec::after{content:"";position:absolute;inset:-.3rem}
-td .rec:hover,td .rec:focus-visible{border-color:var(--accent);color:var(--accent);
-  background:var(--accent-soft)}
 
 .dpick{display:flex;flex-wrap:wrap;gap:.35rem;margin:0 0 .8rem}
 .dpill{padding:.28rem .6rem;border-radius:3px;border:1px solid var(--rule);
