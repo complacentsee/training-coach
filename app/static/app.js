@@ -495,6 +495,8 @@
        without this both handlers ran: the popover drew itself and the grade
        popup then overwrote its title with "Grade". */
     if (e.target.closest("[data-detail]")) return;
+    /* The rework flow owns its trigger the same way. */
+    if (e.target.closest("[data-rework]")) return;
     /* A grade letter sits inside a cell that opens a guide, so it is checked
        first: clicking the letter is asking about the grade, not the workout. */
     var gn = e.target.closest("[data-note]");
@@ -517,6 +519,113 @@
 
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && !modal.hidden) dismiss();
+  });
+
+  /* ── reworking a day ─────────────────────────────────────────────────
+     The candidates come server-resolved — every date, label and distance
+     in them was derived through the same machinery as the pages, and the
+     client renders strings. Applying is arm-then-confirm like the skip,
+     and the page reloads after: a plan change re-derives everything, and
+     patching one card would leave the calendar lying. */
+  function postAmend(body) {
+    return fetch("/api/amend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) {
+        throw new Error((t || ("HTTP " + r.status)).trim());
+      });
+    });
+  }
+
+  function reworkRow(title, detail) {
+    return '<button type="button" class="rwopt"><b>' + esc(title) + "</b>" +
+      (detail ? "<span>" + esc(detail) + "</span>" : "") + "</button>";
+  }
+
+  function renderRework(m, date, d) {
+    var h = "";
+    if (d.label) {
+      h += '<p class="rwhead"><b>' + esc(d.day) + "</b> · " + emph(d.label) +
+        (d.amt ? " · " + esc(d.amt) : "") + "</p>";
+    }
+    if (d.standing) {
+      h += '<p class="rwhead">' + esc(d.standing) + "</p>";
+      h += reworkRow("Put it back", "revokes the change; the authored week returns");
+      m.body.innerHTML = h;
+      arm(m.body.querySelector(".rwopt"), function () {
+        return postAmend({ date: date, op: "revoke" });
+      });
+      return;
+    }
+    if (!d.can) {
+      h += '<p class="hint">' + esc(d.reason || "Nothing to rework.") + "</p>";
+      m.body.innerHTML = h;
+      return;
+    }
+    var cands = d.candidates || [];
+    cands.forEach(function (c) {
+      if (!c.op) {
+        h += '<p class="rwabsorb"><b>' + esc(c.title) + "</b> " + esc(c.detail || "") + "</p>";
+      } else {
+        h += reworkRow(c.title, c.detail);
+      }
+    });
+    h += '<input type="text" class="rwnote" placeholder="why (optional)" autocomplete="off"' +
+      (d.skip_note ? ' value="' + esc(d.skip_note) + '"' : "") + ">";
+    m.body.innerHTML = h;
+    var note = m.body.querySelector(".rwnote");
+    var btns = m.body.querySelectorAll(".rwopt");
+    var withOp = cands.filter(function (c) { return c.op; });
+    Array.prototype.forEach.call(btns, function (btn, i) {
+      arm(btn, function () {
+        return postAmend({ date: date, op: withOp[i].op, arg: withOp[i].arg || "",
+                           note: note.value.trim() });
+      });
+    });
+  }
+
+  /* One armed option at a time; the second tap applies and reloads. */
+  function arm(btn, apply) {
+    var timer;
+    btn.addEventListener("click", function () {
+      if (!btn.classList.contains("armed")) {
+        Array.prototype.forEach.call(btn.parentNode.querySelectorAll(".rwopt.armed"),
+          function (o) { o.classList.remove("armed"); });
+        btn.classList.add("armed");
+        clearTimeout(timer);
+        timer = setTimeout(function () { btn.classList.remove("armed"); }, 8000);
+        return;
+      }
+      btn.disabled = true;
+      apply()
+        .then(function () { say("Applied"); location.reload(); })
+        .catch(function (e) {
+          say("Refused: " + e.message, true);
+          btn.disabled = false;
+          btn.classList.remove("armed");
+        });
+    });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll("[data-rework]"), function (btn) {
+    btn.addEventListener("click", function () {
+      var date = btn.dataset.rework;
+      var m = window.AppModal.show("Rework");
+      m.body.innerHTML = '<p class="hint">Reading the week…</p>';
+      fetch("/api/rework?date=" + encodeURIComponent(date))
+        .then(function (r) {
+          if (!r.ok) return r.text().then(function (t) {
+            throw new Error((t || ("HTTP " + r.status)).trim());
+          });
+          return r.json();
+        })
+        .then(function (d) { renderRework(m, date, d); })
+        .catch(function (e) {
+          m.body.innerHTML = '<p class="hint">' + esc(e.message) + "</p>";
+        });
+    });
   });
 
   /* deep link: /?guide=m-sl-bent or #guide=m-sl-bent */

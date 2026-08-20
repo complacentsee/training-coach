@@ -49,15 +49,20 @@ type server struct {
 	reloading sync.Mutex
 	data      atomic.Pointer[dataset]
 	stamp     atomic.Pointer[string]
-	store     *Store
-	metrics   *metricsDB
-	weather   *weatherService
-	grader    *grader
-	tiles     *tileService
-	tpl       *template.Template
-	loc       *time.Location // fallback timezone from the flag
-	assets    *assets
-	dataDir   string
+	// eff is the amended view of data — the authored dataset with standing
+	// amend entries replayed over it (amend.go). Rebuilt when either the
+	// data Rev or the log sequence moves; effMu serialises the rebuild.
+	eff     atomic.Pointer[effectiveSet]
+	effMu   sync.Mutex
+	store   *Store
+	metrics *metricsDB
+	weather *weatherService
+	grader  *grader
+	tiles   *tileService
+	tpl     *template.Template
+	loc     *time.Location // fallback timezone from the flag
+	assets  *assets
+	dataDir string
 }
 
 func main() {
@@ -191,6 +196,8 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("POST /api/entry", s.postEntry)
+	mux.HandleFunc("POST /api/amend", s.postAmend)
+	mux.HandleFunc("GET /api/rework", s.getRework)
 	mux.HandleFunc("POST /api/reload", s.postReload)
 	mux.HandleFunc("GET /api/entries", s.getEntries)
 	mux.HandleFunc("GET /api/guides", s.getGuides)
@@ -210,7 +217,11 @@ func (s *server) routes() *http.ServeMux {
 
 /* ── data lifecycle ────────────────────────────────────────────────────── */
 
-func (s *server) ds() *dataset { return s.data.Load() }
+// ds is the dataset every handler serves: the authored data with the
+// standing amendments replayed over it. The clone preserves Rev, so
+// /healthz and fitIdentity keep reporting the authored truth; the raw
+// load stays reachable as s.data.Load() for the amend gate itself.
+func (s *server) ds() *dataset { return s.effective().d }
 
 // startupReconcile back-fills the metrics cache from the archive, then
 // retries recent ungraded days. Metrics first, then grades: a grade that
@@ -320,9 +331,14 @@ type todayData struct {
 	// Sport is the sport the day's session is, so a date carrying both a
 	// ride and a run opens the one the session was about — the grader's own
 	// test, applied on the page.
-	Sport       string
-	Grade       string // the letter, when the day has been graded
-	GradeNote   string // and the reasoning behind it
+	Sport     string
+	Grade     string // the letter, when the day has been graded
+	GradeNote string // and the reasoning behind it
+	// AmendLine says what a standing amendment did to this day ("Moved to
+	// Sat 22 — work conflict"); CanRework offers the flow. The flow itself
+	// explains any refusal, so the trigger's own test stays simple.
+	AmendLine   string
+	CanRework   bool
 	Detail      string
 	Targets     []string
 	GuideID     string
@@ -488,6 +504,15 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	td.HasActivity = s.anyRecorded(iso)
 	td.Sport = sportOf(td.Session.Kind)
 
+	if info, amended := s.amendInfoFor(iso); amended {
+		td.AmendLine = amendLine(info, d.Loc)
+	}
+	// The rework trigger renders on any real session in the current block —
+	// and on a vacated day, where the only offer is putting it back. The
+	// flow itself explains a refusal (steps, the record, a tagged week): a
+	// control that quietly vanishes reads as a bug, not a rule.
+	td.CanRework = ok && (td.Session.Kind != KindRest || td.AmendLine != "")
+
 	td.Issues = s.issueViews(d, blk, weekN, iso)
 	s.render(w, "today.html", td)
 }
@@ -642,6 +667,11 @@ type calCell struct {
 	Sport    string // what the session was, for picking among a day's files
 	FitURL   string // set only when the session carries steps
 	ZwoURL   string // bike steps days only
+	// A cell's amendment provenance: the ghost is the struck label of what
+	// used to sit here plus where it went; From marks the landing cell.
+	AmendGhost string // "vacated"/"cancelled": the original session's label
+	AmendTo    string // "→ Sat 22", beside the ghost; empty for a cancel
+	AmendFrom  string // "from Thu 20", on the destination cell
 }
 
 func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
@@ -736,6 +766,20 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 					c.Note = strings.TrimSpace("Skipped — " + sk.Note)
 				}
 			}
+			if info, amended := s.amendInfoFor(dt.Format("2006-01-02")); amended {
+				switch info.Role {
+				case "vacated":
+					c.AmendGhost = info.Label
+					c.AmendTo = "→ " + amendDayName(info.Other, d.Loc)
+				case "cancelled":
+					c.AmendGhost = info.Label
+				case "landed", "swapped":
+					c.AmendFrom = amendLine(info, d.Loc)
+				}
+				if c.Note == "" {
+					c.Note = amendLine(info, d.Loc)
+				}
+			}
 			row.Cells = append(row.Cells, c)
 		}
 		cd.Rows = append(cd.Rows, row)
@@ -774,14 +818,15 @@ type weekData struct {
 }
 
 type dayView struct {
-	Name    string
-	Date    time.Time
-	Session Session
-	Detail  string
-	Targets []string
-	GuideID string
-	FitURL  string // set only when the session carries steps
-	ZwoURL  string // bike steps days only
+	Name      string
+	Date      time.Time
+	Session   Session
+	Detail    string
+	Targets   []string
+	GuideID   string
+	FitURL    string // set only when the session carries steps
+	ZwoURL    string // bike steps days only
+	AmendLine string // what a standing amendment did to this day
 }
 
 func (s *server) week(w http.ResponseWriter, r *http.Request) {
@@ -838,6 +883,9 @@ func (s *server) week(w http.ResponseWriter, r *http.Request) {
 					dv.ZwoURL += wd.Archive.Query
 				}
 			}
+		}
+		if info, amended := s.amendInfoFor(dv.Date.Format("2006-01-02")); amended {
+			dv.AmendLine = amendLine(info, d.Loc)
 		}
 		wd.Days = append(wd.Days, dv)
 	}

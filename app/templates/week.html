@@ -10,6 +10,7 @@
     {{if .Session.Tag}}<span class="tag">{{.Session.Tag}}</span>{{end}}
   </div>
   <h2>{{emph .Session.Label}} {{template "guidebtn" .GuideID}}{{if .FitURL}} <a class="fitbtn" href="{{.FitURL}}" download>FIT</a>{{end}}{{if .ZwoURL}} <a class="fitbtn" href="{{.ZwoURL}}" download>ZWO</a>{{end}}</h2>
+  {{with .AmendLine}}<p class="amendline">{{emph .}}</p>{{end}}
   {{with .Detail}}<p class="detail">{{emph .}}</p>{{end}}
   {{template "targets" .Targets}}
 </section>

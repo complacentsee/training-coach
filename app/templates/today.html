@@ -42,6 +42,7 @@
   {{else if .Recorded}}
   <p class="recorded">Recorded</p>
   {{end}}
+  {{with .AmendLine}}<p class="amendline">{{emph .}}</p>{{end}}
   {{if and .Skippable (not .Recorded)}}
   {{/* Two taps, because the first is easy to hit by accident and the second
        is not. Armed, it says exactly what it is about to do. */}}
@@ -49,7 +50,13 @@
     <p class="skip-state">{{if .Skipped}}Not done{{with .SkipNote}} — {{.}}{{end}}{{end}}</p>
     <input type="text" name="note" placeholder="why (optional)" autocomplete="off" hidden>
     <button type="button" class="skipbtn">{{if .Skipped}}Undo{{else}}Couldn't do this{{end}}</button>
+    {{if .CanRework}}<button type="button" class="skipbtn reworkbtn" data-rework="{{iso .Today}}">Rework the week</button>{{end}}
   </form>
+  {{else if .CanRework}}
+  {{/* The standalone door: a recording or a grade removes the skip control,
+       but "ran at lunch, still want to shuffle" and "put it back" both need
+       a way in. The flow itself explains any refusal. */}}
+  <p class="detline"><button type="button" class="skipbtn reworkbtn" data-rework="{{iso .Today}}">Rework the week</button></p>
   {{end}}
 </section>
 {{end}}

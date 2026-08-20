@@ -210,6 +210,48 @@ func (s *Store) Skips() map[string]Entry {
 	return out
 }
 
+// kindAmend is a reschedule the athlete agreed to. The authored plan in
+// blocks/*.json never changes here: an amend entry is a dated fact — "this
+// session moves to Thursday" — and the rendered plan is the authored one
+// with the standing amendments replayed over it (amend.go). Append-only
+// like everything else: re-amending a date supersedes, and a "revoke" op
+// clears it, so the authored plan is always recoverable by replay.
+const kindAmend = "amend"
+
+// Amendments returns the standing amendment per source date, in log order
+// of the winning entry. Last write per date wins — a later amend entry for
+// the same date supersedes, and a winning revoke stands the date down.
+func (s *Store) Amendments() []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	win := map[string]int{}
+	for i, e := range s.all {
+		if e.Kind == kindAmend {
+			win[e.Date] = i
+		}
+	}
+	idx := make([]int, 0, len(win))
+	for _, i := range win {
+		if s.all[i].Key != "revoke" {
+			idx = append(idx, i)
+		}
+	}
+	sort.Ints(idx)
+	out := make([]Entry, len(idx))
+	for j, i := range idx {
+		out[j] = s.all[i]
+	}
+	return out
+}
+
+// Seq is a cheap monotonic version of the log, for caches keyed on "has
+// anything been appended". The log is append-only, so its length is one.
+func (s *Store) Seq() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.all)
+}
+
 // Grades returns the graded result per training date, keyed YYYY-MM-DD.
 // Grades are pushed in by Claude after the session data is analysed — the app
 // records compliance, but the grade needs Strava, so it arrives from outside.

@@ -28,6 +28,8 @@
           {{if $c.Session.Tag}}<span class="tag">{{$c.Session.Tag}}</span>{{end}}
           <span class="amt">{{amount $c.Session}}</span>
           <span class="lbl">{{emph $c.Session.Label}}</span>
+          {{if $c.AmendGhost}}<span class="ghost"><s>{{emph $c.AmendGhost}}</s>{{with $c.AmendTo}} <b>{{.}}</b>{{end}}</span>{{end}}
+          {{with $c.AmendFrom}}<span class="ghost">{{.}}</span>{{end}}
           {{if or $c.FitURL $c.Recorded}}<span class="chips">{{if $c.FitURL}}<a class="fitbtn" href="{{$c.FitURL}}" download>FIT</a>{{end}}{{if $c.ZwoURL}}<a class="fitbtn" href="{{$c.ZwoURL}}" download>ZWO</a>{{end}}{{if $c.Recorded}}<button type="button" class="rec" data-detail="{{iso $c.Date}}"
               data-sport="{{$c.Sport}}" data-block="{{$.Block}}" data-grade="{{$c.Grade}}" data-note="{{$c.Note}}"
               aria-label="View the activity recorded on {{date $c.Date}}" title="View activity">VIEW</button>{{end}}</span>{{end}}
