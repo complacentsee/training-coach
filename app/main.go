@@ -336,9 +336,12 @@ type todayData struct {
 	GradeNote string // and the reasoning behind it
 	// AmendLine says what a standing amendment did to this day ("Moved to
 	// Sat 22 — work conflict"); CanRework offers the flow. The flow itself
-	// explains any refusal, so the trigger's own test stays simple.
+	// explains any refusal, so the trigger's own test stays simple. Voided
+	// is every agreed change the current data dissolved — said here, where
+	// the athlete looks, not only in a server log.
 	AmendLine   string
 	CanRework   bool
+	Voided      []string
 	Detail      string
 	Targets     []string
 	GuideID     string
@@ -407,7 +410,11 @@ type taskView struct {
 }
 
 func (s *server) today(w http.ResponseWriter, r *http.Request) {
-	d := s.ds()
+	// One materialisation for the whole render: the log can move mid-request
+	// (a grade landing, a checkoff), and per-date lookups against a fresher
+	// build than the one the page was built from would disagree with it.
+	eff := s.effective()
+	d := eff.d
 	day := s.day(d)
 	iso := day.Format("2006-01-02")
 
@@ -504,9 +511,12 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	td.HasActivity = s.anyRecorded(iso)
 	td.Sport = sportOf(td.Session.Kind)
 
-	if info, amended := s.amendInfoFor(iso); amended {
+	if info, amended := eff.info[iso]; amended {
 		td.AmendLine = amendLine(info, d.Loc)
 	}
+	// An agreed change the current data dissolved has to be said where the
+	// athlete looks, not only in a server log nobody tails.
+	td.Voided = eff.voided
 	// The rework trigger renders on any real session in the current block —
 	// and on a vacated day, where the only offer is putting it back. The
 	// flow itself explains a refusal (steps, the record, a tagged week): a
@@ -675,7 +685,9 @@ type calCell struct {
 }
 
 func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
-	d := s.ds()
+	// One materialisation per render, as on the today page.
+	eff := s.effective()
+	d := eff.d
 	day := s.day(d)
 	blk, ok := d.blockFor(r.URL.Query().Get("block"), day)
 	if !ok {
@@ -766,7 +778,10 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 					c.Note = strings.TrimSpace("Skipped — " + sk.Note)
 				}
 			}
-			if info, amended := s.amendInfoFor(dt.Format("2006-01-02")); amended {
+			// Provenance stays out of c.Note: the cell's Note feeds the
+			// VIEW button's data-note, which the popover renders as the
+			// GRADE's reasoning — a slot the amend line must never wear.
+			if info, amended := eff.info[dt.Format("2006-01-02")]; amended {
 				switch info.Role {
 				case "vacated":
 					c.AmendGhost = info.Label
@@ -775,9 +790,6 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 					c.AmendGhost = info.Label
 				case "landed", "swapped":
 					c.AmendFrom = amendLine(info, d.Loc)
-				}
-				if c.Note == "" {
-					c.Note = amendLine(info, d.Loc)
 				}
 			}
 			row.Cells = append(row.Cells, c)
@@ -827,10 +839,13 @@ type dayView struct {
 	FitURL    string // set only when the session carries steps
 	ZwoURL    string // bike steps days only
 	AmendLine string // what a standing amendment did to this day
+	CanRework bool   // the trigger for reworking a coming day from the week view
 }
 
 func (s *server) week(w http.ResponseWriter, r *http.Request) {
-	d := s.ds()
+	// One materialisation per render, as on the today page.
+	eff := s.effective()
+	d := eff.d
 	day := s.day(d)
 	blk, ok := d.blockFor(r.URL.Query().Get("block"), day)
 	if !ok {
@@ -884,8 +899,16 @@ func (s *server) week(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if info, amended := s.amendInfoFor(dv.Date.Format("2006-01-02")); amended {
+		if info, amended := eff.info[dv.Date.Format("2006-01-02")]; amended {
 			dv.AmendLine = amendLine(info, d.Loc)
+		}
+		// The rework trigger lives here too: the central case is reworking
+		// a day BEFORE it arrives, and the today card can only speak for
+		// today. Current block, today or later, and a real session — or an
+		// amended day, whose only offer is putting it back.
+		if d.IsCurrent(blk, day) && dv.Date.Format("2006-01-02") >= day.Format("2006-01-02") &&
+			(dv.Session.Kind != KindRest || dv.AmendLine != "") {
+			dv.CanRework = true
 		}
 		wd.Days = append(wd.Days, dv)
 	}

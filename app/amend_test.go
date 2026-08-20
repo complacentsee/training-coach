@@ -136,10 +136,14 @@ func TestEffectiveMoveRendersEverywhere(t *testing.T) {
 		t.Errorf("vacated day's /api/day does not read rest: %s", rec.Body.String())
 	}
 
-	// The calendar carries the ghost.
+	// The calendar carries the ghost — and provenance stays out of the
+	// cell's title/Note, which feeds the popover's grade-note slot.
 	rec = get(ts.mux, "/calendar", nil)
 	if !strings.Contains(rec.Body.String(), "→ Thu 8") {
 		t.Errorf("calendar carries no ghost arrow for the vacated cell")
+	}
+	if strings.Contains(rec.Body.String(), `title="Moved`) {
+		t.Errorf("the amend line leaked into a cell title — that slot is the grade's")
 	}
 }
 
@@ -173,6 +177,10 @@ func TestVoidedAmendmentNeverBreaksServing(t *testing.T) {
 	}
 	if rec := get(ts.mux, "/calendar", nil); rec.Code != http.StatusOK {
 		t.Errorf("calendar = %d with a voided amendment in the log", rec.Code)
+	}
+	// The dissolution is said where the athlete looks, not only in a log.
+	if rec := get(ts.mux, "/", nil); !strings.Contains(rec.Body.String(), "no longer applies") {
+		t.Error("a voided amendment is invisible on the today page")
 	}
 }
 
@@ -292,6 +300,38 @@ func TestPostAmendAppliesAndRevokes(t *testing.T) {
 	wk, di, _ := ts.s.ds().Blocks[0].Locate(blk.DayOf(0, 2))
 	if wk.Days[di].Kind != KindEasy {
 		t.Errorf("authored week not restored: %s", wk.Days[di].Kind)
+	}
+
+	// Re-apply, then grade the landed day: the record now gates the revoke
+	// from BOTH ends — un-moving would strand the grade on a rest day.
+	rec = postJSON(ts.mux, "/api/amend", map[string]string{
+		"date": wed, "op": "move", "arg": thu, "note": "again"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("re-apply = %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := ts.s.store.Append(Entry{Kind: "grade", Date: thu, Val: "B", Note: "n"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, end := range []string{wed, thu} {
+		rec = postJSON(ts.mux, "/api/amend", map[string]string{"date": end, "op": "revoke"})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "graded") {
+			t.Errorf("revoke via %s with a graded end: %d %s", end, rec.Code, rec.Body.String())
+		}
+	}
+	if _, ok := ts.s.amendInfoFor(wed); !ok {
+		t.Error("the gated revoke dissolved the amendment anyway")
+	}
+}
+
+func TestWeekPageCarriesTheReworkTrigger(t *testing.T) {
+	dir := futureBlockDir(t)
+	ts := fitTestMuxServer(t, dir)
+	rec := get(ts.mux, "/week/1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("week = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "data-rework=") {
+		t.Error("the week page offers no rework trigger — the central case is reworking a coming day, and the today card can only speak for today")
 	}
 }
 

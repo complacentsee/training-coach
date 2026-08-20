@@ -14,6 +14,10 @@
   {{end}}
 </section>
 
+{{range .Voided}}
+<p class="voided">An agreed change no longer applies — the plan below is the authored one: {{.}}</p>
+{{end}}
+
 {{if .InBlock}}
 <section class="card {{kindCls .Session.Kind}}{{if .Skipped}} skipped{{end}}">
   <div class="card-hd">

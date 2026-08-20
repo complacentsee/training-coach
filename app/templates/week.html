@@ -13,6 +13,7 @@
   {{with .AmendLine}}<p class="amendline">{{emph .}}</p>{{end}}
   {{with .Detail}}<p class="detail">{{emph .}}</p>{{end}}
   {{template "targets" .Targets}}
+  {{if .CanRework}}<p class="detline"><button type="button" class="skipbtn reworkbtn" data-rework="{{iso .Date}}">Rework</button></p>{{end}}
 </section>
 {{end}}
 <nav class="pager">

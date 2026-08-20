@@ -16,9 +16,9 @@ package main
 // standing amendment VOIDS it loudly rather than failing the build, because
 // the log must never take serving hostage.
 //
-// v1 rules, from Adam's answers of 20 Aug 2026: same-week only; a session
-// may move onto a rest day, or a run may take an easy bike day's slot
-// (swap); graded/recorded days and down/taper/race weeks are immutable; a
+// v1 rules, decided 20 Aug 2026: same-week only; a session may move onto
+// a rest day, or a run may take an easy bike day's slot (swap);
+// graded/recorded days and down/taper/race weeks are immutable; a
 // benchmark tag may be stripped ("plain") — a missed DEC is dead until the
 // next cycle; sessions carrying steps are refused entirely, because an
 // amendment is invisible to the data Rev and a moved steps day would serve
@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -66,15 +67,22 @@ type effectiveSet struct {
 	voided []string             // amendments that no longer apply, for the log
 }
 
-// locateISO finds the block, week and day index an ISO date falls in.
+// locateISO finds the block, week and day index an ISO date falls in. A
+// live block wins over an archived one: an abandoned block may overlap its
+// replacement's dates, and an amendment belongs to the block being trained
+// — the same preference dataset.Current applies.
 func locateISO(blocks []*Block, loc *time.Location, iso string) (bi int, wk *Week, di int, ok bool) {
 	t, err := time.ParseInLocation("2006-01-02", iso, loc)
 	if err != nil {
 		return 0, nil, 0, false
 	}
-	for i, b := range blocks {
-		if w, d, ok := b.Locate(t); ok {
-			return i, w, d, true
+	for pass := 0; pass < 2; pass++ {
+		for i, b := range blocks {
+			if b.Archived == (pass == 1) {
+				if w, d, ok := b.Locate(t); ok {
+					return i, w, d, true
+				}
+			}
 		}
 	}
 	return 0, nil, 0, false
@@ -202,9 +210,10 @@ func buildEffective(d *dataset, entries []Entry) *effectiveSet {
 			es.info[op.Arg] = amendInfo{Role: "landed", Other: op.Date, Note: op.Note}
 		case "swap":
 			_, dwk, ddi, _ := locateISO(nd.Blocks, nd.Loc, op.Arg)
-			wk.Days[di], dwk.Days[ddi] = dwk.Days[ddi], src
+			dst := dwk.Days[ddi]
+			wk.Days[di], dwk.Days[ddi] = dst, src
 			es.info[op.Date] = amendInfo{Role: "swapped", Other: op.Arg, Label: src.Label, Note: op.Note}
-			es.info[op.Arg] = amendInfo{Role: "swapped", Other: op.Date, Label: dwk.Days[ddi].Label, Note: op.Note}
+			es.info[op.Arg] = amendInfo{Role: "swapped", Other: op.Date, Label: dst.Label, Note: op.Note}
 		case "cancel":
 			wk.Days[di] = Session{Kind: KindRest}
 			es.info[op.Date] = amendInfo{Role: "cancelled", Label: src.Label, Note: op.Note}
@@ -237,8 +246,13 @@ func (s *server) effective() *effectiveSet {
 	}
 	e := buildEffective(d, s.store.Amendments())
 	e.rev, e.seq = d.Rev, seq
-	for _, v := range e.voided {
-		log.Printf("amend: VOIDED, serving the authored day instead: %s", v)
+	// Voidings log when the SET changes, not on every rebuild — a rebuild
+	// happens on every log append, and a line repeated on each checkoff
+	// buries the one occurrence that mattered. The pages carry the banner.
+	if prev := s.eff.Load(); prev == nil || !slices.Equal(prev.voided, e.voided) {
+		for _, v := range e.voided {
+			log.Printf("amend: VOIDED, serving the authored day instead: %s", v)
+		}
 	}
 	s.eff.Store(e)
 	return e
@@ -314,17 +328,44 @@ func (s *server) postAmend(w http.ResponseWriter, r *http.Request) {
 	e := s.effective()
 
 	if req.Op == "revoke" {
-		if _, standing := e.info[req.Date]; !standing {
+		// Resolve to the standing ENTRY, not a role: either end of a move
+		// or a swap names it, and the revoke must land on the entry's own
+		// source date or Amendments()' last-write-wins never sees it.
+		var target *Entry
+		for _, a := range s.store.Amendments() {
+			if a.Date == req.Date || (a.Val != "" && a.Val == req.Date) {
+				a := a
+				target = &a
+				break
+			}
+		}
+		if target == nil {
 			http.Error(w, "nothing to revoke on "+req.Date, http.StatusBadRequest)
 			return
 		}
-		// Revoking by the OTHER end of a move lands on its source date.
-		date := req.Date
-		if info := e.info[req.Date]; info.Role == "landed" {
-			date = info.Other
+		// The record gates a revoke exactly as it gates an amendment: once
+		// either end carries a grade or a recording, un-moving the session
+		// would strand that fact against a day claiming something else.
+		grades := s.store.Grades()
+		for _, iso := range []string{target.Date, target.Val} {
+			if iso == "" {
+				continue
+			}
+			if _, graded := grades[iso]; graded {
+				http.Error(w, iso+" is graded — the record does not move", http.StatusBadRequest)
+				return
+			}
+			if s.anyRecorded(iso) {
+				http.Error(w, iso+" has a recording — the record does not move", http.StatusBadRequest)
+				return
+			}
 		}
-		if err := s.store.Append(Entry{Kind: kindAmend, Date: date, Key: "revoke", Note: req.Note}); err != nil {
+		if err := s.store.Append(Entry{Kind: kindAmend, Date: target.Date, Key: "revoke", Note: req.Note}); err != nil {
 			http.Error(w, "append: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, still := s.amendInfoFor(target.Date); still {
+			http.Error(w, "appended but still standing — check the server log", http.StatusInternalServerError)
 			return
 		}
 		s.jsonOK(w)
@@ -480,7 +521,7 @@ func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
 			out.Candidates = append(out.Candidates, reworkCandidate{
 				Op: "swap", Arg: dISO,
 				Title:  "Swap with " + day + "'s bike",
-				Detail: ds.Label + " takes " + out.Day + " instead",
+				Detail: stripEmph(ds.Label) + " takes " + out.Day + " instead",
 			})
 		}
 	}
