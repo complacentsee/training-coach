@@ -134,7 +134,7 @@ func amendCheck(blocks []*Block, loc *time.Location, taken map[string]amendInfo,
 		if src.Tag == "" {
 			return "no benchmark tag to strip"
 		}
-	case "move", "swap":
+	case "move", "swap", "displace":
 		dbi, dwk, ddi, ok := locateISO(blocks, loc, op.Arg)
 		if !ok {
 			return "destination outside any block"
@@ -154,6 +154,18 @@ func amendCheck(blocks []*Block, loc *time.Location, taken map[string]amendInfo,
 		}
 		if op.Op == "swap" && !(src.Kind.IsRun() && dst.Kind == KindBikeEasy) {
 			return "a swap is a run taking an easy bike day"
+		}
+		// Displace is the swap's harder sibling: the run takes the bike
+		// day's slot and the bike comes off the week instead of trading
+		// places — the primary sport outranks cross-training when both
+		// cannot happen.
+		if op.Op == "displace" {
+			if dst.Kind == KindRest {
+				return "the destination is a rest day — move instead"
+			}
+			if !(src.Kind.IsRun() && dst.Kind == KindBikeEasy) {
+				return "a displace is a run taking an easy bike day's slot"
+			}
 		}
 		// The identity rule, precisely: gaining or losing a structured
 		// workout is safe, two structured days trading places is not.
@@ -213,7 +225,7 @@ func amendNameProof(b *Block, wkN int, replaced map[int]Session) string {
 // Same-week ops resolve in the same variable context, so in practice this
 // re-proves what load proved — which is the point: prove, never argue.
 func amendEncodeProof(d *dataset, op amendOp) string {
-	if op.Op != "move" && op.Op != "swap" {
+	if op.Op != "move" && op.Op != "swap" && op.Op != "displace" {
 		return ""
 	}
 	bi, wk, di, ok := locateISO(d.Blocks, d.Loc, op.Date)
@@ -310,6 +322,15 @@ func buildEffective(d *dataset, entries []Entry) *effectiveSet {
 			wk.Days[di], dwk.Days[ddi] = dst, src
 			es.info[op.Date] = amendInfo{Role: "swapped", Other: op.Arg, Label: src.Label, Note: op.Note}
 			es.info[op.Arg] = amendInfo{Role: "swapped", Other: op.Date, Label: dst.Label, Note: op.Note}
+		case "displace":
+			_, dwk, ddi, _ := locateISO(nd.Blocks, nd.Loc, op.Arg)
+			dropped := dwk.Days[ddi]
+			dwk.Days[ddi] = src
+			wk.Days[di] = Session{Kind: KindRest}
+			es.info[op.Date] = amendInfo{Role: "vacated", Other: op.Arg, Label: src.Label, Note: op.Note}
+			// The landed side remembers what it cost: the dropped session's
+			// label rides in Label, and the provenance line says so.
+			es.info[op.Arg] = amendInfo{Role: "landed", Other: op.Date, Label: dropped.Label, Note: op.Note}
 		case "cancel":
 			wk.Days[di] = Session{Kind: KindRest}
 			es.info[op.Date] = amendInfo{Role: "cancelled", Label: src.Label, Note: op.Note}
@@ -381,6 +402,10 @@ func amendLine(info amendInfo, loc *time.Location) string {
 	case "vacated":
 		return "Moved to " + amendDayName(info.Other, loc) + suffix
 	case "landed":
+		if info.Label != "" {
+			return "Moved from " + amendDayName(info.Other, loc) +
+				", dropping " + stripEmph(info.Label) + suffix
+		}
 		return "Moved from " + amendDayName(info.Other, loc) + suffix
 	case "swapped":
 		return "Swapped with " + amendDayName(info.Other, loc) + suffix
@@ -501,7 +526,7 @@ func (s *server) postAmend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if (op.Op == "move" || op.Op == "swap") && op.Arg < today {
+	if (op.Op == "move" || op.Op == "swap" || op.Op == "displace") && op.Arg < today {
 		http.Error(w, "the destination is in the past", http.StatusBadRequest)
 		return
 	}
@@ -610,29 +635,39 @@ func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		day := amendDayName(dISO, d.Loc)
-		var cand reworkCandidate
+		var cands []reworkCandidate
 		switch {
 		case ds.Kind == KindRest:
-			cand = reworkCandidate{
+			cands = append(cands, reworkCandidate{
 				Op: "move", Arg: dISO,
 				Title:  "Move to " + day,
 				Detail: "a rest day — nothing is displaced",
-			}
+			})
 		case src.Kind.IsRun() && ds.Kind == KindBikeEasy:
-			cand = reworkCandidate{
-				Op: "swap", Arg: dISO,
-				Title:  "Swap with " + day + "'s bike",
-				Detail: stripEmph(ds.Label) + " takes " + out.Day + " instead",
-			}
+			// Both readings of run-outranks-bike, side by side: trade
+			// places, or take the slot and let the bike go.
+			cands = append(cands,
+				reworkCandidate{
+					Op: "swap", Arg: dISO,
+					Title:  "Swap with " + day + "'s bike",
+					Detail: stripEmph(ds.Label) + " takes " + out.Day + " instead",
+				},
+				reworkCandidate{
+					Op: "displace", Arg: dISO,
+					Title:  "Move to " + day + ", dropping its bike",
+					Detail: stripEmph(ds.Label) + " comes off the week; " + out.Day + " becomes rest",
+				})
 		default:
 			continue
 		}
 		// Offered only where the gate would accept it — the candidate list
 		// probes the real validator rather than restating its rules.
-		if amendCheck(d.Blocks, d.Loc, e.info, amendOp{Date: iso, Op: cand.Op, Arg: cand.Arg}) != "" {
-			continue
+		for _, cand := range cands {
+			if amendCheck(d.Blocks, d.Loc, e.info, amendOp{Date: iso, Op: cand.Op, Arg: cand.Arg}) != "" {
+				continue
+			}
+			out.Candidates = append(out.Candidates, cand)
 		}
-		out.Candidates = append(out.Candidates, cand)
 	}
 	if src.Tag != "" {
 		out.Candidates = append(out.Candidates, reworkCandidate{

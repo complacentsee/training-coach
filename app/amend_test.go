@@ -248,6 +248,18 @@ func futureBlockDir(t *testing.T) string {
 		monday = now.AddDate(0, 0, 1)
 	}
 	blk["start"] = monday.Format("2006-01-02")
+	// Week 1's Friday becomes an easy bike so the swap/displace paths have
+	// a destination; the defaults library carries no bike guide, so the
+	// block brings its own — the block-level override path.
+	weeks := blk["weeks"].([]any)
+	days := weeks[0].(map[string]any)["days"].([]any)
+	days[4] = map[string]any{"kind": "bike_easy", "label": "Easy spin", "mins": 30}
+	blk["guides"] = map[string]any{
+		"s-bike-easy": map[string]any{
+			"id": "s-bike-easy", "title": "Easy spin", "summary": "Z1",
+			"sections": []any{map[string]any{"label": "How", "text": "Spin easy."}},
+		},
+	}
 	out, err := json.Marshal(blk)
 	if err != nil {
 		t.Fatal(err)
@@ -380,6 +392,64 @@ func TestAStructuredSessionTravelsWithItsSteps(t *testing.T) {
 	if rec := get(ts.mux, "/fit/"+tue, nil); rec.Code != http.StatusNotFound {
 		t.Errorf("/fit/%s (vacated) = %d, want 404", tue, rec.Code)
 	}
+}
+
+// TestDisplaceDropsTheBikeAndMovesTheRun: the swap's harder sibling — the
+// run takes the easy bike's slot, the bike comes off the week, and the
+// vacated day becomes rest. Both readings of run-outranks-bike are offered
+// side by side, and revoking restores both slots.
+func TestDisplaceDropsTheBikeAndMovesTheRun(t *testing.T) {
+	dir := futureBlockDir(t)
+	ts := fitTestMuxServer(t, dir)
+	blk := ts.s.data.Load().Blocks[0]
+	wed := blk.DayOf(0, 2).Format("2006-01-02") // easy run
+	fri := blk.DayOf(0, 4).Format("2006-01-02") // easy spin (fixture-injected)
+
+	// Both options appear for the bike day…
+	rec := get(ts.mux, "/api/rework?date="+wed, nil)
+	for _, want := range []string{`"swap"`, `"displace"`, "dropping its bike"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("candidates missing %s: %s", want, rec.Body.String())
+		}
+	}
+
+	rec = postJSON(ts.mux, "/api/amend", map[string]string{
+		"date": wed, "op": "displace", "arg": fri, "note": "one has to go"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("displace = %d: %s", rec.Code, rec.Body.String())
+	}
+	eff := ts.s.ds().Blocks[0]
+	loc := ts.s.data.Load().Loc
+	day := func(iso string) time.Time { tm, _ := time.ParseInLocation("2006-01-02", iso, loc); return tm }
+	if wk, di, _ := eff.Locate(day(fri)); wk.Days[di].Kind != KindEasy {
+		t.Errorf("the run did not take the bike's slot: %s", wk.Days[di].Kind)
+	}
+	if wk, di, _ := eff.Locate(day(wed)); wk.Days[di].Kind != KindRest {
+		t.Errorf("the vacated day is not rest: %s", wk.Days[di].Kind)
+	}
+	if info, _ := ts.s.amendInfoFor(fri); info.Label != "Easy spin" {
+		t.Errorf("the landed side forgot what it cost: %+v", info)
+	}
+	if line := amendLine(mustInfo(t, ts.s, fri), loc); !strings.Contains(line, "dropping Easy spin") {
+		t.Errorf("provenance line says %q, want the dropped bike named", line)
+	}
+
+	rec = postJSON(ts.mux, "/api/amend", map[string]string{"date": fri, "op": "revoke"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke = %d: %s", rec.Code, rec.Body.String())
+	}
+	if wk, di, _ := ts.s.ds().Blocks[0].Locate(day(fri)); wk.Days[di].Kind != KindBikeEasy {
+		t.Errorf("the bike did not come back: %s", wk.Days[di].Kind)
+	}
+}
+
+func mustInfo(t *testing.T, s *server, iso string) amendInfo {
+	t.Helper()
+	info, ok := s.amendInfoFor(iso)
+	if !ok {
+		t.Fatalf("no amendInfo for %s", iso)
+	}
+	return info
 }
 
 // TestSwapOfTwoStructuredDaysIsRefused: the one case the identity law
