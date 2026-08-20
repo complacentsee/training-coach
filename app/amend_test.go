@@ -260,6 +260,12 @@ func futureBlockDir(t *testing.T) string {
 			"sections": []any{map[string]any{"label": "How", "text": "Spin easy."}},
 		},
 	}
+	// A kind-gated tracked task, so the tracked-loss path has something to
+	// lose: "str" rides the quality day the way Strength A does.
+	blk["checklist"] = append(blk["checklist"].([]any), map[string]any{
+		"key": "str", "label": "Strength", "guide": "task-daily",
+		"when": `{{and .InBlock (eq .Kind "quality")}}`,
+	})
 	out, err := json.Marshal(blk)
 	if err != nil {
 		t.Fatal(err)
@@ -269,6 +275,25 @@ func futureBlockDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "blocks", "example-base-block.json"), append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The athlete rides along so its issue can track the fixture's tasks:
+	// the embedded defaults athlete plus "str" on the Achilles.
+	araw, err := os.ReadFile("defaults/athlete.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ath map[string]any
+	if err := json.Unmarshal(araw, &ath); err != nil {
+		t.Fatal(err)
+	}
+	issue := ath["issues"].([]any)[0].(map[string]any)
+	issue["tracks"] = []any{"daily", "str"}
+	aout, err := json.Marshal(ath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "athlete.json"), append(aout, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir

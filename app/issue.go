@@ -40,8 +40,14 @@ type Issue struct {
 	// so "retest at weeks 1, 5, 9, 13" is derived from the sessions carrying
 	// that tag rather than written out and left behind by the next block.
 	Retest string `json:"retest,omitempty"`
-	Scale  Scale  `json:"scale"`
-	Bands  []Band `json:"bands"`
+	// Tracks names the checklist task keys that carry this issue's rehab
+	// work — the sessions the protocol lives inside during its loaded
+	// phases. Declared so a missed one can be evaluated against the issue
+	// it serves, and validated at load against the blocks' checklists: a
+	// typo'd key would otherwise evaluate to silence forever.
+	Tracks []string `json:"tracks,omitempty"`
+	Scale  Scale    `json:"scale"`
+	Bands  []Band   `json:"bands"`
 }
 
 // Scale is the range of the daily rating, with a word at each end so the

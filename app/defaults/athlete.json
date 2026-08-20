@@ -25,6 +25,7 @@
    "ask": "How stiff is it on the first few steps this morning?",
    "hint": "one rating a day, before you walk it off",
    "guide": "task-daily",
+   "tracks": ["daily"],
    "scale": {
     "min": 0,
     "max": 4,

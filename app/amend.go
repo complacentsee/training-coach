@@ -661,10 +661,19 @@ func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// Offered only where the gate would accept it — the candidate list
-		// probes the real validator rather than restating its rules.
+		// probes the real validator rather than restating its rules — and a
+		// candidate that would take tracked rehab work off the week says so
+		// by name.
 		for _, cand := range cands {
 			if amendCheck(d.Blocks, d.Loc, e.info, amendOp{Date: iso, Op: cand.Op, Arg: cand.Arg}) != "" {
 				continue
+			}
+			replaced := map[int]Session{di: {Kind: KindRest}, i: src}
+			if cand.Op == "swap" {
+				replaced[di] = ds
+			}
+			if loss := s.trackedLoss(d, blk, wk, replaced); len(loss) > 0 {
+				cand.Detail += "; also drops " + strings.Join(loss, ", ")
 			}
 			out.Candidates = append(out.Candidates, cand)
 		}
@@ -676,9 +685,12 @@ func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
 			Detail: "the " + src.Tag + " measurement waits for its next cycle",
 		})
 	}
+	cancelDetail := "the day becomes rest; the week's volume drops by " + src.Amount(s.units())
+	if loss := s.trackedLoss(d, blk, wk, map[int]Session{di: {Kind: KindRest}}); len(loss) > 0 {
+		cancelDetail += "; also drops " + strings.Join(loss, ", ")
+	}
 	out.Candidates = append(out.Candidates,
-		reworkCandidate{Op: "cancel", Title: "Drop it",
-			Detail: "the day becomes rest; the week's volume drops by " + src.Amount(s.units())},
+		reworkCandidate{Op: "cancel", Title: "Drop it", Detail: cancelDetail},
 		reworkCandidate{Title: "Absorb it — change nothing",
 			Detail: "the plan stands; a skip already tells the story"})
 	s.writeJSON(w, out)

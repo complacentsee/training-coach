@@ -366,6 +366,25 @@ func loadDataset(dir string, fallbackLoc *time.Location) (*dataset, error) {
 		}
 	}
 
+	// A tracked task no loaded block's checklist offers is a typo'd key
+	// that would evaluate to silence forever — refused here like every
+	// other dangling name.
+	for _, is := range d.Athlete.Issues {
+		for _, key := range is.Tracks {
+			found := false
+			for _, b := range d.Blocks {
+				for _, it := range b.Checklist {
+					if it.Key == key {
+						found = true
+					}
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("issue %q tracks checklist key %q, which no loaded block offers", is.Key, key)
+			}
+		}
+	}
+
 	d.Rev = hex.EncodeToString(h.Sum(nil))[:12]
 	return d, nil
 }

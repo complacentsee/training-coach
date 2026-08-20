@@ -133,6 +133,12 @@ thing the block is rehabbing.
   the scale's written definition and keeps the bands meaningful.
 - `retest` names a benchmark tag; retest weeks derive from the sessions
   carrying it.
+- `tracks` names checklist task keys that carry the issue's rehab work
+  (e.g. the strength sessions its protocol lives inside). The issue card
+  then reports unlogged tracked work for the week, and a reschedule that
+  would take a tracked task off the week says so by name. Every tracked
+  key must exist in some loaded block's checklist — a key nothing offers
+  is refused at load.
 - Scales are capped at 21 points, because a rating is a row of buttons on a
   phone and beyond that it stops being one.
 

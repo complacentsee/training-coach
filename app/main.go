@@ -198,6 +198,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/entry", s.postEntry)
 	mux.HandleFunc("POST /api/amend", s.postAmend)
 	mux.HandleFunc("GET /api/rework", s.getRework)
+	mux.HandleFunc("GET /api/issue-adherence", s.getIssueAdherence)
 	mux.HandleFunc("POST /api/reload", s.postReload)
 	mux.HandleFunc("GET /api/entries", s.getEntries)
 	mux.HandleFunc("GET /api/guides", s.getGuides)
@@ -372,6 +373,7 @@ type issueView struct {
 	Last    *Entry
 	Phase   string // the rehab stage this week, if the block declares one
 	Detail  string
+	Track   *trackView // unlogged tracked work this week, when any exists
 }
 
 // dotView is one button on the scale, carrying what the server says that value
@@ -609,6 +611,11 @@ func (s *server) issueViews(d *dataset, blk *Block, week int, iso string) []issu
 		}
 		if p := blk.PhaseForIssue(is.Key, week); p != nil {
 			v.Phase, v.Detail = p.Name, p.Detail
+		}
+		if day, ok := dayFromISO(d, iso); ok {
+			if wk, _, in := blk.Locate(day); in {
+				v.Track = s.trackAssessment(d, blk, is, wk, iso)
+			}
 		}
 		out = append(out, v)
 	}

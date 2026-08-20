@@ -112,6 +112,12 @@
           },
           "short": {
             "type": "string"
+          },
+          "tracks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
