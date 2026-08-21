@@ -35,6 +35,22 @@ type dataset struct {
 	Rev      string // content hash, reported by /healthz
 	LoadedAt time.Time
 	Origins  map[string]string // logical path → "embedded" or the file it came from
+
+	// identRev is set only on an EFFECTIVE dataset whose standing
+	// amendments changed what some date's workout serial would serve
+	// (amend.go). Workout identity is the one consumer that must see the
+	// overlay; /healthz, verify and every cache keep the authored Rev.
+	identRev string
+}
+
+// identityRev is what fitIdentity derives serials from: the authored Rev,
+// suffixed when an amendment made a standing serial's bytes change — the
+// identity law, kept under the overlay.
+func (d *dataset) identityRev() string {
+	if d.identRev != "" {
+		return d.identRev
+	}
+	return d.Rev
 }
 
 // Current is the block being trained. Everything else is archived — there is no

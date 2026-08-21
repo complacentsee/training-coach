@@ -24,15 +24,18 @@ package main
 //
 // Structured sessions TRAVEL WITH their steps. The identity law forbids a
 // standing serial serving changed bytes, and amendments are invisible to
-// the data Rev — but a date that never served a workout may start to, and
-// one that stops serving tells no lie, so a session's steps follow it onto
-// a rest day or through a run↔bike swap. What stays refused is two
-// structured days trading places: both dates' bytes would change under
-// unchanged serials. That case waits for fitIdentity to fold amendment
-// state in. The proofs dryRun runs at load — the on-watch name set and the
-// day's encode — relocate to the POST gate for the slots an op touches.
+// the data Rev — a date that never served a workout may start to, and one
+// that stops serving tells no lie, so single-sided ops rotate nothing. Two
+// structured days trading places WOULD change both dates' bytes under
+// standing serials, so exactly those ops fold into identityRev: the
+// materialiser hashes the rotating set and every workout serial re-mints,
+// the same consequence any plan edit has (re-send the fortnight after).
+// The proofs dryRun runs at load — the on-watch name set and the day's
+// encode — relocate to the POST gate for the slots an op touches.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -66,11 +69,12 @@ type amendInfo struct {
 // effectiveSet is one materialisation: the dataset handlers actually serve.
 // Cached on (data Rev, log Seq) — the only two things that can change it.
 type effectiveSet struct {
-	rev    string
-	seq    int
-	d      *dataset
-	info   map[string]amendInfo // ISO date → what to say about it
-	voided []string             // amendments that no longer apply, for the log
+	rev     string
+	seq     int
+	d       *dataset
+	info    map[string]amendInfo // ISO date → what to say about it
+	voided  []string             // amendments that no longer apply, for the log
+	applied int                  // standing amendments in effect, for /healthz
 }
 
 // locateISO finds the block, week and day index an ISO date falls in. A
@@ -166,11 +170,6 @@ func amendCheck(blocks []*Block, loc *time.Location, taken map[string]amendInfo,
 			if !(src.Kind.IsRun() && dst.Kind == KindBikeEasy) {
 				return "a displace is a run taking an easy bike day's slot"
 			}
-		}
-		// The identity rule, precisely: gaining or losing a structured
-		// workout is safe, two structured days trading places is not.
-		if len(src.Steps) > 0 && len(dst.Steps) > 0 {
-			return "both days carry structured workouts — the watch identity cannot follow two trading places"
 		}
 		// A structured session in a new slot takes a new on-watch name;
 		// the block's 15-character dedupe set must stay collision-free.
@@ -296,12 +295,18 @@ func buildEffective(d *dataset, entries []Entry) *effectiveSet {
 	nd := *d
 	nd.Blocks = append([]*Block(nil), d.Blocks...)
 	cloned := map[int]bool{}
+	// rotating collects the ops that make a standing serial's bytes change
+	// — both-structured trades, and nothing else. Single-sided ops (a date
+	// gaining its first workout, or losing its only one) tell no serial a
+	// lie and rotate nothing.
+	var rotating []string
 	for _, e := range entries {
 		op := amendOpOf(e)
 		if reason := amendCheck(nd.Blocks, nd.Loc, es.info, op); reason != "" {
 			es.voided = append(es.voided, fmt.Sprintf("%s %s %s: %s", op.Date, op.Op, op.Arg, reason))
 			continue
 		}
+		es.applied++
 		bi, _, di, _ := locateISO(nd.Blocks, nd.Loc, op.Date)
 		if !cloned[bi] {
 			nd.Blocks[bi] = cloneBlock(nd.Blocks[bi])
@@ -319,12 +324,18 @@ func buildEffective(d *dataset, entries []Entry) *effectiveSet {
 		case "swap":
 			_, dwk, ddi, _ := locateISO(nd.Blocks, nd.Loc, op.Arg)
 			dst := dwk.Days[ddi]
+			if len(src.Steps) > 0 && len(dst.Steps) > 0 {
+				rotating = append(rotating, op.Date+"|"+op.Op+"|"+op.Arg)
+			}
 			wk.Days[di], dwk.Days[ddi] = dst, src
 			es.info[op.Date] = amendInfo{Role: "swapped", Other: op.Arg, Label: src.Label, Note: op.Note}
 			es.info[op.Arg] = amendInfo{Role: "swapped", Other: op.Date, Label: dst.Label, Note: op.Note}
 		case "displace":
 			_, dwk, ddi, _ := locateISO(nd.Blocks, nd.Loc, op.Arg)
 			dropped := dwk.Days[ddi]
+			if len(src.Steps) > 0 && len(dropped.Steps) > 0 {
+				rotating = append(rotating, op.Date+"|"+op.Op+"|"+op.Arg)
+			}
 			dwk.Days[ddi] = src
 			wk.Days[di] = Session{Kind: KindRest, Label: "Rest"}
 			es.info[op.Date] = amendInfo{Role: "vacated", Other: op.Arg, Label: src.Label, Note: op.Note}
@@ -339,6 +350,10 @@ func buildEffective(d *dataset, entries []Entry) *effectiveSet {
 			wk.Days[di] = src
 			es.info[op.Date] = amendInfo{Role: "plained", Note: op.Note}
 		}
+	}
+	if len(rotating) > 0 {
+		h := sha256.Sum256([]byte(strings.Join(rotating, "\n")))
+		nd.identRev = d.Rev + "+" + hex.EncodeToString(h[:6])
 	}
 	es.d = &nd
 	return es
@@ -645,17 +660,23 @@ func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
 			})
 		case src.Kind.IsRun() && ds.Kind == KindBikeEasy:
 			// Both readings of run-outranks-bike, side by side: trade
-			// places, or take the slot and let the bike go.
+			// places, or take the slot and let the bike go. Two structured
+			// days trading rotates every watch identity — said where the
+			// decision is made, because the cost lands on the watch.
+			hint := ""
+			if len(src.Steps) > 0 && len(ds.Steps) > 0 {
+				hint = "; watch workouts re-mint — re-send the fortnight after"
+			}
 			cands = append(cands,
 				reworkCandidate{
 					Op: "swap", Arg: dISO,
 					Title:  "Swap with " + day + "'s bike",
-					Detail: stripEmph(ds.Label) + " takes " + out.Day + " instead",
+					Detail: stripEmph(ds.Label) + " takes " + out.Day + " instead" + hint,
 				},
 				reworkCandidate{
 					Op: "displace", Arg: dISO,
 					Title:  "Move to " + day + ", dropping its bike",
-					Detail: stripEmph(ds.Label) + " comes off the week; " + out.Day + " becomes rest",
+					Detail: stripEmph(ds.Label) + " comes off the week; " + out.Day + " becomes rest" + hint,
 				})
 		default:
 			continue

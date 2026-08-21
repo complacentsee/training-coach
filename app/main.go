@@ -1284,7 +1284,7 @@ func (k exportKind) encodeDay(d *dataset, blk *Block, wk *Week, di int, date tim
 	if err != nil {
 		return "", nil, time.Time{}, err
 	}
-	serial, created := fitIdentity(d.Rev, blk.ID, date)
+	serial, created := fitIdentity(d.identityRev(), blk.ID, date)
 	body, err := k.encode(d, &sess, name, rs, serial, created)
 	if err != nil {
 		return "", nil, time.Time{}, err
@@ -1509,16 +1509,28 @@ func (s *server) manifest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
-	d := s.ds()
+	e := s.effective()
+	d := e.d
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	m := map[string]any{
 		"status": "ok",
 		"build":  buildHash,
 		"data":   d.Rev,
 		"loaded": d.LoadedAt.UTC().Format(time.RFC3339),
 		"blocks": len(d.Blocks),
-	})
+	}
+	// The overlay's state, visible from outside: how many amendments are in
+	// effect, and the identity rev workouts currently mint under when it
+	// differs from the authored one. data stays the authored Rev — verify
+	// compares against push-data's local hash and must keep doing so.
+	if e.applied > 0 {
+		m["amend"] = e.applied
+		if ir := d.identityRev(); ir != d.Rev {
+			m["ident"] = ir
+		}
+	}
+	_ = json.NewEncoder(w).Encode(m)
 }
 
 // postReload is the manual trigger, for when thirty seconds is thirty seconds

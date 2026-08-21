@@ -255,13 +255,17 @@ func futureBlockDir(t *testing.T) string {
 	// a destination; the defaults library carries no bike guide, so the
 	// block brings its own — the block-level override path.
 	weeks := blk["weeks"].([]any)
-	days := weeks[0].(map[string]any)["days"].([]any)
-	days[4] = map[string]any{"kind": "bike_easy", "label": "Easy spin", "mins": 30}
 	blk["guides"] = map[string]any{
 		"s-bike-easy": map[string]any{
 			"id": "s-bike-easy", "title": "Easy spin", "summary": "Z1",
 			"sections": []any{map[string]any{"label": "How", "text": "Spin easy."}},
 		},
+	}
+	// The spin carries steps so the both-structured trade has a real case.
+	weeks[0].(map[string]any)["days"].([]any)[4] = map[string]any{
+		"kind": "bike_easy", "label": "Easy spin", "mins": 30,
+		"steps": []any{map[string]any{"role": "active", "time": "30:00",
+			"power": []any{"{{pct 45 .Athlete.Power.ftp}}", "{{pct 55 .Athlete.Power.ftp}}"}}},
 	}
 	// A kind-gated tracked task, so the tracked-loss path has something to
 	// lose: "str" rides the quality day the way Strength A does.
@@ -420,6 +424,11 @@ func TestAStructuredSessionTravelsWithItsSteps(t *testing.T) {
 	if rec := get(ts.mux, "/fit/"+tue, nil); rec.Code != http.StatusNotFound {
 		t.Errorf("/fit/%s (vacated) = %d, want 404", tue, rec.Code)
 	}
+	// A single-sided move rotates nothing: the landed date's serial never
+	// served and the vacated one stops serving — no serial tells a lie.
+	if ir := ts.s.ds().identityRev(); ir != ts.s.data.Load().Rev {
+		t.Errorf("a single-sided move rotated identity to %q — only both-structured trades may", ir)
+	}
 }
 
 // TestDisplaceDropsTheBikeAndMovesTheRun: the swap's harder sibling — the
@@ -480,20 +489,46 @@ func mustInfo(t *testing.T, s *server, iso string) amendInfo {
 	return info
 }
 
-// TestSwapOfTwoStructuredDaysIsRefused: the one case the identity law
-// genuinely forbids — both dates' bytes would change under standing
-// serials — stays refused until fitIdentity folds amendment state in.
-func TestSwapOfTwoStructuredDaysIsRefused(t *testing.T) {
-	loc := chicago(t)
-	b := &Block{ID: "x", Start: "2026-01-05", Weeks: []*Week{{N: 1, Days: []Session{
-		{Kind: KindBikeEasy, Label: "Spin", Steps: []WorkoutStep{{}}},
-		{Kind: KindQuality, Label: "Reps", Steps: []WorkoutStep{{}}},
-		{Kind: KindRest}, {Kind: KindRest}, {Kind: KindRest}, {Kind: KindRest}, {Kind: KindRest},
-	}}}}
-	b.SetLocation(loc)
-	got := amendCheck([]*Block{b}, loc, map[string]amendInfo{},
-		amendOp{Date: "2026-01-06", Op: "swap", Arg: "2026-01-05"})
-	if !strings.Contains(got, "both days carry structured workouts") {
-		t.Errorf("two structured days trading places = %q, want the identity refusal", got)
+// TestTradingTwoStructuredDaysRotatesIdentity: the formerly forbidden case
+// — both dates' bytes would change under standing serials — is allowed
+// because exactly those ops fold into identityRev: every workout serial
+// re-mints (the same consequence any plan edit has), and revoking restores
+// the authored identity byte-exactly.
+func TestTradingTwoStructuredDaysRotatesIdentity(t *testing.T) {
+	dir := futureBlockDir(t)
+	ts := fitTestMuxServer(t, dir)
+	authored := ts.s.data.Load()
+	blk := authored.Blocks[0]
+	tue := blk.DayOf(0, 1).Format("2006-01-02") // quality, steps
+	fri := blk.DayOf(0, 4).Format("2006-01-02") // spin, steps (fixture)
+
+	if ir := ts.s.ds().identityRev(); ir != authored.Rev {
+		t.Fatalf("identityRev %q differs from the Rev with no amendments", ir)
+	}
+	rec := postJSON(ts.mux, "/api/amend", map[string]string{
+		"date": tue, "op": "swap", "arg": fri, "note": "trade"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("both-structured swap = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ts.s.ds().identityRev() == authored.Rev {
+		t.Error("two structured days traded places and no identity rotated")
+	}
+	// Both dates serve their arrived workouts under the rotated identity.
+	for _, iso := range []string{tue, fri} {
+		if rec := get(ts.mux, "/fit/"+iso, nil); rec.Code != http.StatusOK {
+			t.Errorf("/fit/%s = %d after the trade", iso, rec.Code)
+		}
+	}
+	// The overlay state is visible from outside.
+	if rec := get(ts.mux, "/healthz", nil); !strings.Contains(rec.Body.String(), `"amend":1`) ||
+		!strings.Contains(rec.Body.String(), `"ident"`) {
+		t.Errorf("healthz hides the overlay state: %s", rec.Body.String())
+	}
+	// Revoking restores the authored identity exactly.
+	if rec := postJSON(ts.mux, "/api/amend", map[string]string{"date": fri, "op": "revoke"}); rec.Code != http.StatusOK {
+		t.Fatalf("revoke = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ir := ts.s.ds().identityRev(); ir != authored.Rev {
+		t.Errorf("identity did not return with the authored plan: %q", ir)
 	}
 }
