@@ -80,8 +80,8 @@ func (s *server) trackAssessment(d *dataset, blk *Block, is *Issue, wk *Week, to
 	if len(days) == 0 {
 		return nil
 	}
-	var missed []trackDay
-	var done, remaining int
+	var missed, remaining []trackDay
+	var done int
 	for _, td := range days {
 		switch {
 		case td.Done:
@@ -89,7 +89,7 @@ func (s *server) trackAssessment(d *dataset, blk *Block, is *Issue, wk *Week, to
 		case td.Past:
 			missed = append(missed, td)
 		default:
-			remaining++
+			remaining = append(remaining, td)
 		}
 	}
 	if len(missed) == 0 {
@@ -99,12 +99,16 @@ func (s *server) trackAssessment(d *dataset, blk *Block, is *Issue, wk *Week, to
 	for _, m := range missed {
 		v.Lines = append(v.Lines, m.Label+" ("+m.Day+") not logged")
 	}
-	plural := "s"
-	if remaining == 1 {
-		plural = ""
+	line := fmt.Sprintf("This week: %d of %d done", done, len(days))
+	switch {
+	case len(remaining) == 0:
+		line += " · no slots left"
+	case len(remaining) == 1:
+		line += " · 1 slot left: " + remaining[0].Label + slotWhen(remaining[0])
+	default:
+		line += fmt.Sprintf(" · %d slots left, next: %s%s", len(remaining), remaining[0].Label, slotWhen(remaining[0]))
 	}
-	v.Lines = append(v.Lines, fmt.Sprintf("This week: %d of %d done, %d slot%s left",
-		done, len(days), remaining, plural))
+	v.Lines = append(v.Lines, line)
 	// The phase is NOT restated here: the card already wears its phase line,
 	// and the API carries it as its own field for readers without the card.
 	if rs := s.store.Ratings(is.Key); len(rs) > 0 {
@@ -187,7 +191,8 @@ func (s *server) missedWork(d *dataset, blk *Block, wk *Week, todayISO string) *
 		is := &d.Athlete.Issues[ii]
 		days := s.trackWeek(d, blk, is, wk, todayISO)
 		var missed int
-		var done, remaining int
+		var done int
+		var rem []trackDay
 		for _, td := range days {
 			switch {
 			case td.Done:
@@ -200,28 +205,23 @@ func (s *server) missedWork(d *dataset, blk *Block, wk *Week, todayISO string) *
 					Meta: "offered " + td.Day + " · " + is.Heading(),
 				})
 			default:
-				remaining++
+				rem = append(rem, td)
 			}
 		}
 		if missed == 0 {
 			continue
 		}
-		plural := "s"
-		if remaining == 1 {
-			plural = ""
-		}
-		line := fmt.Sprintf("%s: %d of %d done this week, %d slot%s left",
-			is.Heading(), done, len(days), remaining, plural)
-		if rs := s.store.Ratings(is.Key); len(rs) > 0 {
-			last := rs[len(rs)-1]
-			if n, err := strconv.Atoi(last.Val); err == nil {
-				if b := is.BandFor(n); b != nil {
-					line += " · last rated " + last.Val + " (" + b.Label + ")"
-					if b.Tone == "stop" {
-						v.Tone = "stop"
-					}
-				}
-			}
+		// The slot is named, not counted: "1 slot left" answers nothing —
+		// WHEN it is and WHAT it is are the whole question. The rating is
+		// not restated here; its card is directly above.
+		line := fmt.Sprintf("%s: %d of %d done this week", is.Heading(), done, len(days))
+		switch {
+		case len(rem) == 0:
+			line += " · no slots left"
+		case len(rem) == 1:
+			line += " · 1 slot left: " + rem[0].Label + slotWhen(rem[0])
+		default:
+			line += fmt.Sprintf(" · %d slots left, next: %s%s", len(rem), rem[0].Label, slotWhen(rem[0]))
 		}
 		v.Lines = append(v.Lines, line)
 	}
@@ -235,6 +235,14 @@ func (s *server) missedWork(d *dataset, blk *Block, wk *Week, todayISO string) *
 		return v.Items[i].Key < v.Items[j].Key
 	})
 	return &v
+}
+
+// slotWhen names a coming slot's day, with "today" earning its word.
+func slotWhen(td trackDay) string {
+	if td.Today {
+		return " (today)"
+	}
+	return " (" + td.Day + ")"
 }
 
 // trackOffered reports whether a session's day would offer the tracked
