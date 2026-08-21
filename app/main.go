@@ -154,6 +154,11 @@ func main() {
 
 	ctx, stopWatch := context.WithCancel(context.Background())
 	go s.watch(ctx)
+	// The log's daily snapshot (backup.go): the startup one is taken here,
+	// before the listener opens, so the first /healthz already reports it
+	// and make verify can prove the backup landed with the build.
+	s.backupOnce()
+	go s.backupLoop(ctx)
 
 	go func() {
 		d := s.ds()
@@ -1519,6 +1524,14 @@ func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 		"data":   d.Rev,
 		"loaded": d.LoadedAt.UTC().Format(time.RFC3339),
 		"blocks": len(d.Blocks),
+		// The newest dated snapshot of the log on disk (backup.go), "" when
+		// there is none. Read from the directory, not remembered: it says
+		// what is there. verify fails when it is missing or stale.
+		"backup": latestSnapshot(backupDir(s.dataDir)),
+		// The athlete-local date the server would name a snapshot taken
+		// now, so verify can judge backup against the server's own clock
+		// rather than the shell's: the two need not share a midnight.
+		"today": s.day(d).Format("2006-01-02"),
 	}
 	// The overlay's state, visible from outside: how many amendments are in
 	// effect, and the identity rev workouts currently mint under when it

@@ -323,6 +323,27 @@ deploy: image   ## ship over ssh, restart, and prove it landed
 	  echo "FAILED: container is running build '$$RUN', expected '$$WANT'" >&2; exit 1; }; \
 	$(MAKE) --no-print-directory verify
 
+# The log's backup is the binary's job (backup.go): a snapshot is taken at
+# startup, before the listener opens, so a server that has a log and reports
+# no snapshot -- or one older than yesterday -- is a server whose backup is
+# broken. Both verifies run this; it reads $$RAW and $$ENTRIES and leaves
+# $$BACKUP set. Today and yesterday are the SERVER's, from /healthz: the
+# athlete's midnight and this shell's need not be the same one, in either
+# direction, so this shell's clock takes no part in the verdict. Yesterday
+# is allowed because verify can run at 00:03, before the 00:05 snapshot.
+define CHECK_BACKUP
+BACKUP=$$(printf '%s' "$$RAW" | sed -n 's/.*"backup":"\([^"]*\)".*/\1/p'); \
+if [ "$$ENTRIES" != "0" ]; then \
+  [ -n "$$BACKUP" ] || { \
+    echo "FAILED: the log has $$ENTRIES entries and no snapshot in data/backups" >&2; exit 1; }; \
+  TODAY=$$(printf '%s' "$$RAW" | sed -n 's/.*"today":"\([^"]*\)".*/\1/p'); \
+  [ -n "$$TODAY" ] || { echo "FAILED: /healthz reports no today (healthz said: $$RAW)" >&2; exit 1; }; \
+  YDAY=$$(date -j -f %Y-%m-%d -v-1d "$$TODAY" +%F 2>/dev/null || date -d "$$TODAY - 1 day" +%F); \
+  [ "$$BACKUP" = "$$TODAY" ] || [ "$$BACKUP" = "$$YDAY" ] || { \
+    echo "FAILED: newest log snapshot is $$BACKUP, the server's today is $$TODAY - the startup snapshot did not land" >&2; exit 1; }; \
+fi
+endef
+
 # Two independent things can now be stale -- the binary and the plan -- so
 # verify checks both. Without the data half, an empty volume would quietly
 # serve the embedded example block and every check here would still pass.
@@ -353,7 +374,8 @@ verify:         ## confirm the live site serves this exact build AND this exact 
 	  echo "FAILED: /fit.zip returned $$FITZ (want 200 with steps days, 404 without)" >&2; exit 1; \
 	fi; \
 	ENTRIES=$$(curl -s -m 10 http://$(HOST):$(PORT)/api/entries | grep -o '"ts"' | wc -l | tr -d ' '); \
-	echo "deployed      http://$(HOST):$(PORT)  build $$LIVE  $$ENTRIES log entries intact"
+	$(CHECK_BACKUP); \
+	echo "deployed      http://$(HOST):$(PORT)  build $$LIVE  $$ENTRIES log entries intact  snapshot $$BACKUP"
 
 logs:           ## tail the container log
 	$(SSH) $(REMOTE) 'docker logs -f running-coach'
@@ -403,7 +425,9 @@ verify-dev:     ## confirm the dev stack serves this exact build
 	CODE=$$(curl -s -m 10 -o /dev/null -w '%{http_code}' http://$(HOST):$(DEVPORT)/); \
 	[ "$$CODE" = "200" ] || { echo "FAILED: GET / returned $$CODE" >&2; exit 1; }; \
 	DREV=$$(printf '%s' "$$RAW" | sed -n 's/.*"data":"\([^"]*\)".*/\1/p'); \
-	echo "dev           http://$(HOST):$(DEVPORT)  build $$LIVE  data $$DREV"
+	ENTRIES=$$(curl -s -m 10 http://$(HOST):$(DEVPORT)/api/entries | grep -o '"ts"' | wc -l | tr -d ' '); \
+	$(CHECK_BACKUP); \
+	echo "dev           http://$(HOST):$(DEVPORT)  build $$LIVE  data $$DREV  snapshot $$BACKUP"
 
 # seed-dev copies live's plan and log into the dev stack's volume, plus a
 # partial activity slice: the last $(SEED_DAYS) days by device name, and any

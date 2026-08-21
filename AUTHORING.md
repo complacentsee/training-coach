@@ -16,6 +16,7 @@ app/data/
   library/tasks.json       daily and strength guides
   library/index.json       the workouts page layout
   entries.jsonl         the log. NOT yours to write. Never rewrite it.
+  backups/              dated copies of the log the app takes itself
 ```
 
 **A directory is wholly the volume's or wholly the defaults'.** Put one file in
@@ -534,3 +535,18 @@ and either can be stale, which is why `verify` checks both.
 **`entries.jsonl` is not yours.** It is the athlete's health log, it exists
 only on the server, it is append-only, and corrections are appended rather than edited. Read it
 with `make fetch-log`.
+
+The app keeps its own dated copies of it in `data/backups/entries-YYYY-MM-DD.jsonl`:
+one per athlete-local day, taken at startup and just after local midnight,
+never overwritten, newest 30 kept. `/healthz` reports the newest date as
+`backup` and `verify` fails if it is missing or older than yesterday. To
+restore one, go through the container rather than the host file — the
+container wrote the log, so on the host it may not be yours to overwrite:
+
+```sh
+docker stop running-coach
+docker cp data/backups/entries-YYYY-MM-DD.jsonl running-coach:/data/entries.jsonl
+docker start running-coach
+```
+
+The app reads the log once at startup, so the restart is the restore.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -95,6 +96,52 @@ func (s *Store) Append(e Entry) error {
 		return fmt.Errorf("sync: %w", err)
 	}
 	s.all = append(s.all, e)
+	return nil
+}
+
+// SnapshotTo copies the log's bytes to path. It holds the log's read lock for
+// the copy, which excludes Append, so no line is ever half-copied. The copy
+// is published by hard link from a temp file in the same directory, and a
+// link fails where the name exists: a snapshot once taken is never replaced
+// by a later state of the same file. Bytes, not entries — a line the loader
+// skipped is still in the record and still in the copy. errNoLog when there
+// is no log yet.
+func (s *Store) SnapshotTo(path string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src, err := os.Open(s.path)
+	if os.IsNotExist(err) {
+		return errNoLog
+	}
+	if err != nil {
+		return fmt.Errorf("open log: %w", err)
+	}
+	defer src.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("snapshot: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := io.Copy(tmp, src); err != nil {
+		tmp.Close()
+		return fmt.Errorf("snapshot copy: %w", err)
+	}
+	// The log itself is 0644; a copy the ssh user cannot read is a copy
+	// that cannot be restored from without root.
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("snapshot mode: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("snapshot sync: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("snapshot close: %w", err)
+	}
+	if err := os.Link(tmp.Name(), path); err != nil {
+		return fmt.Errorf("snapshot publish: %w", err)
+	}
 	return nil
 }
 

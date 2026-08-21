@@ -34,7 +34,8 @@ Works in Chrome/Edge over USB — no vendor software.
   anchors) plus one JSON file per training block. Change an anchor and
   every derived number in the app updates.
 - **Daily log** — checkoffs, injury ratings, free-text feedback, and
-  per-session grades on the calendar.
+  per-session grades on the calendar. Snapshotted daily into
+  `data/backups/`, newest 30 kept.
 - **Injury tracking** — declare an issue with a rating scale and
   green/amber/red bands; the app asks daily and tells you what to do at
   each level.
