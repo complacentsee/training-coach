@@ -49,7 +49,9 @@
 {{if .InBlock}}
 <section class="card {{kindCls .Session.Kind}}{{if .Skipped}} skipped{{end}}">
   <div class="card-hd">
-    <span class="amount">{{amount .Session}}</span>
+    {{/* The dash is the calendar grid's empty mark; a card with a "Rest"
+         heading needs no placeholder number. */}}
+    {{$a := amount .Session}}{{if ne $a "—"}}<span class="amount">{{$a}}</span>{{end}}
     {{if .Session.Tag}}<span class="tag">{{.Session.Tag}}</span>{{end}}
   </div>
   <h2>{{emph .Session.Label}} {{template "guidebtn" .GuideID}}{{if .FitURL}} <a class="fitbtn" href="{{.FitURL}}" download>FIT</a>{{end}}{{if .ZwoURL}} <a class="fitbtn" href="{{.ZwoURL}}" download>ZWO</a>{{end}}</h2>

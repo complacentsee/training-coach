@@ -6,7 +6,7 @@
 <section class="card {{kindCls .Session.Kind}}">
   <div class="card-hd">
     <span class="dayname">{{.Name}} {{date .Date}}</span>
-    <span class="amount">{{amount .Session}}</span>
+    {{$a := amount .Session}}{{if ne $a "—"}}<span class="amount">{{$a}}</span>{{end}}
     {{if .Session.Tag}}<span class="tag">{{.Session.Tag}}</span>{{end}}
   </div>
   <h2>{{emph .Session.Label}} {{template "guidebtn" .GuideID}}{{if .FitURL}} <a class="fitbtn" href="{{.FitURL}}" download>FIT</a>{{end}}{{if .ZwoURL}} <a class="fitbtn" href="{{.ZwoURL}}" download>ZWO</a>{{end}}</h2>
