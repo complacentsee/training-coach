@@ -65,6 +65,23 @@
 </section>
 {{end}}
 
+{{with .Missed}}
+{{/* Unlogged past offerings of tracked rehab work, as their own card: the
+     ? opens what the work actually is, and "Did it" logs it against the
+     day it was offered — the log records ticking-time anyway. */}}
+<section class="card missed">
+  <h2 class="sec">Not logged</h2>
+  <ul class="mlist">
+    {{range .Items}}
+    <li><span class="mwhat">{{.Label}}{{template "guidebtn" .Guide}}</span>
+        <span class="mwhen">offered {{.Day}} · {{.Issue}}</span>
+        <button type="button" class="skipbtn didbtn" data-did-date="{{.Date}}" data-did-key="{{.Key}}">Did it</button></li>
+    {{end}}
+  </ul>
+  {{$t := .Tone}}{{range .Lines}}<p class="mline tone-{{$t}}">{{.}}</p>{{end}}
+</section>
+{{end}}
+
 <section class="card">
   <h2 class="sec">Checklist</h2>
   <ul class="tasks">
@@ -82,7 +99,6 @@
 <section class="card issue">
   <h2 class="sec">{{.Heading}} {{template "guidebtn" .Guide}}<button class="trendbtn" type="button" data-trend="{{.Key}}" aria-label="Rating trend">trend</button></h2>
   {{if .Phase}}<p class="issue-phase"><strong>{{.Phase}}</strong>{{if .Detail}} — {{.Detail}}{{end}}</p>{{end}}
-  {{with .Track}}{{$t := .}}<div class="trackline">{{range $i, $l := .Lines}}<p{{if eq $i 0}} class="tone-{{$t.Tone}}"{{end}}>{{$l}}</p>{{end}}</div>{{end}}
   {{if .Rated}}
     <p class="last logged">Logged today: <strong>{{.Today}}</strong>{{with .Band}} · <b class="tone-{{.Tone}}">{{.Label}}</b>{{end}}{{if .Note}} — {{.Note}}{{end}}<br><span class="sub">Tap another number to change it.</span></p>
   {{else if .Last}}

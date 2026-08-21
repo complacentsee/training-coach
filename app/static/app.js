@@ -609,6 +609,32 @@
     });
   }
 
+  /* ── logging a past offering late ────────────────────────────────────
+     Arm-then-confirm, because a false "done" in the health record has no
+     UI undo once the day has passed. The entry posts against the OFFERED
+     day — the log records ticking-time anyway. */
+  Array.prototype.forEach.call(document.querySelectorAll(".didbtn"), function (btn) {
+    var armTimer;
+    function disarm() { btn.classList.remove("armed"); btn.textContent = "Did it"; }
+    btn.addEventListener("click", function () {
+      if (!btn.classList.contains("armed")) {
+        btn.classList.add("armed");
+        btn.textContent = "Confirm";
+        clearTimeout(armTimer);
+        armTimer = setTimeout(disarm, 8000);
+        return;
+      }
+      btn.disabled = true;
+      post({ kind: "task", date: btn.dataset.didDate, key: btn.dataset.didKey, val: "done" })
+        .then(function () { say("Logged"); location.reload(); })
+        .catch(function (e) {
+          say("Failed: " + e.message, true);
+          btn.disabled = false;
+          disarm();
+        });
+    });
+  });
+
   Array.prototype.forEach.call(document.querySelectorAll("[data-rework]"), function (btn) {
     btn.addEventListener("click", function () {
       var date = btn.dataset.rework;

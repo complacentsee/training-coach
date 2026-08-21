@@ -454,11 +454,16 @@ td.graded{box-shadow:inset 2.5px 0 0 currentColor}
    be trusting a schedule that no longer holds. */
 .voided{margin:0 0 .9rem;padding:.5rem .8rem;border:1px solid var(--caution);
   border-radius:4px;font:.8rem/1.5 var(--mono);color:var(--caution)}
-/* Unlogged rehab-carrying work, on the issue card that owns it. The tone
-   colours the heading line only; the words carry the meaning. */
-.trackline{margin:.2rem 0 .5rem;font:.72rem/1.5 var(--mono)}
-.trackline p{margin:0}
-.trackline p:first-child{font-weight:700}
+/* The "Not logged" card: unlogged rehab-carrying work as its own element,
+   each row openable (the guide ?) and tickable late. The tone colours the
+   summary line; the words carry the meaning. */
+.mlist{list-style:none;margin:0 0 .5rem;padding:0;display:flex;flex-direction:column;gap:.55rem}
+.mlist li{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+.mwhat{font-weight:600;font-size:.92rem}
+.mwhen{font:.64rem/1.4 var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.mlist .didbtn{margin-left:auto}
+.didbtn.armed{border-color:var(--caution);color:var(--caution)}
+.mline{margin:.2rem 0 0;font:700 .68rem/1.5 var(--mono);letter-spacing:.04em}
 td .ghost{display:block;font:.55rem/1.3 var(--mono);color:var(--ink-3);margin-top:.15rem}
 td .ghost s{text-decoration-thickness:1px}
 td .ghost b{font-weight:700;letter-spacing:.04em}

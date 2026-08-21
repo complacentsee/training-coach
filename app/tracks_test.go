@@ -53,15 +53,18 @@ func TestTrackAssessmentReadsTheWeek(t *testing.T) {
 	}
 	page := get(ts.mux, "/", nil).Body.String()
 	if isMonday {
-		if strings.Contains(body, "not logged") || strings.Contains(page, "trackline") {
+		if strings.Contains(body, "not logged") || strings.Contains(page, "card missed") {
 			t.Error("Monday has no past days to read, yet the assessment speaks")
 		}
 	} else {
 		if !strings.Contains(body, "not logged") {
 			t.Errorf("past unlogged daily work missing from the assessment: %s", body)
 		}
-		if !strings.Contains(page, "trackline") || !strings.Contains(page, "not logged") {
-			t.Error("the issue card carries no assessment for unlogged tracked work")
+		// The card is its own element: rows with a guide ? and a late tick
+		// against the offered day.
+		if !strings.Contains(page, "Not logged") || !strings.Contains(page, "data-did-date=") ||
+			!strings.Contains(page, `data-guide="task-daily"`) {
+			t.Error("the Not logged card is missing its rows, guide button, or Did it control")
 		}
 	}
 
@@ -84,6 +87,9 @@ func TestTrackAssessmentReadsTheWeek(t *testing.T) {
 	rec = get(ts.mux, "/api/issue-adherence?key=achilles", nil)
 	if strings.Contains(rec.Body.String(), "not logged") {
 		t.Errorf("everything logged, yet the assessment still speaks: %s", rec.Body.String())
+	}
+	if page := get(ts.mux, "/", nil).Body.String(); strings.Contains(page, "Not logged") {
+		t.Error("everything logged, yet the card still renders")
 	}
 }
 

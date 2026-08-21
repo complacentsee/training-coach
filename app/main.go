@@ -340,9 +340,13 @@ type todayData struct {
 	// explains any refusal, so the trigger's own test stays simple. Voided
 	// is every agreed change the current data dissolved — said here, where
 	// the athlete looks, not only in a server log.
-	AmendLine   string
-	CanRework   bool
-	Voided      []string
+	AmendLine string
+	CanRework bool
+	Voided    []string
+	// Missed is the "Not logged" card: unlogged past offerings of tracked
+	// rehab work, each openable (the guide) and tickable late (the log
+	// records ticking-time anyway — he logs in batches).
+	Missed      *missedView
 	Detail      string
 	Targets     []string
 	GuideID     string
@@ -373,7 +377,6 @@ type issueView struct {
 	Last    *Entry
 	Phase   string // the rehab stage this week, if the block declares one
 	Detail  string
-	Track   *trackView // unlogged tracked work this week, when any exists
 }
 
 // dotView is one button on the scale, carrying what the server says that value
@@ -524,6 +527,9 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	// flow itself explains a refusal (steps, the record, a tagged week): a
 	// control that quietly vanishes reads as a bug, not a rule.
 	td.CanRework = ok && (td.Session.Kind != KindRest || td.AmendLine != "")
+	if ok {
+		td.Missed = s.missedWork(d, blk, wk, iso)
+	}
 
 	td.Issues = s.issueViews(d, blk, weekN, iso)
 	s.render(w, "today.html", td)
@@ -611,11 +617,6 @@ func (s *server) issueViews(d *dataset, blk *Block, week int, iso string) []issu
 		}
 		if p := blk.PhaseForIssue(is.Key, week); p != nil {
 			v.Phase, v.Detail = p.Name, p.Detail
-		}
-		if day, ok := dayFromISO(d, iso); ok {
-			if wk, _, in := blk.Locate(day); in {
-				v.Track = s.trackAssessment(d, blk, is, wk, iso)
-			}
 		}
 		out = append(out, v)
 	}

@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 )
 
 // trackDay is one offering of a tracked task: a day the checklist showed
@@ -28,6 +27,7 @@ type trackDay struct {
 	Day   string `json:"day"` // "Tue 18"
 	Key   string `json:"key"`
 	Label string `json:"label"`
+	Guide string `json:"guide,omitempty"` // the popup that says what the work is
 	Done  bool   `json:"done"`
 	Past  bool   `json:"past"` // strictly before today: old enough to read
 	Today bool   `json:"today"`
@@ -59,8 +59,8 @@ func (s *server) trackWeek(d *dataset, blk *Block, is *Issue, wk *Week, todayISO
 			}
 			out = append(out, trackDay{
 				Date: iso, Day: date.Format("Mon 2"), Key: t.key,
-				Label: stripEmph(t.label),
-				Done:  done[t.key], Past: iso < todayISO, Today: iso == todayISO,
+				Label: stripEmph(t.label), Guide: t.guide,
+				Done: done[t.key], Past: iso < todayISO, Today: iso == todayISO,
 			})
 		}
 	}
@@ -118,6 +118,77 @@ func (s *server) trackAssessment(d *dataset, blk *Block, is *Issue, wk *Week, to
 		}
 	}
 	return v
+}
+
+// missedItem is one unlogged past offering, as its own card row: the work
+// by name, the day it was offered, the guide that says what it is, and the
+// key/date a late tick posts against.
+type missedItem struct {
+	Date  string
+	Day   string
+	Key   string
+	Label string
+	Guide string
+	Issue string // the tracking issue's heading
+}
+
+// missedView is the today page's "Not logged" card: rows the athlete can
+// act on — open the plan, or log the work done late — plus one summary
+// line per issue. Nil when nothing needs saying.
+type missedView struct {
+	Items []missedItem
+	Lines []string
+	Tone  string
+}
+
+func (s *server) missedWork(d *dataset, blk *Block, wk *Week, todayISO string) *missedView {
+	var v missedView
+	v.Tone = "caution"
+	for ii := range d.Athlete.Issues {
+		is := &d.Athlete.Issues[ii]
+		days := s.trackWeek(d, blk, is, wk, todayISO)
+		var missed int
+		var done, remaining int
+		for _, td := range days {
+			switch {
+			case td.Done:
+				done++
+			case td.Past:
+				missed++
+				v.Items = append(v.Items, missedItem{
+					Date: td.Date, Day: td.Day, Key: td.Key,
+					Label: td.Label, Guide: td.Guide, Issue: is.Heading(),
+				})
+			default:
+				remaining++
+			}
+		}
+		if missed == 0 {
+			continue
+		}
+		plural := "s"
+		if remaining == 1 {
+			plural = ""
+		}
+		line := fmt.Sprintf("%s: %d of %d done this week, %d slot%s left",
+			is.Heading(), done, len(days), remaining, plural)
+		if rs := s.store.Ratings(is.Key); len(rs) > 0 {
+			last := rs[len(rs)-1]
+			if n, err := strconv.Atoi(last.Val); err == nil {
+				if b := is.BandFor(n); b != nil {
+					line += " · last rated " + last.Val + " (" + b.Label + ")"
+					if b.Tone == "stop" {
+						v.Tone = "stop"
+					}
+				}
+			}
+		}
+		v.Lines = append(v.Lines, line)
+	}
+	if len(v.Items) == 0 {
+		return nil
+	}
+	return &v
 }
 
 // trackOffered reports whether a session's day would offer the tracked
@@ -214,10 +285,4 @@ func (s *server) getIssueAdherence(w http.ResponseWriter, r *http.Request) {
 		Days       []trackDay `json:"days"`
 		Assessment *trackView `json:"assessment,omitempty"`
 	}{is.Key, wk.N, phase, s.trackWeek(d, blk, is, wk, iso), s.trackAssessment(d, blk, is, wk, iso)})
-}
-
-// dayFromISO parses in the dataset's own zone, for callers holding strings.
-func dayFromISO(d *dataset, iso string) (time.Time, bool) {
-	t, err := time.ParseInLocation("2006-01-02", iso, d.Loc)
-	return t, err == nil
 }
