@@ -36,7 +36,9 @@ func currentBlockDir(t *testing.T) string {
 // TestTrackAssessmentReadsTheWeek: the Achilles tracks the daily task
 // (offered every day), so any past day of this week unlogged surfaces as
 // "not logged" on the card and in the API — and on a Monday, with no past
-// days to read, the assessment stays silent.
+// days to read, the assessment stays silent. The card also carries
+// past-due SESSIONS: planned days with no evidence at all, each offering
+// a rework beside the late tick.
 func TestTrackAssessmentReadsTheWeek(t *testing.T) {
 	dir := currentBlockDir(t)
 	ts := fitTestMuxServer(t, dir)
@@ -66,6 +68,12 @@ func TestTrackAssessmentReadsTheWeek(t *testing.T) {
 			!strings.Contains(page, `data-guide="task-daily"`) {
 			t.Error("the Not logged card is missing its rows, guide button, or Did it control")
 		}
+		// A past non-rest day with no evidence is a past-due session row.
+		if time.Now().In(loc).Weekday() > time.Tuesday {
+			if !strings.Contains(page, "planned ") {
+				t.Error("a past-due session is missing from the Not logged card")
+			}
+		}
 	}
 
 	// Logging the work quiets it: tick every tracked key on every past and
@@ -78,7 +86,7 @@ func TestTrackAssessmentReadsTheWeek(t *testing.T) {
 		if iso > today {
 			continue
 		}
-		for _, key := range []string{"daily", "str"} {
+		for _, key := range []string{"daily", "str", "session"} {
 			if err := ts.s.store.Append(Entry{Kind: "task", Date: iso, Key: key, Val: "done"}); err != nil {
 				t.Fatal(err)
 			}

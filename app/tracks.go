@@ -17,6 +17,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 )
 
@@ -120,21 +121,24 @@ func (s *server) trackAssessment(d *dataset, blk *Block, is *Issue, wk *Week, to
 	return v
 }
 
-// missedItem is one unlogged past offering, as its own card row: the work
-// by name, the day it was offered, the guide that says what it is, and the
-// key/date a late tick posts against.
+// missedItem is one unlogged past thing, as its own card row: the work by
+// name, when it was planned or offered, the guide that says what it is,
+// and the key/date a late tick posts against. Session rows also carry the
+// rework trigger — a past-due session's other honest exit.
 type missedItem struct {
-	Date  string
-	Day   string
-	Key   string
-	Label string
-	Guide string
-	Issue string // the tracking issue's heading
+	Date   string
+	Day    string
+	Key    string
+	Label  string
+	Guide  string
+	Meta   string // "planned Tue 18" / "offered Tue 18 · Calf"
+	Rework bool
 }
 
 // missedView is the today page's "Not logged" card: rows the athlete can
-// act on — open the plan, or log the work done late — plus one summary
-// line per issue. Nil when nothing needs saying.
+// act on — open the plan, log the work done late, or rework the day —
+// plus one summary line per issue with tracked work outstanding. Nil when
+// nothing needs saying.
 type missedView struct {
 	Items []missedItem
 	Lines []string
@@ -144,6 +148,41 @@ type missedView struct {
 func (s *server) missedWork(d *dataset, blk *Block, wk *Week, todayISO string) *missedView {
 	var v missedView
 	v.Tone = "caution"
+
+	// Past-due sessions: a planned day with no evidence at all — no grade,
+	// no recording of its sport, no skip, no session checkoff, and not
+	// amended away (a vacated day is rest in the effective week this reads).
+	// "session" is the checklist's own key for the day's session row, the
+	// same one the checkbox posts — a literal by convention, like "week" on
+	// a week grade.
+	grades := s.store.Grades()
+	for di := range wk.Days {
+		sess := wk.Days[di]
+		date := blk.DayOf(wk.N-1, di)
+		iso := date.Format("2006-01-02")
+		if iso >= todayISO || sess.Kind == KindRest {
+			continue
+		}
+		if _, graded := grades[iso]; graded {
+			continue
+		}
+		if _, skipped := s.store.SkipOn(iso); skipped {
+			continue
+		}
+		if s.store.TasksFor(iso)["session"] {
+			continue
+		}
+		if s.sessionRecorded(iso, sess.Kind) {
+			continue
+		}
+		day := date.Format("Mon 2")
+		v.Items = append(v.Items, missedItem{
+			Date: iso, Day: day, Key: "session",
+			Label: stripEmph(sess.Label), Guide: sess.GuideID(),
+			Meta: "planned " + day, Rework: true,
+		})
+	}
+
 	for ii := range d.Athlete.Issues {
 		is := &d.Athlete.Issues[ii]
 		days := s.trackWeek(d, blk, is, wk, todayISO)
@@ -157,7 +196,8 @@ func (s *server) missedWork(d *dataset, blk *Block, wk *Week, todayISO string) *
 				missed++
 				v.Items = append(v.Items, missedItem{
 					Date: td.Date, Day: td.Day, Key: td.Key,
-					Label: td.Label, Guide: td.Guide, Issue: is.Heading(),
+					Label: td.Label, Guide: td.Guide,
+					Meta: "offered " + td.Day + " · " + is.Heading(),
 				})
 			default:
 				remaining++
@@ -188,6 +228,12 @@ func (s *server) missedWork(d *dataset, blk *Block, wk *Week, todayISO string) *
 	if len(v.Items) == 0 {
 		return nil
 	}
+	sort.Slice(v.Items, func(i, j int) bool {
+		if v.Items[i].Date != v.Items[j].Date {
+			return v.Items[i].Date < v.Items[j].Date
+		}
+		return v.Items[i].Key < v.Items[j].Key
+	})
 	return &v
 }
 

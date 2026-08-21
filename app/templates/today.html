@@ -18,6 +18,34 @@
 <p class="voided">An agreed change no longer applies — the plan below is the authored one: {{.}}</p>
 {{end}}
 
+{{range .Issues}}{{$is := .}}
+<section class="card issue">
+  <h2 class="sec">{{.Heading}} {{template "guidebtn" .Guide}}<button class="trendbtn" type="button" data-trend="{{.Key}}" aria-label="Rating trend">trend</button></h2>
+  {{if .Phase}}<p class="issue-phase"><strong>{{.Phase}}</strong>{{if .Detail}} — {{.Detail}}{{end}}</p>{{end}}
+  {{if .Rated}}
+    <p class="last logged">Logged today: <strong>{{.Today}}</strong>{{with .Band}} · <b class="tone-{{.Tone}}">{{.Label}}</b>{{end}}{{if .Note}} — {{.Note}}{{end}}<br><span class="sub">Tap another number to change it.</span></p>
+  {{else if .Last}}
+    <p class="last">Last reading <strong>{{.Last.Val}}</strong> on {{.Last.Date}}{{if .Last.Note}} — {{.Last.Note}}{{end}}</p>
+  {{else}}
+    <p class="last">No readings yet.</p>
+  {{end}}
+  {{/* Always present, empty until there is a rating, so tapping one has
+       something to fill rather than needing to build the element. An empty
+       one is hidden in CSS. */}}
+  <p class="issue-action{{with .Band}} tone-{{.Tone}}{{end}}">{{with .Band}}{{emph .Action}}{{end}}</p>
+  {{if .Ask}}<p class="issue-ask">{{.Ask}}</p>{{end}}
+  <form class="rate" data-issue="{{.Key}}" data-name="{{.Heading}}" data-date="{{iso $.Today}}">
+    <div class="scale">
+      {{range .Dots}}
+      <button type="button" class="dot b{{.Tone}}{{if and $is.Rated (eq $is.Today .Value)}} sel{{end}}" data-val="{{.Value}}" data-tone="{{.Tone}}" data-label="{{.Label}}" data-rx="{{.Action}}"{{if and $is.Rated (eq $is.Today .Value)}} aria-pressed="true"{{end}}>{{.Value}}</button>
+      {{end}}
+    </div>
+    <input type="text" name="note" placeholder="optional note" autocomplete="off">
+  </form>
+  <p class="hint">{{.Range}}{{if .Hint}} · {{.Hint}}{{end}}</p>
+</section>
+{{end}}
+
 {{if .InBlock}}
 <section class="card {{kindCls .Session.Kind}}{{if .Skipped}} skipped{{end}}">
   <div class="card-hd">
@@ -65,23 +93,6 @@
 </section>
 {{end}}
 
-{{with .Missed}}
-{{/* Unlogged past offerings of tracked rehab work, as their own card: the
-     ? opens what the work actually is, and "Did it" logs it against the
-     day it was offered — the log records ticking-time anyway. */}}
-<section class="card missed">
-  <h2 class="sec">Not logged</h2>
-  <ul class="mlist">
-    {{range .Items}}
-    <li><span class="mwhat">{{.Label}}{{template "guidebtn" .Guide}}</span>
-        <span class="mwhen">offered {{.Day}} · {{.Issue}}</span>
-        <button type="button" class="skipbtn didbtn" data-did-date="{{.Date}}" data-did-key="{{.Key}}">Did it</button></li>
-    {{end}}
-  </ul>
-  {{$t := .Tone}}{{range .Lines}}<p class="mline tone-{{$t}}">{{.}}</p>{{end}}
-</section>
-{{end}}
-
 <section class="card">
   <h2 class="sec">Checklist</h2>
   <ul class="tasks">
@@ -95,31 +106,22 @@
   <p class="phase-note">{{.PhaseDetail}}</p>
 </section>
 
-{{range .Issues}}{{$is := .}}
-<section class="card issue">
-  <h2 class="sec">{{.Heading}} {{template "guidebtn" .Guide}}<button class="trendbtn" type="button" data-trend="{{.Key}}" aria-label="Rating trend">trend</button></h2>
-  {{if .Phase}}<p class="issue-phase"><strong>{{.Phase}}</strong>{{if .Detail}} — {{.Detail}}{{end}}</p>{{end}}
-  {{if .Rated}}
-    <p class="last logged">Logged today: <strong>{{.Today}}</strong>{{with .Band}} · <b class="tone-{{.Tone}}">{{.Label}}</b>{{end}}{{if .Note}} — {{.Note}}{{end}}<br><span class="sub">Tap another number to change it.</span></p>
-  {{else if .Last}}
-    <p class="last">Last reading <strong>{{.Last.Val}}</strong> on {{.Last.Date}}{{if .Last.Note}} — {{.Last.Note}}{{end}}</p>
-  {{else}}
-    <p class="last">No readings yet.</p>
-  {{end}}
-  {{/* Always present, empty until there is a rating, so tapping one has
-       something to fill rather than needing to build the element. An empty
-       one is hidden in CSS. */}}
-  <p class="issue-action{{with .Band}} tone-{{.Tone}}{{end}}">{{with .Band}}{{emph .Action}}{{end}}</p>
-  {{if .Ask}}<p class="issue-ask">{{.Ask}}</p>{{end}}
-  <form class="rate" data-issue="{{.Key}}" data-name="{{.Heading}}" data-date="{{iso $.Today}}">
-    <div class="scale">
-      {{range .Dots}}
-      <button type="button" class="dot b{{.Tone}}{{if and $is.Rated (eq $is.Today .Value)}} sel{{end}}" data-val="{{.Value}}" data-tone="{{.Tone}}" data-label="{{.Label}}" data-rx="{{.Action}}"{{if and $is.Rated (eq $is.Today .Value)}} aria-pressed="true"{{end}}>{{.Value}}</button>
-      {{end}}
-    </div>
-    <input type="text" name="note" placeholder="optional note" autocomplete="off">
-  </form>
-  <p class="hint">{{.Range}}{{if .Hint}} · {{.Hint}}{{end}}</p>
+{{with .Missed}}
+{{/* What the week planned or offered and nothing yet accounts for: past
+     sessions with no evidence, and unlogged offerings of tracked rehab
+     work. The ? opens what the work actually is; "Did it" logs it against
+     the day it belonged to — the log records ticking-time anyway — and a
+     session row can be reworked instead. */}}
+<section class="card missed">
+  <h2 class="sec">Not logged</h2>
+  <ul class="mlist">
+    {{range .Items}}
+    <li><span class="mwhat">{{.Label}}{{template "guidebtn" .Guide}}</span>
+        <span class="mwhen">{{.Meta}}</span>
+        <span class="mbtns">{{if .Rework}}<button type="button" class="skipbtn reworkbtn" data-rework="{{.Date}}">Rework</button> {{end}}<button type="button" class="skipbtn didbtn" data-did-date="{{.Date}}" data-did-key="{{.Key}}">Did it</button></span></li>
+    {{end}}
+  </ul>
+  {{$t := .Tone}}{{range .Lines}}<p class="mline tone-{{$t}}">{{.}}</p>{{end}}
 </section>
 {{end}}
 
