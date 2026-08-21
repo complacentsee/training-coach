@@ -107,6 +107,9 @@ func TestEffectiveMoveRendersEverywhere(t *testing.T) {
 	if wk.Days[di].Kind != KindRest {
 		t.Errorf("vacated day kind = %s, want rest", wk.Days[di].Kind)
 	}
+	if wk.Days[di].Label != "Rest" {
+		t.Errorf("vacated day label = %q — a labelless card renders as a bare dash", wk.Days[di].Label)
+	}
 	wk, di, _ = blk.Locate(day("2026-01-08"))
 	if wk.Days[di].Kind != KindEasy {
 		t.Errorf("landed day kind = %s, want easy", wk.Days[di].Kind)

@@ -313,7 +313,7 @@ func buildEffective(d *dataset, entries []Entry) *effectiveSet {
 		case "move":
 			_, dwk, ddi, _ := locateISO(nd.Blocks, nd.Loc, op.Arg)
 			dwk.Days[ddi] = src
-			wk.Days[di] = Session{Kind: KindRest}
+			wk.Days[di] = Session{Kind: KindRest, Label: "Rest"}
 			es.info[op.Date] = amendInfo{Role: "vacated", Other: op.Arg, Label: src.Label, Note: op.Note}
 			es.info[op.Arg] = amendInfo{Role: "landed", Other: op.Date, Note: op.Note}
 		case "swap":
@@ -326,13 +326,13 @@ func buildEffective(d *dataset, entries []Entry) *effectiveSet {
 			_, dwk, ddi, _ := locateISO(nd.Blocks, nd.Loc, op.Arg)
 			dropped := dwk.Days[ddi]
 			dwk.Days[ddi] = src
-			wk.Days[di] = Session{Kind: KindRest}
+			wk.Days[di] = Session{Kind: KindRest, Label: "Rest"}
 			es.info[op.Date] = amendInfo{Role: "vacated", Other: op.Arg, Label: src.Label, Note: op.Note}
 			// The landed side remembers what it cost: the dropped session's
 			// label rides in Label, and the provenance line says so.
 			es.info[op.Arg] = amendInfo{Role: "landed", Other: op.Date, Label: dropped.Label, Note: op.Note}
 		case "cancel":
-			wk.Days[di] = Session{Kind: KindRest}
+			wk.Days[di] = Session{Kind: KindRest, Label: "Rest"}
 			es.info[op.Date] = amendInfo{Role: "cancelled", Label: src.Label, Note: op.Note}
 		case "plain":
 			src.Tag = ""
