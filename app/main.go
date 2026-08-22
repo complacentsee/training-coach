@@ -58,6 +58,7 @@ type server struct {
 	metrics *metricsDB
 	weather *weatherService
 	grader  *grader
+	coach   *coach
 	tiles   *tileService
 	tpl     *template.Template
 	loc     *time.Location // fallback timezone from the flag
@@ -130,6 +131,21 @@ func main() {
 		log.Printf("grader: armed  mode=%s dialect=%s model=%s base=%s",
 			gcfg.Mode, gcfg.Dialect, gcfg.Model, gcfg.BaseURL)
 	}
+	// The coach chat (chat.go): CHAT_* falling back to GRADER_*, off by
+	// default, and a typo as fatal as the grader's.
+	ccfg, err := chatConfigFromEnv()
+	if err != nil {
+		log.Fatalf("chat: %v", err)
+	}
+	if ccfg.Mode == "on" {
+		cs, err := openChatStore(*dataDir)
+		if err != nil {
+			log.Fatalf("chat: %v", err)
+		}
+		s.coach = newCoach(s, ccfg, cs)
+		log.Printf("coach:    on  dialect=%s model=%s base=%s turns/day=%d",
+			ccfg.Dialect, ccfg.Model, ccfg.BaseURL, ccfg.TurnsPerDay)
+	}
 	// Weather is a lookup the grading stack makes and the recording stack
 	// does not; off unless asked for.
 	s.weather = newWeatherService(s.metrics)
@@ -199,6 +215,9 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /watch", s.watchPage)
 	mux.HandleFunc("GET /blocks", s.blocks)
 	mux.HandleFunc("GET /trends", s.trends)
+	mux.HandleFunc("GET /coach", s.coachPage)
+	mux.HandleFunc("GET /api/chat", s.getChat)
+	mux.HandleFunc("POST /api/chat", s.postChat)
 	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("POST /api/entry", s.postEntry)
@@ -1668,6 +1687,9 @@ func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 		// rather than the shell's: the two need not share a midnight.
 		"today": s.day(d).Format("2006-01-02"),
 	}
+	if s.coach != nil {
+		m["chat"] = "on"
+	}
 	// The overlay's state, visible from outside: how many amendments are in
 	// effect, and the identity rev workouts currently mint under when it
 	// differs from the authored one. data stays the authored Rev — verify
@@ -2404,6 +2426,8 @@ func (s *server) makeFuncs() template.FuncMap {
 		// way until there is actually more than one block to choose between.
 		"multiBlock": func() bool { return len(s.ds().Blocks) > 1 },
 		"addf":       func(a, b float64) float64 { return a + b },
+		// The Coach item appears only where a model is configured to answer.
+		"chatOn": func() bool { return s.coach != nil },
 		// The Trends item appears once the current block tags a day the
 		// timeline can measure; a block without benchmarks has no page.
 		"hasBenchmarks": func() bool {

@@ -640,3 +640,15 @@ td .rec::after{content:"";position:absolute;inset:-.3rem}
 .bench-file{color:var(--ink-3);font-family:var(--mono);font-size:.68rem}
 .block-bench{font:.72rem var(--mono);color:var(--ink-2);letter-spacing:.02em;margin:.15rem 0}
 .block-bench span{display:inline-block;margin-right:.9rem}
+
+/* The coach page: a transcript and a composer, in the card idiom. */
+.chat{list-style:none;margin:0;padding:0}
+.chat .msg{margin:0 0 .8rem}
+.chat .who{display:block;font:700 .58rem/1.2 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-bottom:.15rem}
+.chat .msg.user .text{color:var(--ink-2)}
+.chat .msg.assistant .text{color:var(--ink)}
+.chat .msg.error .text{color:var(--stop)}
+.chat .text{white-space:normal;line-height:1.45;font-size:.92rem}
+.say textarea{width:100%;box-sizing:border-box;padding:.5rem .6rem;font:inherit;font-size:.92rem;border:1px solid var(--rule);border-radius:4px;background:var(--sunk);color:var(--ink);resize:vertical}
+.say-row{display:flex;align-items:center;gap:.8rem;margin-top:.4rem}
+.saybtn{padding:.35rem .9rem}

@@ -308,11 +308,23 @@ const llmMaxNudges = 2
 // Pass nil when ending the turn is itself completion.
 func runLLMLoop(ctx context.Context, turn llmTurn, system, prompt string, tools []llmTool,
 	done func() bool, nudge string) (string, error) {
+	return driveLLM(ctx, turn, system, []llmMsg{{Role: "user", Text: prompt}}, tools, done, nudge)
+}
+
+// driveLLM is the loop itself, from any starting transcript: one prompt for
+// a grade, a day's conversation for the coach (chat.go). The transcript
+// passed in is not modified.
+func driveLLM(ctx context.Context, turn llmTurn, system string, history []llmMsg, tools []llmTool,
+	done func() bool, nudge string) (string, error) {
+	if len(history) == 0 || history[len(history)-1].Role != "user" {
+		return "", fmt.Errorf("the transcript does not end with a user message")
+	}
 	byName := make(map[string]*llmTool, len(tools))
 	for i := range tools {
 		byName[tools[i].Name] = &tools[i]
 	}
-	msgs := []llmMsg{{Role: "user", Text: prompt}}
+	msgs := make([]llmMsg, len(history), len(history)+2*llmLoopTurns)
+	copy(msgs, history)
 	nudges := 0
 	for i := 0; i < llmLoopTurns; i++ {
 		reply, reason, err := turn(ctx, system, msgs, tools)

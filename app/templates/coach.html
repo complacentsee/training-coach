@@ -1,0 +1,19 @@
+{{define "coach.html"}}{{template "head" .}}
+<h1 class="page">Coach</h1>
+{{if .Off}}
+<p class="page-sub">The coach is switched off on this server. Set CHAT_MODE=on in grader.env beside the compose file to turn it on.</p>
+{{else}}
+<p class="page-sub" id="coach-sub">{{if .Today}}Today's conversation.{{else}}The conversation of {{.Date}}, as it was.{{end}} <span id="coach-days"></span></p>
+<section class="card coach" id="coach" data-date="{{.Date}}" data-today="{{if .Today}}1{{end}}">
+  <ol class="chat" id="chat" aria-live="polite"></ol>
+  <p class="hint" id="chat-state" hidden></p>
+  {{if .Today}}
+  <form id="say" class="say">
+    <textarea name="text" rows="3" maxlength="4000" placeholder="What are you weighing up?" autocomplete="off" required></textarea>
+    <div class="say-row"><button type="submit" class="skipbtn saybtn">Ask</button><span class="hint" id="say-left"></span></div>
+  </form>
+  {{end}}
+</section>
+{{end}}
+<script src="{{asset "coach.js"}}" defer></script>
+{{template "foot" .}}{{end}}

@@ -50,6 +50,9 @@ Works in Chrome/Edge over USB — no vendor software.
   Each calendar week shows what was run beside what was prescribed.
 - **Trends** — a block's benchmark days (FTP, decoupling, LT, time trial)
   measured from their recordings and charted against the goal.
+- **Coach** — a chat over the plan, the log and the archive, answering
+  from the same numbers the pages show. It reads; it changes nothing.
+  Off unless `CHAT_MODE=on` is set beside the grader's configuration.
 - **No third-party requests** — map tiles are fetched by the server and
   cached on its volume, the map library is vendored, and a Content-Security
   policy says so. Set `TILE_CONTACT` to a contact string; OpenStreetMap's
