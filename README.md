@@ -55,8 +55,9 @@ Works in Chrome/Edge over USB — no vendor software.
   (three hours of temperature and dew point, wind, rain), and the LT
   test's heat gate evaluated on its day. Open-Meteo, cached an hour.
 - **Coach** — a chat over the plan, the log and the archive, answering
-  from the same numbers the pages show. It reads; it changes nothing.
-  Off unless `CHAT_MODE=on` is set beside the grader's configuration.
+  from the same numbers the pages show. It can propose one change the
+  rework control would offer; you apply or dismiss it. Off unless
+  `CHAT_MODE=on` is set beside the grader's configuration.
 - **No third-party requests** — map tiles are fetched by the server and
   cached on its volume, the map library is vendored, and a Content-Security
   policy says so. Set `TILE_CONTACT` to a contact string; OpenStreetMap's

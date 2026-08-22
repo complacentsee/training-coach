@@ -458,7 +458,23 @@ func (c *coach) run(date string) {
 	ctx, cancel := context.WithTimeout(context.Background(), chatTurnTimeout)
 	defer cancel()
 	start := time.Now()
-	reply, err := driveLLM(ctx, c.turn, c.systemPrompt(date), c.history(date), c.tools(date), nil, "")
+	// A reply that says "I propose" without having called the tool is the
+	// grader's prose-instead-of-tool mode, measured here on 22 Aug 2026:
+	// the card never appears and the athlete has nothing to act on. The
+	// turn wrapper keeps the latest reply so done can read it, and the
+	// model is told once to call the tool or withdraw the word.
+	tools := c.tools(date)
+	var lastText string
+	turn := func(ctx context.Context, system string, msgs []llmMsg, tl []llmTool) (llmMsg, string, error) {
+		reply, reason, err := c.turn(ctx, system, msgs, tl)
+		if err == nil && reply.Text != "" {
+			lastText = reply.Text
+		}
+		return reply, reason, err
+	}
+	done := func() bool { return !saysProposes(lastText) || c.store.proposedSince(date, start) }
+	reply, err := driveLLM(ctx, turn, c.systemPrompt(date), c.history(date), tools, done,
+		"Your reply says you propose a change, but propose_amendment was not called, so the athlete has no card to act on. Either call propose_amendment now with the candidate get_rework offered, or reply again without proposing.")
 	if err != nil {
 		log.Printf("coach %s: turn FAILED after %s: %v", date, time.Since(start).Round(time.Second), err)
 		_ = c.store.Append(chatLine{Date: date, Role: "error", Text: "That turn did not complete: " + err.Error()})
@@ -501,6 +517,34 @@ func (c *coach) history(date string) []llmMsg {
 		folded = append(folded, m)
 	}
 	return folded
+}
+
+// saysProposes reads a reply for a proposal made in words: "I propose …"
+// and not "I cannot propose" or "I am not proposing".
+func saysProposes(text string) bool {
+	t := strings.ToLower(text)
+	if !strings.Contains(t, "i propose") && !strings.Contains(t, "i'd propose") && !strings.Contains(t, "i would propose") {
+		return false
+	}
+	for _, no := range []string{"cannot propose", "can't propose", "can not propose", "not propose", "not proposing", "no proposal"} {
+		if strings.Contains(t, no) {
+			return false
+		}
+	}
+	return true
+}
+
+// proposedSince reports whether a proposal line landed on the day at or
+// after t — this turn's, if any.
+func (c *chatStore) proposedSince(date string, t time.Time) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, l := range c.by[date] {
+		if l.Role == "proposal" && !l.TS.Before(t) {
+			return true
+		}
+	}
+	return false
 }
 
 /* ── what the model is told ────────────────────────────────────────────── */

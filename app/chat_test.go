@@ -584,3 +584,55 @@ func TestProposeAmendmentIsBoundedByTheReworkFlow(t *testing.T) {
 		t.Errorf("history: %+v", h)
 	}
 }
+
+// A reply that proposes in words without the tool is nudged once; the
+// fake then calls the tool, and the card appears.
+func TestProseProposalIsNudgedIntoTheTool(t *testing.T) {
+	dir := t.TempDir()
+	start := shiftedBlock(t, dir)
+	ts := fitTestMuxServer(t, dir)
+	cs, err := openChatStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newCoach(ts.s, chatConfig{Mode: "on", Provider: "anthropic", Dialect: "anthropic", Model: "m",
+		BaseURL: "http://unused.invalid", TurnsPerDay: 10}, cs)
+	ts.s.coach = c
+	today := ts.s.day(ts.s.ds())
+	c.today = func() time.Time { return today }
+	tue := start.AddDate(0, 0, 15).Format("2006-01-02")
+	thu := start.AddDate(0, 0, 17).Format("2006-01-02")
+	calls := 0
+	c.turn = func(_ context.Context, system string, msgs []llmMsg, tools []llmTool) (llmMsg, string, error) {
+		calls++
+		last := msgs[len(msgs)-1]
+		switch {
+		case last.Role == "tool":
+			return llmMsg{Role: "assistant", Text: "Proposed: the move is on the card."}, "end_turn", nil
+		case strings.Contains(last.Text, "propose_amendment was not called"):
+			return llmMsg{Role: "assistant", Calls: []llmToolCall{{ID: "p1", Name: "propose_amendment",
+				Args: json.RawMessage(`{"date":"` + tue + `","op":"move","arg":"` + thu + `","reason":"two more days for the calf"}`)}}}, "tool_use", nil
+		default:
+			return llmMsg{Role: "assistant", Text: "I propose moving Tuesday to Thursday."}, "end_turn", nil
+		}
+	}
+	if code, reason := c.say(today.Format("2006-01-02"), "what would you change?"); code != 0 {
+		t.Fatalf("say: %d %s", code, reason)
+	}
+	waitIdle(t, c, today.Format("2006-01-02"))
+	day := cs.Day(today.Format("2006-01-02"))
+	roles := ""
+	for _, l := range day {
+		roles += l.Role + " "
+	}
+	if roles != "user proposal assistant " {
+		t.Errorf("transcript roles %q, want user proposal assistant (the prose proposal was nudged into the tool)", roles)
+	}
+	if calls != 3 {
+		t.Errorf("%d model calls, want 3: prose, nudged tool call, final", calls)
+	}
+	// "I cannot propose" is not a proposal and is not nudged.
+	if saysProposes("I cannot propose a change here; absorb it.") || !saysProposes("I propose dropping Sunday.") {
+		t.Error("saysProposes misreads")
+	}
+}
