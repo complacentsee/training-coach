@@ -10,10 +10,13 @@ package main
 //
 // Shape, all of it the house's own precedent:
 //
-//   - One conversation per athlete-local day, kept in <data>/chat.jsonl:
-//     append-only, server-only, never shipped by push-data and never
-//     overwritten, with the log's rules. The day's conversation is what
-//     /coach shows; yesterday's is a page back. Transcripts hold the
+//   - One conversation per athlete-local day, kept as one file per day in
+//     <data>/chat/<date>.jsonl: appended to, never rewritten, server-only,
+//     never shipped by push-data. A conversation matters for the day it
+//     is had (Adam, 22 Aug 2026), so the retention is today and yesterday
+//     — yesterday only so a reload at 00:01 does not blank the page
+//     mid-thought — and older files are deleted whole at startup and at
+//     the 00:05 tick, the backup prune's own shape. Transcripts hold the
 //     athlete's words and the model's replies — not the tool traffic,
 //     which is re-derivable and large.
 //   - POST a message, get 202, poll: the regrade pattern. One model turn
@@ -44,6 +47,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -142,7 +146,7 @@ func chatConfigFromEnv() (chatConfig, error) {
 
 /* ── the transcript store ──────────────────────────────────────────────── */
 
-// chatLine is one line of chat.jsonl: who said what, on which day's
+// chatLine is one line of a day's file: who said what, on which day's
 // conversation. Role is user, assistant, or error — an error is the turn
 // that did not happen, kept so the page can say so and so the record is
 // honest about what the athlete was told.
@@ -153,25 +157,71 @@ type chatLine struct {
 	Text string    `json:"text"`
 }
 
-// chatStore is the append-only transcript file, held in memory by day.
-// Same discipline as the entries log: appended with fsync, never
-// rewritten, a malformed line skipped loudly rather than fatal.
+// chatStore is the transcripts, one append-only file per day under
+// <data>/chat, held in memory by day. Same discipline as the entries log
+// within a day: appended with fsync, never rewritten, a malformed line
+// skipped loudly rather than fatal. Across days it is a ring: a file
+// older than the retention is deleted whole, never edited.
 type chatStore struct {
-	path string
-	mu   sync.RWMutex
-	by   map[string][]chatLine
+	dir string
+	mu  sync.RWMutex
+	by  map[string][]chatLine
 }
 
-func openChatStore(dir string) (*chatStore, error) {
-	c := &chatStore{path: filepath.Join(dir, "chat.jsonl"), by: map[string][]chatLine{}}
-	f, err := os.Open(c.path)
-	if os.IsNotExist(err) {
-		return c, nil
+// chatKeepDays is the retention: today and yesterday.
+const chatKeepDays = 2
+
+var chatFileName = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\.jsonl$`)
+
+func chatFilePath(dir, date string) string { return filepath.Join(dir, date+".jsonl") }
+
+// openChatStore reads every day file present. A single <data>/chat.jsonl
+// from before the per-day files (21 Aug 2026) is read once, its lines
+// moved into their days' files, and the old file renamed aside — not
+// deleted, because nothing here deletes a record it did not write.
+func openChatStore(dataDir string) (*chatStore, error) {
+	c := &chatStore{dir: filepath.Join(dataDir, "chat"), by: map[string][]chatLine{}}
+	ents, err := os.ReadDir(c.dir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read chat dir: %w", err)
 	}
+	for _, e := range ents {
+		m := chatFileName.FindStringSubmatch(e.Name())
+		if e.IsDir() || m == nil {
+			continue
+		}
+		lines, err := readChatFile(filepath.Join(c.dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		c.by[m[1]] = lines
+	}
+	legacy := filepath.Join(dataDir, "chat.jsonl")
+	if lines, err := readChatFile(legacy); err == nil {
+		for _, l := range lines {
+			if err := c.Append(l); err != nil {
+				return nil, fmt.Errorf("moving %s into day files: %w", legacy, err)
+			}
+		}
+		if err := os.Rename(legacy, legacy+".migrated"); err != nil {
+			return nil, fmt.Errorf("retiring %s: %w", legacy, err)
+		}
+		log.Printf("chat: moved %d lines from chat.jsonl into per-day files; the old file is chat.jsonl.migrated", len(lines))
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return c, nil
+}
+
+// readChatFile is one file's lines, a torn line skipped loudly. A
+// missing file is the os.IsNotExist error, for the caller to decide.
+func readChatFile(path string) ([]chatLine, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open chat log: %w", err)
+		return nil, err
 	}
 	defer f.Close()
+	var out []chatLine
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for ln := 1; sc.Scan(); ln++ {
@@ -183,17 +233,20 @@ func openChatStore(dir string) (*chatStore, error) {
 		if err := json.Unmarshal(line, &l); err != nil {
 			// A torn line — a crash between write and sync — costs that
 			// line and nothing after it, the entries log's own rule.
-			fmt.Fprintf(os.Stderr, "chat: skipping malformed line %d: %v\n", ln, err)
+			fmt.Fprintf(os.Stderr, "chat: %s: skipping malformed line %d: %v\n", filepath.Base(path), ln, err)
 			continue
 		}
-		c.by[l.Date] = append(c.by[l.Date], l)
+		out = append(out, l)
 	}
-	return c, sc.Err()
+	return out, sc.Err()
 }
 
 func (c *chatStore) Append(l chatLine) error {
 	if l.TS.IsZero() {
 		l.TS = time.Now()
+	}
+	if !isoDatePattern.MatchString(l.Date) {
+		return fmt.Errorf("chat line for %q: not a date", l.Date)
 	}
 	b, err := json.Marshal(l)
 	if err != nil {
@@ -201,9 +254,12 @@ func (c *chatStore) Append(l chatLine) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	f, err := os.OpenFile(c.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err := os.MkdirAll(c.dir, 0o755); err != nil {
+		return fmt.Errorf("create chat dir: %w", err)
+	}
+	f, err := os.OpenFile(chatFilePath(c.dir, l.Date), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return fmt.Errorf("open chat log for append: %w", err)
+		return fmt.Errorf("open chat file for append: %w", err)
 	}
 	defer f.Close()
 	if _, err := f.Write(append(b, '\n')); err != nil {
@@ -214,6 +270,26 @@ func (c *chatStore) Append(l chatLine) error {
 	}
 	c.by[l.Date] = append(c.by[l.Date], l)
 	return nil
+}
+
+// Prune deletes every day's file dated before keepFrom, whole, and
+// forgets it. Run at startup and at the daily tick with keepFrom =
+// yesterday. A file that will not delete is reported and the rest go.
+func (c *chatStore) Prune(keepFrom string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var errs []error
+	for date := range c.by {
+		if date >= keepFrom {
+			continue
+		}
+		if err := os.Remove(chatFilePath(c.dir, date)); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, err)
+			continue
+		}
+		delete(c.by, date)
+	}
+	return errors.Join(errs...)
 }
 
 // Day is the day's conversation, oldest first — a copy.
@@ -280,6 +356,14 @@ type coach struct {
 	// the athlete had already moved past.
 	mu   sync.Mutex
 	busy map[string]bool
+}
+
+// prune is the retention: today and yesterday stay, older days go.
+func (c *coach) prune() {
+	keepFrom := c.today().AddDate(0, 0, -(chatKeepDays - 1)).Format("2006-01-02")
+	if err := c.store.Prune(keepFrom); err != nil {
+		log.Printf("coach: pruning conversations before %s: %v", keepFrom, err)
+	}
 }
 
 func newCoach(s *server, cfg chatConfig, store *chatStore) *coach {

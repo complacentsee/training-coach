@@ -143,6 +143,7 @@ func main() {
 			log.Fatalf("chat: %v", err)
 		}
 		s.coach = newCoach(s, ccfg, cs)
+		s.coach.prune()
 		log.Printf("coach:    on  dialect=%s model=%s base=%s turns/day=%d",
 			ccfg.Dialect, ccfg.Model, ccfg.BaseURL, ccfg.TurnsPerDay)
 	}

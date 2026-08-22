@@ -17,7 +17,7 @@ app/data/
   library/index.json       the workouts page layout
   entries.jsonl         the log. NOT yours to write. Never rewrite it.
   backups/              dated copies of the log the app takes itself
-  chat.jsonl            the coach's transcripts: server-only, append-only
+  chat/<date>.jsonl     the coach's transcripts, today and yesterday only
   coaching-notes.md     optional; joins the coach's system prompt, read fresh
 ```
 

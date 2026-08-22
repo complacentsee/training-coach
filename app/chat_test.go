@@ -93,9 +93,9 @@ func TestChatStoreAppendsAndReplays(t *testing.T) {
 	if got := cs.Dates(); len(got) != 2 || got[0] != "2026-01-13" {
 		t.Errorf("dates newest first: %v", got)
 	}
-	raw := string(readOrFail(t, filepath.Join(dir, "chat.jsonl")))
-	if strings.Count(raw, "\n") != 3 {
-		t.Errorf("chat.jsonl should hold exactly three lines:\n%s", raw)
+	raw := string(readOrFail(t, filepath.Join(dir, "chat", "2026-01-13.jsonl")))
+	if strings.Count(raw, "\n") != 2 || strings.Count(string(readOrFail(t, filepath.Join(dir, "chat", "2026-01-12.jsonl"))), "\n") != 1 {
+		t.Errorf("each day its own file; 13 Jan holds:\n%s", raw)
 	}
 	again, err := openChatStore(dir)
 	if err != nil {
@@ -108,11 +108,11 @@ func TestChatStoreAppendsAndReplays(t *testing.T) {
 	if err := again.Append(chatLine{Date: "2026-01-13", Role: "user", Text: "more"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(readOrFail(t, filepath.Join(dir, "chat.jsonl"))), raw) {
+	if !strings.HasPrefix(string(readOrFail(t, filepath.Join(dir, "chat", "2026-01-13.jsonl"))), raw) {
 		t.Error("an append rewrote what was there")
 	}
 	// A torn line — a crash between write and sync — costs that line only.
-	f, err := os.OpenFile(filepath.Join(dir, "chat.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, "chat", "2026-01-13.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +129,72 @@ func TestChatStoreAppendsAndReplays(t *testing.T) {
 	}
 	if day := third.Day("2026-01-13"); len(day) != 4 || day[3].Text != "after the tear" {
 		t.Errorf("a torn line hid what followed it: %+v", day)
+	}
+	// Retention: keeping from the 13th deletes the 12th's file whole and
+	// forgets it; a stranger in the directory is not this code's to remove.
+	if err := os.WriteFile(filepath.Join(dir, "chat", "notes.txt"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := third.Prune("2026-01-13"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "chat", "2026-01-12.jsonl")); !os.IsNotExist(err) {
+		t.Error("the 12th's file should have been deleted")
+	}
+	if len(third.Day("2026-01-12")) != 0 || len(third.Day("2026-01-13")) != 4 || len(third.Dates()) != 1 {
+		t.Errorf("after the prune: 12th %d lines, 13th %d, dates %v", len(third.Day("2026-01-12")), len(third.Day("2026-01-13")), third.Dates())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "chat", "notes.txt")); err != nil {
+		t.Error("the prune removed a file it did not write")
+	}
+}
+
+// A chat.jsonl from before the per-day files is read once, its lines land
+// in their days' files, and the old file is renamed aside, never deleted.
+func TestChatStoreMigratesTheSingleFile(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `{"ts":"2026-01-12T20:00:00Z","date":"2026-01-12","role":"user","text":"old"}
+{"ts":"2026-01-13T20:00:00Z","date":"2026-01-13","role":"user","text":"newer"}
+{"ts":"2026-01-13T20:00:05Z","date":"2026-01-13","role":"assistant","text":"reply"}
+`
+	if err := os.WriteFile(filepath.Join(dir, "chat.jsonl"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := openChatStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs.Day("2026-01-13")) != 2 || len(cs.Day("2026-01-12")) != 1 {
+		t.Errorf("migrated days: %v", cs.Dates())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "chat.jsonl")); !os.IsNotExist(err) {
+		t.Error("chat.jsonl should have been renamed aside")
+	}
+	if string(readOrFail(t, filepath.Join(dir, "chat.jsonl.migrated"))) != legacy {
+		t.Error("the retired file is not byte-identical to the original")
+	}
+	if !strings.Contains(string(readOrFail(t, filepath.Join(dir, "chat", "2026-01-13.jsonl"))), `"text":"reply"`) {
+		t.Error("the 13th's file lacks the migrated reply")
+	}
+	// A second open finds only day files: the migration ran once.
+	again, err := openChatStore(dir)
+	if err != nil || len(again.Day("2026-01-13")) != 2 {
+		t.Errorf("second open: %v, 13th has %d lines", err, len(again.Day("2026-01-13")))
+	}
+}
+
+// The coach keeps today and yesterday: its prune, run at startup and at
+// the daily tick, drops the day before.
+func TestCoachPruneKeepsTodayAndYesterday(t *testing.T) {
+	_, c, _ := coachUnderTest(t)
+	for _, d := range []string{"2026-01-11", "2026-01-12", "2026-01-13"} {
+		if err := c.store.Append(chatLine{Date: d, Role: "user", Text: d}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.prune()
+	if got := c.store.Dates(); len(got) != 2 || got[0] != "2026-01-13" || got[1] != "2026-01-12" {
+		t.Errorf("kept %v, want today and yesterday", got)
 	}
 }
 
@@ -246,9 +312,9 @@ func TestChatTurnRunsToolsAndRecordsTheReply(t *testing.T) {
 		t.Errorf("tool result: %+v", toolMsg)
 	}
 	// And it is on disk.
-	raw := readOrFail(t, filepath.Join(ts.s.dataDir, "chat.jsonl"))
+	raw := readOrFail(t, filepath.Join(ts.s.dataDir, "chat", "2026-01-13.jsonl"))
 	if strings.Count(string(raw), "\n") != 2 {
-		t.Errorf("chat.jsonl lines:\n%s", raw)
+		t.Errorf("the day's file:\n%s", raw)
 	}
 }
 

@@ -201,6 +201,9 @@ func (s *server) backupLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			s.backupOnce()
+			if s.coach != nil {
+				s.coach.prune()
+			}
 		}
 	}
 }
