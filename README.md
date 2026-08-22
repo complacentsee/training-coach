@@ -48,6 +48,8 @@ Works in Chrome/Edge over USB — no vendor software.
   rate against the day's cap, and the route on a map. Where the workout was
   pushed to the watch, each lap is matched to the step it was meant to be.
   Each calendar week shows what was run beside what was prescribed.
+- **Trends** — a block's benchmark days (FTP, decoupling, LT, time trial)
+  measured from their recordings and charted against the goal.
 - **No third-party requests** — map tiles are fetched by the server and
   cached on its volume, the map library is vendored, and a Content-Security
   policy says so. Set `TILE_CONTACT` to a contact string; OpenStreetMap's

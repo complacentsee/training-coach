@@ -220,17 +220,7 @@ func computeMetrics(name, date string, s *activityStreams) *activityMetrics {
 			output = s.Vel
 		}
 		if output != nil && w1 > 0 && w2 > 0 {
-			start := 0.0
-			if s.Sport == "cycling" {
-				start = 600
-			}
-			mid := start + (float64(a.ElapsedS)-start)/2
-			e1 := halfEfficiency(s.Time, w, hrF, output, start, mid)
-			e2 := halfEfficiency(s.Time, w, hrF, output, mid, float64(a.ElapsedS))
-			if e1 != nil && e2 != nil && *e1 != 0 && *e2 != 0 {
-				d := (*e1 / *e2 - 1) * 100
-				a.DecouplingPct = &d
-			}
+			a.DecouplingPct = windowDecoupling(s, w, hrF, output, 0, float64(a.ElapsedS))
 		}
 	}
 	if s.HaveWatts {
@@ -608,6 +598,71 @@ func halfEfficiency(t, w []int, hr, output []float64, lo, hi float64) *float64 {
 	}
 	v := num / den
 	return &v
+}
+
+// windowDecoupling is decoupling over the window (lo, hi] of stream
+// seconds: the first half's mean output/HR over the second half's, minus
+// one, in percent. The halves split at the window's midpoint; on a bike
+// the window's first 600 s are excluded, the register's warm-up rule.
+// Over (0, elapsed] this IS the row's decoupling_pct — computeMetrics calls
+// it so — and over a lap's span it is the same measurement of one step,
+// which is what a decoupling test run inside a longer file needs. Mirrored
+// as decoupling_pa_pct / decoupling_pw_pct in grade_metrics.py, which
+// pins the output choice the caller makes here: velocity for Pa:HR, watts
+// for Pw:HR.
+func windowDecoupling(s *activityStreams, w []int, hr, output []float64, lo, hi float64) *float64 {
+	start := lo
+	if s.Sport == "cycling" {
+		start += 600
+	}
+	if start >= hi {
+		return nil
+	}
+	mid := start + (hi-start)/2
+	e1 := halfEfficiency(s.Time, w, hr, output, start, mid)
+	e2 := halfEfficiency(s.Time, w, hr, output, mid, hi)
+	if e1 == nil || e2 == nil || *e1 == 0 || *e2 == 0 {
+		return nil
+	}
+	d := (*e1 / *e2 - 1) * 100
+	return &d
+}
+
+// windowMean is the weighted mean of vals over the samples with lo < t ≤ hi
+// that keep pass, each sample keeping its own weight — the windowed-
+// statistics convention. nil when nothing qualifies. The final twenty
+// minutes of a threshold test is windowMean over (hi-1200, hi].
+func windowMean(t, w []int, vals []float64, lo, hi float64, keep func(float64) bool) *float64 {
+	var num, den float64
+	for i := 1; i < len(t); i++ {
+		ti := float64(t[i])
+		if w[i] > 0 && lo < ti && ti <= hi && keep(vals[i]) {
+			num += float64(w[i]) * vals[i]
+			den += float64(w[i])
+		}
+	}
+	if den == 0 {
+		return nil
+	}
+	v := num / den
+	return &v
+}
+
+// windowBest is bestRolling over the samples inside [lo, hi] — the best
+// 60 s of a ramp test that sits in one lap of a longer file. Over the whole
+// stream it is bestRolling itself.
+func windowBest(t []int, vals []float64, lo, hi int, window int) *float64 {
+	i, j := 0, len(t)
+	for i < len(t) && t[i] < lo {
+		i++
+	}
+	for j > i && t[j-1] > hi {
+		j--
+	}
+	if j-i < 2 {
+		return nil
+	}
+	return bestRolling(t[i:j], vals[i:j], window)
 }
 
 /* ── anchor-dependent grade inputs, computed at query time ─────────────── */

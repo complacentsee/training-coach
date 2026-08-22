@@ -70,6 +70,19 @@ CREATE TABLE IF NOT EXISTS failures(
 -- touches them, and this table is what keeps one lookup from becoming a
 -- lookup per grade. Not derived from the archive, so a rebuild simply
 -- refetches; no precise position is ever written here.
+-- The benchmark timeline's rows (benchmark.go): one per benchmark-tagged
+-- day per block, measured over that day's effort window. Derived like
+-- everything here: dropped with the rest on a schema bump (the register's
+-- conventions feed these measurements), and carrying its own version and
+-- its own key — the day's recordings, by name — so a new file on the day
+-- or a change in benchmark.go's arithmetic recomputes the row on its next
+-- read. A day that could not be measured is a row with an empty name.
+CREATE TABLE IF NOT EXISTS benchmarks(
+  block TEXT NOT NULL, date TEXT NOT NULL, tag TEXT NOT NULL,
+  names TEXT NOT NULL, name TEXT NOT NULL, lo INTEGER NOT NULL, hi INTEGER NOT NULL,
+  ftp_w REAL, pa_hr_pct REAL, pw_hr_pct REAL, lthr REAL, lt_vel REAL,
+  tt_s INTEGER, tt_dist_m REAL, version INTEGER NOT NULL,
+  PRIMARY KEY(block, date));
 CREATE TABLE IF NOT EXISTS weather(
   lat REAL NOT NULL, lon REAL NOT NULL, hour_utc TEXT NOT NULL,
   temp_f REAL, dew_f REAL, humidity_pct INTEGER, wind_mph REAL,
@@ -120,7 +133,7 @@ func openMetricsDBAt(path string) (*metricsDB, error) {
 		// weather is not in this list: it caches an external service rather
 		// than deriving from the archive, so a schema bump has no reason to
 		// throw it away and refetch.
-		for _, t := range []string{"activities", "hr_hist", "power_hist", "failures"} {
+		for _, t := range []string{"activities", "hr_hist", "power_hist", "failures", "benchmarks"} {
 			if _, err := w.Exec(`DROP TABLE IF EXISTS ` + t); err != nil {
 				w.Close()
 				return nil, err
@@ -300,6 +313,33 @@ func (m *metricsDB) runDistanceByDate(from, to string) (map[string]float64, erro
 		out[d] = m
 	}
 	return out, rows.Err()
+}
+
+// benchmarkGet reads one benchmark row, nil when the day has none.
+func (m *metricsDB) benchmarkGet(block, date string) (*benchmarkRow, error) {
+	var r benchmarkRow
+	err := m.r.QueryRow(`SELECT block, date, tag, names, name, lo, hi, ftp_w, pa_hr_pct,
+		pw_hr_pct, lthr, lt_vel, tt_s, tt_dist_m, version FROM benchmarks
+		WHERE block = ? AND date = ?`, block, date).Scan(
+		&r.Block, &r.Date, &r.Tag, &r.Names, &r.Name, &r.Lo, &r.Hi, &r.FTPW, &r.PaHR,
+		&r.PwHR, &r.LTHR, &r.LTVel, &r.TTS, &r.TTDistM, &r.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// benchmarkPut lands one row, replacing the day's previous measurement.
+func (m *metricsDB) benchmarkPut(r *benchmarkRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, err := m.w.Exec(`INSERT OR REPLACE INTO benchmarks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.Block, r.Date, r.Tag, r.Names, r.Name, r.Lo, r.Hi, r.FTPW, r.PaHR, r.PwHR,
+		r.LTHR, r.LTVel, r.TTS, r.TTDistM, r.Version)
+	return err
 }
 
 // datesWithActivity is the set of training days in [from, to] that carry a

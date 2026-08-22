@@ -618,3 +618,25 @@ td .rec::after{content:"";position:absolute;inset:-.3rem}
 .v-under,.v-over{color:var(--caution)}
 .v-short{color:var(--ink-3)}
 .dsess .v-in,.dsess .v-under{font:700 .68rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase}
+
+/* The benchmark timeline (/trends): one panel per type, the marks thin,
+   the axes recessive, the values on the points. The two decoupling series
+   wear --accent and --hard: measured 21 Aug 2026 with the dataviz
+   validator, CVD ΔE 19.8 light / 22.1 dark, both modes passing. */
+.bench .trendwrap{max-width:34rem} /* 360-unit frame: ~9 px text at a phone's 319 px card, ~15 px here */
+.bench-sum{font:.72rem var(--mono);color:var(--ink-2);letter-spacing:.02em;margin-left:auto;text-align:right}
+.bench-grid{stroke:var(--rule);stroke-width:1}
+.bench-goal{stroke:var(--ink-3);stroke-width:1;stroke-dasharray:4 4}
+.bench-tick{font-size:10px;fill:var(--ink-3)}
+.bench-val{font-size:11px;fill:var(--ink-2)}
+.bench-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round}
+.bench-line.pw{stroke:var(--hard)}
+.bench-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}
+.bench-dot.pw{fill:var(--hard)}
+.bench-legend{font:.68rem var(--mono);color:var(--ink-2);margin:.2rem 0 0}
+.bench-key::before{content:"";display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:var(--accent);margin-right:.3rem;vertical-align:-.05rem}
+.bench-key.pw::before{background:var(--hard)}
+.bench-key+.bench-key{margin-left:.8rem}
+.bench-file{color:var(--ink-3);font-family:var(--mono);font-size:.68rem}
+.block-bench{font:.72rem var(--mono);color:var(--ink-2);letter-spacing:.02em;margin:.15rem 0}
+.block-bench span{display:inline-block;margin-right:.9rem}

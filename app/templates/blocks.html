@@ -13,9 +13,11 @@
     <p class="block-stats">{{.Weeks}} weeks · {{.Volume}} · {{.Sessions}} sessions{{if .Grades}}
       <span class="block-grades">{{range $g, $n := .Grades}}<b class="g g{{lower $g}}">{{$g}}</b>×{{$n}} {{end}}</span>
     {{end}}</p>
+    {{if .Bench}}<p class="block-bench">{{range .Bench}}<span>{{.}}</span>{{end}}</p>{{end}}
     <p class="block-links">
       <a href="/calendar{{.Query}}">Calendar</a>
       <a href="/workouts{{.Query}}">Workouts</a>
+      {{if .Bench}}<a href="/trends{{.Query}}">Trends</a>{{end}}
     </p>
   </li>
   {{end}}

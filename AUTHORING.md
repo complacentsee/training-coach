@@ -343,6 +343,28 @@ which is what `.Kind`, `.Tag` and `.Resting` are for.
 
 ---
 
+### Benchmark tags and the Trends page
+
+A session's `tag` names a benchmark: `FTP`, `DEC`, `LT`, `TT` or `RACE`.
+Tagging a day does two things. It picks the day's guide (`t-FTP` and so on
+must exist in the library), and once the day has a recording it puts the
+day on the Trends page and the block's card on the Blocks page, measured
+from the recording:
+
+| tag | what is measured | from |
+|---|---|---|
+| `FTP` | watts: 75% of the best 60 s of power | the ride with the best 60 s |
+| `DEC` | decoupling, Pa:HR and Pw:HR, in percent | the longest run |
+| `LT` | mean HR over the final 20 min, with the pace over the same window | the fastest run of 10 min or more |
+| `TT`, `RACE` | elapsed time, against the block's `goal.target` | the fastest run of 10 min or more |
+
+Where the day carries `steps` and the recording's laps name them, the
+measurement is taken over the laps of the longest `active` step — the
+effort — rather than the whole file, so a warm-up and cool-down recorded in
+the same file do not dilute it. Otherwise the day's recordings of the
+session's sport are chosen among by the rule in the last column and
+measured whole. A tag the table does not list is a guide name only.
+
 ## library/
 
 Guides are what a popup shows. Keyed by id; the id prefix decides the role:

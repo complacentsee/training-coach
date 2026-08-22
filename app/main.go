@@ -198,6 +198,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /zwo.zip", s.zwoZip)
 	mux.HandleFunc("GET /watch", s.watchPage)
 	mux.HandleFunc("GET /blocks", s.blocks)
+	mux.HandleFunc("GET /trends", s.trends)
 	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("POST /api/entry", s.postEntry)
@@ -1032,6 +1033,78 @@ type blockRow struct {
 	Query    string // "" for the current block, "?block=<id>" otherwise
 	Grades   map[string]int
 	Sessions int
+	// Bench is the block's benchmark record, one line per type the block
+	// has measured: "FTP 214 → 221 W (+7)". From the same rows /trends
+	// charts, so the two cannot disagree.
+	Bench []string
+}
+
+type trendsData struct {
+	Nav     string
+	Title   string
+	Archive *archiveBanner
+	Block   *Block
+	Goal    string
+	Panels  []chartPanel
+	// Ahead lists the benchmark days still to come, so an empty panel set
+	// early in a block reads as "not yet" rather than "nothing".
+	Ahead []string
+	// Nothing is a tagged block with no panel and no day ahead: every test
+	// day has passed and none has a recording that could be measured.
+	Nothing bool
+	// Tagged is false when the block tags nothing the timeline measures.
+	Tagged bool
+}
+
+// blockHasBenchmarks reports whether any day carries a tag the timeline
+// knows how to measure.
+func blockHasBenchmarks(b *Block) bool {
+	for _, wk := range b.Weeks {
+		for _, sess := range wk.Days {
+			if benchmarkSpecFor(sess.Tag) != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// trends is the benchmark timeline: one panel per benchmark type the block
+// has measured, over the block's weeks, with the goal as the line to
+// reach. ?block= shows any block's; the rows are cached per block and date.
+func (s *server) trends(w http.ResponseWriter, r *http.Request) {
+	d := s.ds()
+	day := s.day(d)
+	blk, ok := d.blockFor(r.URL.Query().Get("block"), day)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	td := trendsData{Nav: "trends", Title: "Trends", Block: blk,
+		Archive: s.archiveOf(d, blk, day), Tagged: blockHasBenchmarks(blk)}
+	if blk.Goal.Event != "" {
+		td.Goal = blk.Goal.Event
+		if blk.Goal.Target != "" {
+			td.Goal += " · " + blk.Goal.Target
+		}
+	}
+	for _, p := range benchPanels(s.benchmarks(d, blk, day), s.units(), blk.Goal) {
+		td.Panels = append(td.Panels, chartOf(p, blk))
+	}
+	for wi, wk := range blk.Weeks {
+		for di, sess := range wk.Days {
+			if spec := benchmarkSpecFor(sess.Tag); spec != nil && blk.DayOf(wi, di).After(day) {
+				title := spec.Title
+				if spec.Tag == "TT" || spec.Tag == "RACE" {
+					title = ttTitle(blk.Goal)
+				}
+				td.Ahead = append(td.Ahead, fmt.Sprintf("%s (W%d, %s)", title, wk.N,
+					blk.DayOf(wi, di).Format("Jan 2")))
+			}
+		}
+	}
+	td.Nothing = td.Tagged && len(td.Panels) == 0 && len(td.Ahead) == 0
+	s.render(w, "trends.html", td)
 }
 
 // blocks is the archive index. Grades come from the log by date, so a finished
@@ -1055,6 +1128,9 @@ func (s *server) blocks(w http.ResponseWriter, r *http.Request) {
 			if b.Goal.Target != "" {
 				row.Goal += " · " + b.Goal.Target
 			}
+		}
+		for _, p := range benchPanels(s.benchmarks(d, b, day), s.units(), b.Goal) {
+			row.Bench = append(row.Bench, p.Title+" "+p.Summary)
 		}
 		if d.IsCurrent(b, day) {
 			row.Status = "current"
@@ -2327,6 +2403,14 @@ func (s *server) makeFuncs() template.FuncMap {
 		// multiBlock keeps the Blocks nav item and its cross-links out of the
 		// way until there is actually more than one block to choose between.
 		"multiBlock": func() bool { return len(s.ds().Blocks) > 1 },
+		"addf":       func(a, b float64) float64 { return a + b },
+		// The Trends item appears once the current block tags a day the
+		// timeline can measure; a block without benchmarks has no page.
+		"hasBenchmarks": func() bool {
+			d := s.ds()
+			blk := d.Current(s.day(d))
+			return blk != nil && blockHasBenchmarks(blk)
+		},
 		// watchable shows the Watch tab only when the current block has
 		// something to send — /watch is a 404 otherwise, and a tab that
 		// 404s is worse than no tab.

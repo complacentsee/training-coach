@@ -1,0 +1,31 @@
+{{define "trends.html"}}{{template "head" .}}
+{{template "archive" .Archive}}
+<h1 class="page">Trends</h1>
+<p class="page-sub">{{.Block.Name}}{{if .Goal}} · goal {{.Goal}}{{end}}</p>
+{{if not .Tagged}}<p class="hint">This block tags no benchmark days. Tag a session FTP, DEC, LT, TT or RACE and its measurements chart here.</p>{{end}}
+{{range .Panels}}{{$p := .}}
+<section class="card bench">
+  <div class="card-hd">
+    <h2>{{.Title}}</h2>
+    <span class="bench-sum">{{.Summary}}</span>
+  </div>
+  <div class="trendwrap">
+  <svg class="trend-svg bench-svg" viewBox="0 0 {{.W}} {{.H}}" width="100%" role="img" aria-label="{{.Title}} over the block{{with .GoalText}}, goal {{.}}{{end}}">
+    {{range .Ticks}}<line x1="{{$p.L}}" x2="{{printf "%.1f" (addf $p.L $p.PW)}}" y1="{{printf "%.1f" .Y}}" y2="{{printf "%.1f" .Y}}" class="bench-grid"/><text x="{{printf "%.1f" (addf $p.L -8.0)}}" y="{{printf "%.1f" (addf .Y 3.5)}}" text-anchor="end" class="bench-tick">{{.Text}}</text>{{end}}
+    {{with .GoalY}}<line x1="{{$p.L}}" x2="{{printf "%.1f" (addf $p.L $p.PW)}}" y1="{{printf "%.1f" .}}" y2="{{printf "%.1f" .}}" class="bench-goal"/><text x="{{printf "%.1f" (addf $p.L 4.0)}}" y="{{printf "%.1f" (addf . -4.0)}}" text-anchor="start" class="bench-tick">GOAL {{$p.GoalText}}</text>{{end}}
+    {{range .XLabels}}<text x="{{printf "%.1f" .X}}" y="{{printf "%.1f" (addf $p.Baseline 18.0)}}" text-anchor="middle" class="bench-tick">{{.Text}}</text>{{end}}
+    {{range .Lines}}{{$s := .}}
+      {{if gt (len .Points) 1}}<polyline points="{{.Polyline}}" class="bench-line {{.Key}}"/>{{end}}
+      {{range .Points}}<circle cx="{{printf "%.1f" .X}}" cy="{{printf "%.1f" .Y}}" r="4" class="bench-dot {{$s.Key}}"><title>Week {{.Week}} · {{.Date}} · {{.Text}}{{with .Aside}} · {{.}}{{end}}</title></circle><text x="{{printf "%.1f" .X}}" y="{{printf "%.1f" .LabelY}}" text-anchor="middle" class="bench-val">{{.Text}}</text>{{end}}
+    {{end}}
+  </svg>
+  </div>
+  {{if gt (len .Series) 1}}<p class="bench-legend">{{range .Series}}<span class="bench-key {{.Key}}">{{.Label}}</span>{{end}}</p>{{end}}
+  <details class="trendtable"><summary>Every measurement</summary><table>
+    {{range .Series}}{{$s := .}}{{range .Points}}<tr><td>W{{.Week}} · {{.Date}}</td>{{if $s.Label}}<td>{{$s.Label}}</td>{{end}}<td><strong>{{.Text}}</strong></td><td>{{.Aside}}</td><td class="bench-file">{{.Name}}</td></tr>{{end}}{{end}}
+  </table></details>
+</section>
+{{end}}
+{{if .Ahead}}<p class="hint">Still to come: {{range $i, $a := .Ahead}}{{if $i}}, {{end}}{{$a}}{{end}}.</p>{{end}}
+{{if .Nothing}}<p class="hint">No benchmark day in this block has a recording to measure.</p>{{end}}
+{{template "foot" .}}{{end}}

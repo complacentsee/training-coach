@@ -26,6 +26,7 @@
     <a href="/calendar" {{if eq .Nav "calendar"}}class="on"{{end}}>Calendar</a>
     <a href="/workouts" {{if eq .Nav "workouts"}}class="on"{{end}}>Workouts</a>
     {{if watchable}}<a href="/watch" {{if eq .Nav "watch"}}class="on"{{end}}>Watch</a>{{end}}
+    {{if hasBenchmarks}}<a href="/trends" {{if eq .Nav "trends"}}class="on"{{end}}>Trends</a>{{end}}
     {{if multiBlock}}<a href="/blocks" {{if eq .Nav "blocks"}}class="on"{{end}}>Blocks</a>{{end}}
   </nav>
 </header>

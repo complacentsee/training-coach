@@ -160,8 +160,10 @@ def main():
                 out["power"]["pct_ftp"] = round(avg_w / ftp, 3)
                 out["power"]["z2_band_w"] = [round(0.56 * ftp), round(0.75 * ftp)]
 
-    output = watts or s.get("velocity_smooth")
-    if output and w1 and w2:
+    def decoupling(output):
+        """(first-half output/HR) / (second-half) - 1, in percent, over the
+        whole file; the bike's first 600 s excluded. None when a half has
+        nothing valid in it. Mirrors windowDecoupling over (0, elapsed]."""
         def half_eff(lo, hi):
             num = den = 0.0
             for i in range(1, len(w)):
@@ -172,8 +174,46 @@ def main():
         start = 600 if args.kind == "bike" else 0
         mid = start + (t[-1] - start) / 2
         e1, e2 = half_eff(start, mid), half_eff(mid, t[-1])
-        if e1 and e2:
-            out["decoupling_pct"] = round((e1 / e2 - 1) * 100, 2)
+        return round((e1 / e2 - 1) * 100, 2) if e1 and e2 else None
+
+    vel = s.get("velocity_smooth")
+    output = watts or vel
+    if output and w1 and w2:
+        d = decoupling(output)
+        if d is not None:
+            out["decoupling_pct"] = d
+        # The benchmark timeline's two decoupling figures, each over an
+        # EXPLICIT output: Pa:HR from velocity, Pw:HR from watts. A run
+        # with device power has both; decoupling_pct above is the watts one
+        # on such a file, and a reader comparing the two must know which.
+        if vel:
+            d = decoupling(vel)
+            if d is not None:
+                out["decoupling_pa_pct"] = d
+        if watts:
+            d = decoupling(watts)
+            if d is not None:
+                out["decoupling_pw_pct"] = d
+
+    # The final twenty minutes: mean valid HR and mean velocity over
+    # samples with t > elapsed - 1200, each keeping its own weight. The LT
+    # field test's number is this over its effort; over a whole file it is
+    # what the gate pins.
+    f_num = f_den = 0.0
+    v_num = v_den = 0.0
+    for i in range(1, len(w)):
+        if w[i] > 0 and t[i] > t[-1] - 1200:
+            if ok(hr[i]):
+                f_num += w[i] * hr[i]; f_den += w[i]
+            if vel:
+                v_num += w[i] * vel[i]; v_den += w[i]
+    final = {}
+    if f_den:
+        final["hr"] = round(f_num / f_den, 1)
+    if v_den:
+        final["vel"] = round(v_num / v_den, 3)
+    if final:
+        out["final_20min"] = final
 
     cad = s.get("cadence")
     if cad:

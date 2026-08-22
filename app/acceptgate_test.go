@@ -442,6 +442,25 @@ func diffMetrics(d *dataset, m *activityMetrics, s *activityStreams, raw json.Ra
 		diffs = append(diffs, fmt.Sprintf("hr.max: go %v, py absent", *m.MaxHR))
 	}
 	check("decoupling_pct", m.DecouplingPct, dig(py, "decoupling_pct"), 2)
+	// The benchmark timeline's windowed functions, pinned over the whole
+	// file: the explicit-output decouplings and the final twenty minutes.
+	{
+		w, _ := sampleWeights(s.Time)
+		hrF := intsToFloats(s.HR)
+		hi := float64(s.Time[len(s.Time)-1])
+		if s.HaveHR {
+			if s.HaveVel {
+				check("decoupling_pa_pct", windowDecoupling(s, w, hrF, s.Vel, 0, hi), dig(py, "decoupling_pa_pct"), 2)
+			}
+			if s.HaveWatts {
+				check("decoupling_pw_pct", windowDecoupling(s, w, hrF, intsToFloats(s.Watts), 0, hi), dig(py, "decoupling_pw_pct"), 2)
+			}
+			check("final_20min.hr", windowMean(s.Time, w, hrF, hi-1200, hi, hrValid), dig(py, "final_20min", "hr"), 1)
+		}
+		if s.HaveVel {
+			check("final_20min.vel", windowMean(s.Time, w, s.Vel, hi-1200, hi, func(float64) bool { return true }), dig(py, "final_20min", "vel"), 3)
+		}
+	}
 	check("power.avg", m.AvgPower, dig(py, "power", "avg"), 1)
 	if s.HaveWatts {
 		mx := 0
