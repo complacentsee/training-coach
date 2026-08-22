@@ -640,8 +640,10 @@ func TestTrendsPageAndBlocksCardAgree(t *testing.T) {
 	}
 	trends := get("/trends")
 	sums := regexp.MustCompile(`<h2>([^<]*)</h2>\s*<span class="bench-sum">([^<]*)</span>`).FindAllStringSubmatch(trends, -1)
-	if len(sums) != 4 {
-		t.Fatalf("%d panels on /trends, want 4:\n%s", len(sums), trends)
+	// Four benchmark panels, plus the two best-effort panels every block
+	// with runs carries.
+	if len(sums) != 6 {
+		t.Fatalf("%d panels on /trends, want 6:\n%s", len(sums), trends)
 	}
 	want := map[string]string{
 		"FTP": fmt.Sprintf("%.0f → %.0f W (+%.0f)", pyRound(ex.ftpW, 0), pyRound(ex.ftpW2, 0), pyRound(ex.ftpW2, 0)-pyRound(ex.ftpW, 0)),
@@ -665,8 +667,8 @@ func TestTrendsPageAndBlocksCardAgree(t *testing.T) {
 	if want := " bpm · " + Pace(1/ex.ltVel).In(Metric); !strings.HasSuffix(got["Lactate threshold"], want) {
 		t.Errorf("LT summary %q should end with the pace over the final 20 min (%q)", got["Lactate threshold"], want)
 	}
-	if n := strings.Count(trends, "<polyline"); n != 2 {
-		t.Errorf("%d polylines, want 2: the two-point FTP series and the TT→RACE series", n)
+	if n := strings.Count(trends, "<polyline"); n != 4 {
+		t.Errorf("%d polylines, want 4: the two-point FTP series, the TT→RACE series, and the two best-effort panels", n)
 	}
 	// The RACE is the last point of the time-trial series, and the goal
 	// label sits at the left so the race's own label at the right is clear.
@@ -685,9 +687,11 @@ func TestTrendsPageAndBlocksCardAgree(t *testing.T) {
 	if card == nil {
 		t.Fatalf("no benchmark card on /blocks:\n%s", blocks)
 	}
-	for title, sum := range got {
-		if !strings.Contains(html.UnescapeString(card[1]), title+" "+sum) {
-			t.Errorf("blocks card lacks %q: %s", title+" "+sum, card[1])
+	// The card carries the benchmark lines; the best-effort panels are
+	// /trends' own.
+	for _, title := range []string{"FTP", "Decoupling", "Lactate threshold", "5K time trial"} {
+		if !strings.Contains(html.UnescapeString(card[1]), title+" "+got[title]) {
+			t.Errorf("blocks card lacks %q: %s", title+" "+got[title], card[1])
 		}
 	}
 	if !strings.Contains(blocks, `href="/trends"`) {

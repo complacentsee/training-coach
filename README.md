@@ -49,7 +49,8 @@ Works in Chrome/Edge over USB — no vendor software.
   pushed to the watch, each lap is matched to the step it was meant to be.
   Each calendar week shows what was run beside what was prescribed.
 - **Trends** — a block's benchmark days (FTP, decoupling, LT, time trial)
-  measured from their recordings and charted against the goal.
+  measured from their recordings and charted against the goal, and every
+  run's fastest mile and fastest 5 km stretch across the block.
 - **Coach** — a chat over the plan, the log and the archive, answering
   from the same numbers the pages show. It reads; it changes nothing.
   Off unless `CHAT_MODE=on` is set beside the grader's configuration.

@@ -1111,6 +1111,9 @@ func (s *server) trends(w http.ResponseWriter, r *http.Request) {
 	for _, p := range benchPanels(s.benchmarks(d, blk, day), s.units(), blk.Goal) {
 		td.Panels = append(td.Panels, chartOf(p, blk))
 	}
+	for _, p := range s.effortPanels(blk, day) {
+		td.Panels = append(td.Panels, chartOf(p, blk))
+	}
 	for wi, wk := range blk.Weeks {
 		for di, sess := range wk.Days {
 			if spec := benchmarkSpecFor(sess.Tag); spec != nil && blk.DayOf(wi, di).After(day) {
@@ -2434,7 +2437,7 @@ func (s *server) makeFuncs() template.FuncMap {
 		"hasBenchmarks": func() bool {
 			d := s.ds()
 			blk := d.Current(s.day(d))
-			return blk != nil && blockHasBenchmarks(blk)
+			return blk != nil && (blockHasBenchmarks(blk) || s.recordedRunning(blk) != nil)
 		},
 		// watchable shows the Watch tab only when the current block has
 		// something to send — /watch is a 404 otherwise, and a tab that

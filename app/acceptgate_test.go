@@ -477,6 +477,24 @@ func diffMetrics(d *dataset, m *activityMetrics, s *activityStreams, raw json.Ra
 				dig(py, "power", "best_60s"), 1)
 		}
 	}
+	// The best-effort trend's two numbers, every run: exact integers.
+	if kind == "run" && s.HaveVel {
+		checkInt := func(what string, goVal *int, pyVal any) {
+			switch {
+			case goVal == nil && pyVal == nil:
+			case goVal == nil:
+				diffs = append(diffs, fmt.Sprintf("%s: go absent, py %v", what, pyVal))
+			case pyVal == nil:
+				diffs = append(diffs, fmt.Sprintf("%s: go %d, py absent", what, *goVal))
+			default:
+				if pv, ok := pyVal.(float64); !ok || int(pv) != *goVal {
+					diffs = append(diffs, fmt.Sprintf("%s: go %d, py %v", what, *goVal, pyVal))
+				}
+			}
+		}
+		checkInt("fastest_1mi_s", bestEffort(s, metresPerMile), dig(py, "fastest_1mi_s"))
+		checkInt("fastest_5k_s", bestEffort(s, 5000), dig(py, "fastest_5k_s"))
+	}
 	var cadOut *float64
 	if m.AvgCadence != nil {
 		c := *m.AvgCadence

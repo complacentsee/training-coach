@@ -512,6 +512,21 @@ func fastestSegments(s *activityStreams, meters float64, secs int, count int, u 
 	return out
 }
 
+// bestEffort is the fewest seconds any gap-free stretch of meters took in
+// the recording, nil when it holds none that long. The best-effort trend
+// (/trends) asks every run for its fastest mile and its fastest 5 km; the
+// arithmetic is fastestSegments' with count 1, mirrored in
+// grade_metrics.py as fastest_1mi_s / fastest_5k_s and pinned by the gate
+// — the first mirror fastestSegments has had.
+func bestEffort(s *activityStreams, meters float64) *int {
+	segs := fastestSegments(s, meters, 0, 1, Imperial)
+	if len(segs) == 0 {
+		return nil
+	}
+	v := int(math.Round(segs[0].Secs))
+	return &v
+}
+
 // bestRolling is the highest time-weighted mean of vals over any window of
 // `window` seconds. Recording gaps count as ELAPSED time here, deliberately
 // outside the gap rule: this is max-seeking, a window spanning a stop can

@@ -80,6 +80,40 @@ def share(w, vals, pred, valid=lambda v: True):
                 num += w[i]
     return num / den if den else None
 
+def fastest_stretch_s(t, vel, meters):
+    """Fewest seconds any gap-free stretch of `meters` took, distance
+    integrated from the speed stream over each interval (a non-positive or
+    gap-sized interval adds no distance and marks a gap; a stretch spanning
+    one is never a candidate). Mirrors bestEffort / fastestSegments(count 1)
+    in app/metrics.go. None when the file holds no such stretch."""
+    n = len(t)
+    if n < 2 or not vel:
+        return None
+    dts = sorted(t[i] - t[i - 1] for i in range(1, n) if t[i] - t[i - 1] > 0)
+    gap_s = max(10, dts[len(dts) // 2] * 5) if dts else 10
+    dist = [0.0] * n
+    gaps = [0] * n
+    for i in range(1, n):
+        dt = t[i] - t[i - 1]
+        dist[i], gaps[i] = dist[i - 1], gaps[i - 1]
+        if dt <= 0 or dt >= gap_s:
+            gaps[i] += 1
+            continue
+        dist[i] += vel[i] * dt
+    best, j = None, 0
+    for i in range(n):
+        while j < n and dist[j] - dist[i] < meters:
+            j += 1
+        if j >= n:
+            break
+        if gaps[j] > gaps[i]:
+            continue
+        secs = t[j] - t[i]
+        if best is None or secs < best:
+            best = secs
+    return best
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--streams", required=True)
@@ -220,6 +254,10 @@ def main():
         _, avg_c = weighted(w, cad, lambda v: v > 0)
         if avg_c:
             out["cadence"] = round(avg_c * (2 if args.kind == "run" else 1), 1)
+
+    if args.kind == "run" and vel:
+        out["fastest_1mi_s"] = fastest_stretch_s(t, vel, 1609.344)
+        out["fastest_5k_s"] = fastest_stretch_s(t, vel, 5000.0)
 
     if args.kind == "run":
         cap = anchors["gradeCap"]

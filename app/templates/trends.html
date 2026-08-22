@@ -2,7 +2,7 @@
 {{template "archive" .Archive}}
 <h1 class="page">Trends</h1>
 <p class="page-sub">{{.Block.Name}}{{if .Goal}} · goal {{.Goal}}{{end}}</p>
-{{if not .Tagged}}<p class="hint">This block tags no benchmark days. Tag a session FTP, DEC, LT, TT or RACE and its measurements chart here.</p>{{end}}
+{{if and (not .Tagged) (not .Panels)}}<p class="hint">This block tags no benchmark days and holds no recorded run yet. Tag a session FTP, DEC, LT, TT or RACE, or record a run, and it charts here.</p>{{end}}
 {{range .Panels}}{{$p := .}}
 <section class="card bench">
   <div class="card-hd">
@@ -16,7 +16,7 @@
     {{range .XLabels}}<text x="{{printf "%.1f" .X}}" y="{{printf "%.1f" (addf $p.Baseline 18.0)}}" text-anchor="middle" class="bench-tick">{{.Text}}</text>{{end}}
     {{range .Lines}}{{$s := .}}
       {{if gt (len .Points) 1}}<polyline points="{{.Polyline}}" class="bench-line {{.Key}}"/>{{end}}
-      {{range .Points}}<circle cx="{{printf "%.1f" .X}}" cy="{{printf "%.1f" .Y}}" r="4" class="bench-dot {{$s.Key}}"><title>Week {{.Week}} · {{.Date}} · {{.Text}}{{with .Aside}} · {{.}}{{end}}</title></circle><text x="{{printf "%.1f" .X}}" y="{{printf "%.1f" .LabelY}}" text-anchor="middle" class="bench-val">{{.Text}}</text>{{end}}
+      {{range .Points}}<circle cx="{{printf "%.1f" .X}}" cy="{{printf "%.1f" .Y}}" r="4" class="bench-dot {{$s.Key}}"><title>Week {{.Week}} · {{.Date}} · {{.Text}}{{with .Aside}} · {{.}}{{end}}</title></circle>{{if .Label}}<text x="{{printf "%.1f" .X}}" y="{{printf "%.1f" .LabelY}}" text-anchor="middle" class="bench-val">{{.Label}}</text>{{end}}{{end}}
     {{end}}
   </svg>
   </div>

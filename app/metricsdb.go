@@ -83,6 +83,16 @@ CREATE TABLE IF NOT EXISTS benchmarks(
   ftp_w REAL, pa_hr_pct REAL, pw_hr_pct REAL, lthr REAL, lt_vel REAL,
   tt_s INTEGER, tt_dist_m REAL, version INTEGER NOT NULL,
   PRIMARY KEY(block, date));
+-- The best-effort trend's rows (one per RUN): the fewest seconds any
+-- gap-free stretch of a mile and of 5 km took, NULL where the recording
+-- is shorter. Filled at import and back-filled by the startup reconcile
+-- for any run without a current-version row — off the request path, one
+-- decode per file, never a rebuild. Derived: dropped with the rest on a
+-- schema bump.
+CREATE TABLE IF NOT EXISTS efforts(
+  name TEXT PRIMARY KEY, date TEXT NOT NULL, sport TEXT NOT NULL,
+  mile_s INTEGER, k5_s INTEGER, version INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_efforts_date ON efforts(date);
 CREATE TABLE IF NOT EXISTS weather(
   lat REAL NOT NULL, lon REAL NOT NULL, hour_utc TEXT NOT NULL,
   temp_f REAL, dew_f REAL, humidity_pct INTEGER, wind_mph REAL,
@@ -133,7 +143,7 @@ func openMetricsDBAt(path string) (*metricsDB, error) {
 		// weather is not in this list: it caches an external service rather
 		// than deriving from the archive, so a schema bump has no reason to
 		// throw it away and refetch.
-		for _, t := range []string{"activities", "hr_hist", "power_hist", "failures", "benchmarks"} {
+		for _, t := range []string{"activities", "hr_hist", "power_hist", "failures", "benchmarks", "efforts"} {
 			if _, err := w.Exec(`DROP TABLE IF EXISTS ` + t); err != nil {
 				w.Close()
 				return nil, err
@@ -256,6 +266,15 @@ func (m *metricsDB) importOne(name string, data []byte, loc *time.Location, wx *
 	}
 	for w, sec := range a.PowerHist {
 		if _, err := insPW.Exec(name, w, sec); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM efforts WHERE name=?`, name); err != nil {
+		return nil, err
+	}
+	if streams.Sport == "running" {
+		if _, err := tx.Exec(`INSERT INTO efforts VALUES(?,?,?,?,?,?)`, name, a.Date, a.Sport,
+			bestEffort(streams, metresPerMile), bestEffort(streams, 5000), effortVersion); err != nil {
 			return nil, err
 		}
 	}
@@ -499,6 +518,91 @@ func (m *metricsDB) reconcile(dir string, loc *time.Location, wx *weatherService
 		log.Printf("metrics reconcile: %d imported, %d pruned, %d failed, %d already present in %v",
 			imported, pruned, failed, present, time.Since(start).Round(time.Millisecond))
 	}
+	m.backfillEfforts(dir)
+}
+
+// effortVersion stamps every efforts row; bump it when bestEffort's
+// arithmetic changes shape and the next reconcile re-measures every run.
+const effortVersion = 1
+
+// backfillEfforts measures every run the efforts table lacks at the
+// current version — the archive that predates the table, or every run
+// after a version bump. One decode per file, after the import loop and
+// off the request path; the rows already there keep serving meanwhile.
+func (m *metricsDB) backfillEfforts(dir string) {
+	rows, err := m.r.Query(`SELECT a.name, a.date, a.sport FROM activities a
+		LEFT JOIN efforts e ON e.name = a.name AND e.version = ?
+		WHERE a.sport = 'running' AND e.name IS NULL ORDER BY a.name`, effortVersion)
+	if err != nil {
+		log.Printf("efforts backfill: %v", err)
+		return
+	}
+	type todo struct{ name, date, sport string }
+	var list []todo
+	for rows.Next() {
+		var t todo
+		if err := rows.Scan(&t.name, &t.date, &t.sport); err != nil {
+			rows.Close()
+			log.Printf("efforts backfill: %v", err)
+			return
+		}
+		list = append(list, t)
+	}
+	rows.Close()
+	if len(list) == 0 {
+		return
+	}
+	start := time.Now()
+	done, failed := 0, 0
+	for _, t := range list {
+		data, err := os.ReadFile(filepath.Join(dir, t.name))
+		if err != nil {
+			failed++
+			continue
+		}
+		s, err := decodeForImport(data)
+		if err != nil {
+			failed++
+			continue
+		}
+		m.mu.Lock()
+		_, err = m.w.Exec(`INSERT OR REPLACE INTO efforts VALUES(?,?,?,?,?,?)`, t.name, t.date, t.sport,
+			bestEffort(s, metresPerMile), bestEffort(s, 5000), effortVersion)
+		m.mu.Unlock()
+		if err != nil {
+			failed++
+			continue
+		}
+		done++
+	}
+	log.Printf("efforts backfill: %d runs measured, %d failed, in %v", done, failed, time.Since(start).Round(time.Millisecond))
+}
+
+// effortDay is a date's best mile and best 5 km across its runs, in
+// seconds; nil where no run that day went that far.
+type effortDay struct {
+	MileS *int
+	K5S   *int
+}
+
+// effortsByDate is the best-effort trend's series over [from, to].
+func (m *metricsDB) effortsByDate(from, to string) (map[string]effortDay, error) {
+	rows, err := m.r.Query(`SELECT date, MIN(mile_s), MIN(k5_s) FROM efforts
+		WHERE date >= ? AND date <= ? GROUP BY date`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]effortDay{}
+	for rows.Next() {
+		var d string
+		var e effortDay
+		if err := rows.Scan(&d, &e.MileS, &e.K5S); err != nil {
+			return nil, err
+		}
+		out[d] = e
+	}
+	return out, rows.Err()
 }
 
 // prune drops every row for a file no longer in the archive. It refuses to
@@ -538,7 +642,7 @@ func (m *metricsDB) prune(onDisk map[string]bool) (int, error) {
 	defer m.mu.Unlock()
 	n := 0
 	for name := range stale {
-		for _, table := range []string{"activities", "hr_hist", "power_hist", "failures"} {
+		for _, table := range []string{"activities", "hr_hist", "power_hist", "failures", "efforts"} {
 			if _, err := m.w.Exec(`DELETE FROM `+table+` WHERE name=?`, name); err != nil {
 				return n, err
 			}

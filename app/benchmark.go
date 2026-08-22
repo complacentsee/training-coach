@@ -33,7 +33,9 @@ package main
 // least ten minutes for LT, TT and RACE. Measurement inside the window is
 // the register's (metrics.go: windowDecoupling, windowMean, windowBest),
 // mirrored in grade_metrics.py over whole files and pinned by the
-// acceptance gate; the window bounds are parameters to it.
+// acceptance gate; the window bounds are parameters to it. The stretch
+// search a free-run effort uses (fastestSegments) had no mirror until the
+// best-effort trend gave it one on 22 Aug 2026 (bestEffort).
 //
 // Rows cache in the benchmarks table keyed by block and date, stamped with
 // the names of the day's recordings and benchmarkVersion: a file added to
@@ -515,6 +517,10 @@ type benchPanel struct {
 	Goal     *float64 // a reference line, TT only
 	GoalText string
 	Summary  string // "214 → 221 W (+7)" / "21:58 · 0:38 short of 21:20"
+	// Dense is a series with a point per run rather than per test day:
+	// only the best and the latest point carry a printed value, the rest
+	// are markers, and the table below holds every number.
+	Dense bool
 }
 
 // benchPanels folds points into panels in a fixed order, only the types
@@ -657,6 +663,7 @@ type chartPoint struct {
 	// LabelY is where the value prints: above the marker, or below it when
 	// another series' point on the same date would be printed across.
 	LabelY float64
+	Label  string // what prints beside the marker; "" on a dense series' ordinary points
 	Text   string
 	Date   string
 	Week   int
@@ -782,8 +789,25 @@ func chartOf(p benchPanel, blk *Block) chartPanel {
 			cp := chartPoint{X: x(pt.Date), Y: y(pt.Value), Text: pt.Text, Date: pt.Date,
 				Week: pt.Week, Aside: pt.Aside, Name: pt.Name}
 			cp.LabelY = cp.Y - 9
+			cp.Label = pt.Text
 			cs.Points = append(cs.Points, cp)
 			pl = append(pl, fmt.Sprintf("%.1f,%.1f", cp.X, cp.Y))
+		}
+		if p.Dense && len(cs.Points) > 2 {
+			// The best of a time series is its smallest value, which on
+			// this axis is the LOWEST marker (largest Y); it and the latest
+			// keep their labels, the rest are markers with a table beneath.
+			best := 0
+			for i := range cs.Points {
+				if cs.Points[i].Y > cs.Points[best].Y {
+					best = i
+				}
+			}
+			for i := range cs.Points {
+				if i != best && i != len(cs.Points)-1 {
+					cs.Points[i].Label = ""
+				}
+			}
 		}
 		cs.Polyline = strings.Join(pl, " ")
 		c.Lines = append(c.Lines, cs)
@@ -816,4 +840,85 @@ func chartOf(p benchPanel, blk *Block) chartPanel {
 		}
 	}
 	return c
+}
+
+/* ── the best-effort trend ─────────────────────────────────────────────── */
+
+// effortPanels is the best-effort trend: every run's fastest mile and
+// fastest 5 km stretch across the block, the day's best where a day holds
+// several runs, from the efforts table. A fitness trace between test days
+// from data already owned; the 5 km panel carries the goal line when the
+// goal is a 5K.
+func (s *server) effortPanels(blk *Block, today time.Time) []benchPanel {
+	if s.metrics == nil || len(blk.Weeks) == 0 {
+		return nil
+	}
+	last := blk.DayOf(len(blk.Weeks)-1, 6)
+	if last.After(today) {
+		last = today
+	}
+	days, err := s.metrics.effortsByDate(blk.DayOf(0, 0).Format("2006-01-02"), last.Format("2006-01-02"))
+	if err != nil {
+		log.Printf("trends: reading efforts: %v", err)
+		return nil
+	}
+	if len(days) == 0 {
+		return nil
+	}
+	dates := make([]string, 0, len(days))
+	for d := range days {
+		dates = append(dates, d)
+	}
+	sort.Strings(dates)
+	weekOf := func(date string) int {
+		t, err := time.ParseInLocation("2006-01-02", date, blk.location())
+		if err != nil {
+			return 0
+		}
+		if wk, _, ok := blk.Locate(t); ok {
+			return wk.N
+		}
+		return 0
+	}
+	build := func(title string, pick func(effortDay) *int, goalM float64) benchPanel {
+		p := benchPanel{Tag: title, Title: title, Unit: "time", Dense: true}
+		var pts []seriesPoint
+		for _, d := range dates {
+			v := pick(days[d])
+			if v == nil {
+				continue
+			}
+			pts = append(pts, seriesPoint{Date: d, Week: weekOf(d), Value: float64(*v), Text: clockOf(*v)})
+		}
+		if len(pts) == 0 {
+			return p
+		}
+		p.Series = []benchSeries{{Points: pts}}
+		best := pts[0]
+		for _, x := range pts {
+			if x.Value < best.Value {
+				best = x
+			}
+		}
+		lastPt := pts[len(pts)-1]
+		p.Summary = fmt.Sprintf("best %s (W%d)", best.Text, best.Week)
+		if lastPt.Date != best.Date {
+			p.Summary += fmt.Sprintf(" · latest %s (W%d)", lastPt.Text, lastPt.Week)
+		}
+		if goalM > 0 && goalMetres(blk.Goal.Event) == goalM {
+			if gf, err := parseClock(blk.Goal.Target); err == nil && blk.Goal.Target != "" {
+				gv := float64(int(gf))
+				p.Goal, p.GoalText = &gv, blk.Goal.Target
+			}
+		}
+		return p
+	}
+	var out []benchPanel
+	if p := build("Fastest mile", func(e effortDay) *int { return e.MileS }, 0); len(p.Series) > 0 {
+		out = append(out, p)
+	}
+	if p := build("Fastest 5 km stretch", func(e effortDay) *int { return e.K5S }, 5000); len(p.Series) > 0 {
+		out = append(out, p)
+	}
+	return out
 }
