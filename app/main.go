@@ -268,6 +268,10 @@ func (s *server) startupReconcile() {
 	if s.grader != nil {
 		s.grader.reconcile()
 	}
+	// Last, because on the first start of this build it decodes every run
+	// already in the cache — minutes on live — and nothing above should
+	// wait behind that.
+	s.metrics.backfillEfforts(s.activitiesDir())
 }
 
 // reload swaps in a fresh dataset. A failed load leaves the old one serving:
@@ -557,7 +561,10 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 		if s.clock != nil {
 			now = s.clock()
 		}
-		td.Forecast = s.forecastFor(d, blk, s.day(d), now, td.Recorded || td.HasActivity && td.Session.Kind.IsRun())
+		// Today is "decided" — look to tomorrow — once its run is recorded,
+		// graded, or marked not done.
+		decided := td.Skipped || td.Recorded || (td.HasActivity && td.Session.Kind.IsRun())
+		td.Forecast = s.forecastFor(d, blk, s.day(d), now, decided)
 	}
 
 	if info, amended := eff.info[iso]; amended {

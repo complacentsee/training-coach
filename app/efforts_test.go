@@ -128,15 +128,16 @@ func TestEffortsBackfillOnReconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 	ts.s.metrics.reconcile(adir, time.UTC, nil)
+	ts.s.metrics.backfillEfforts(adir)
 	got, _ := ts.s.metrics.effortsByDate("2026-01-13", "2026-01-13")
 	if e := got["2026-01-13"]; e.MileS == nil {
-		t.Fatal("the reconcile did not back-fill the run's efforts")
+		t.Fatal("the backfill did not measure the run's efforts")
 	}
 	// An older version is re-measured too.
 	if _, err := ts.s.metrics.w.Exec(`UPDATE efforts SET version = 0, mile_s = 1`); err != nil {
 		t.Fatal(err)
 	}
-	ts.s.metrics.reconcile(adir, time.UTC, nil)
+	ts.s.metrics.backfillEfforts(adir)
 	got, _ = ts.s.metrics.effortsByDate("2026-01-13", "2026-01-13")
 	if e := got["2026-01-13"]; e.MileS == nil || *e.MileS == 1 {
 		t.Errorf("an old-version row was not re-measured: %v", deref(e.MileS))

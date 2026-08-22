@@ -803,10 +803,17 @@ func chartOf(p benchPanel, blk *Block) chartPanel {
 					best = i
 				}
 			}
+			last := len(cs.Points) - 1
 			for i := range cs.Points {
-				if i != best && i != len(cs.Points)-1 {
+				if i != best && i != last {
 					cs.Points[i].Label = ""
 				}
+			}
+			// Days apart but close on the frame — 2.8 units a day over a
+			// 16-week axis — the two labels would print across each other;
+			// the latest drops under its marker.
+			if b, l := cs.Points[best], cs.Points[last]; best != last && math.Abs(b.X-l.X) < 48 && math.Abs(b.Y-l.Y) < 16 {
+				cs.Points[last].LabelY = l.Y + 17
 			}
 		}
 		cs.Polyline = strings.Join(pl, " ")

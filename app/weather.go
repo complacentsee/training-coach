@@ -182,6 +182,31 @@ func (w *weatherService) store(la, lo float64, hour time.Time, c *conditions) {
 	}
 }
 
+// openMeteoGET is the one transport both Open-Meteo clients share — the
+// history archive and the forecast: a bounded GET, the body capped at a
+// megabyte, a non-200 returned with its text.
+func openMeteoGET(client *http.Client, base string, q url.Values, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", resp.Status, body)
+	}
+	return body, nil
+}
+
 // backfillWeatherLimit bounds one startup's catch-up. The cache means several
 // sessions on the same day and place cost a single request, so this is a bound
 // on distinct days rather than on files, but it is still a bound: an archive
@@ -296,24 +321,9 @@ func (w *weatherService) fetchDay(la, lo float64, hour time.Time) error {
 		"wind_speed_unit":  {"mph"},
 		"timezone":         {"UTC"},
 	}
-	base := envOr("WEATHER_BASE_URL", weatherArchiveURL) // tests point this at a stub
-	ctx, cancel := context.WithTimeout(context.Background(), weatherLookupTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", base+"?"+q.Encode(), nil)
+	body, err := openMeteoGET(w.http, envOr("WEATHER_BASE_URL", weatherArchiveURL), q, weatherLookupTimeout) // tests point the base at a stub
 	if err != nil {
 		return err
-	}
-	resp, err := w.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: %s", resp.Status, body)
 	}
 	var out struct {
 		Hourly struct {

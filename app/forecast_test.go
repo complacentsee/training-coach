@@ -53,7 +53,7 @@ func forecastServer(t *testing.T, stub *httptest.Server) (testServer, time.Time)
 	start := shiftedBlock(t, dir)
 	ts := fitTestMuxServer(t, dir)
 	ts.s.forecast = newForecastService(true)
-	if _, err := ts.s.metrics.w.Exec(`INSERT INTO weather VALUES(44.9,-93.3,'2026-08-20T12:00:00Z',70,60,70,5,'2026-08-20T13:00:00Z')`); err != nil {
+	if _, err := ts.s.metrics.w.Exec(`INSERT INTO weather VALUES(51.5,-0.1,'2026-08-20T12:00:00Z',70,60,70,5,'2026-08-20T13:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	return ts, start

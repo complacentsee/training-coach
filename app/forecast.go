@@ -1,8 +1,8 @@
 package main
 
 // The morning's forecast on the today card, and the LT test's gate read
-// mechanically. A Minneapolis summer decides what hour a long run can
-// start, and the threshold test's "temp + dew point under 140" was prose
+// mechanically. A humid summer decides what hour a long run can start,
+// and the threshold test's "temp + dew point under 140" was prose
 // the athlete had to check against a weather app. This asks Open-Meteo's
 // FORECAST endpoint — the weather service beside it reads only HISTORY,
 // and that stays untouched: what was frozen onto a recording at import
@@ -26,10 +26,8 @@ package main
 //     none is.
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -115,24 +113,9 @@ func (f *forecastService) fetch(lat, lon float64, loc *time.Location) ([]forecas
 		"timezone":         {loc.String()},
 		"forecast_days":    {"2"},
 	}
-	base := envOr("FORECAST_BASE_URL", forecastURL)
-	ctx, cancel := context.WithTimeout(context.Background(), forecastTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", base+"?"+q.Encode(), nil)
+	body, err := openMeteoGET(f.http, envOr("FORECAST_BASE_URL", forecastURL), q, forecastTimeout)
 	if err != nil {
 		return nil, err
-	}
-	resp, err := f.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: %s", resp.Status, body)
 	}
 	var out struct {
 		Hourly struct {

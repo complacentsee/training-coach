@@ -518,7 +518,6 @@ func (m *metricsDB) reconcile(dir string, loc *time.Location, wx *weatherService
 		log.Printf("metrics reconcile: %d imported, %d pruned, %d failed, %d already present in %v",
 			imported, pruned, failed, present, time.Since(start).Round(time.Millisecond))
 	}
-	m.backfillEfforts(dir)
 }
 
 // effortVersion stamps every efforts row; bump it when bestEffort's
@@ -527,8 +526,8 @@ const effortVersion = 1
 
 // backfillEfforts measures every run the efforts table lacks at the
 // current version — the archive that predates the table, or every run
-// after a version bump. One decode per file, after the import loop and
-// off the request path; the rows already there keep serving meanwhile.
+// after a version bump. One decode per file, off the request path and
+// LAST in the startup reconcile; the rows already there keep serving.
 func (m *metricsDB) backfillEfforts(dir string) {
 	rows, err := m.r.Query(`SELECT a.name, a.date, a.sport FROM activities a
 		LEFT JOIN efforts e ON e.name = a.name AND e.version = ?
