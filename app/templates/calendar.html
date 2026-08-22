@@ -17,6 +17,7 @@
         <span>{{.Volume}}{{if .WeekGrade}} · <button type="button" class="g g{{lower .WeekGrade}}" title="{{.WeekNote}}"
               data-note="{{.WeekNote}}" data-grade="{{.WeekGrade}}" data-range="{{.WeekRange}}"
               data-when="Week {{$w.N}}" aria-label="Week {{$w.N}} graded {{.WeekGrade}} — read why">{{.WeekGrade}}</button>{{end}}</span>
+        {{with .Ran}}<span>{{.}}</span>{{end}}
       </th>
       {{range $i, $c := .Cells}}
         <td class="{{kindCls $c.Session.Kind}}{{if $c.Grade}} graded{{end}}{{if $c.Skipped}} skipped{{end}}{{if or $c.FitURL $c.Recorded}} has-chips{{end}}{{if and (eq $w.N $.TodayW) (eq $i $.TodayD)}} now{{end}}"

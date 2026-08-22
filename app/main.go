@@ -667,9 +667,60 @@ func (s *server) archiveOf(d *dataset, blk *Block, day time.Time) *archiveBanner
 	return &archiveBanner{Name: blk.Name, Span: blk.Span(), Query: "?block=" + url.QueryEscape(blk.ID)}
 }
 
+// recordedRunning is the archive's running distance per date across blk,
+// or nil when there is nothing to say: no metrics cache, a read error, or
+// not one run recorded in the block's span. nil is the signal the pages
+// use to show the prescribed volume alone — a block with no recordings
+// must read exactly as it did before recordings existed, and "ran 0" on
+// every row of a plan nobody has pulled a watch against is noise, not
+// information.
+func (s *server) recordedRunning(blk *Block) map[string]float64 {
+	if s.metrics == nil || len(blk.Weeks) == 0 {
+		return nil
+	}
+	last := blk.DayOf(len(blk.Weeks)-1, 6)
+	ran, err := s.metrics.runDistanceByDate(blk.DayOf(0, 0).Format("2006-01-02"), last.Format("2006-01-02"))
+	if err != nil {
+		log.Printf("calendar: reading recorded running: %v", err)
+		return nil
+	}
+	if len(ran) == 0 {
+		return nil
+	}
+	return ran
+}
+
+// weekRan sums a week's seven dates out of recordedRunning's map.
+func weekRan(ran map[string]float64, blk *Block, wi int) Distance {
+	var total float64
+	for i := 0; i < 7; i++ {
+		total += ran[blk.DayOf(wi, i).Format("2006-01-02")]
+	}
+	return Distance(total)
+}
+
+// ranLabel is "ran 27.4" beside a prescribed "30 mi": the unit is said
+// once, by the plan, when the measured figure carries the same one. It is
+// kept when the two differ — "0 km · ran 400 m", "1 mile · ran 0.8 miles"
+// — so a number never loses the unit that makes it one.
+//
+// The spaces inside it are non-breaking. The calendar row's header is
+// 5.6rem wide and "30 mi · ran 27.4" does not fit it at any viewport —
+// measured 21 Aug 2026, it broke between "ran" and the number, leaving a
+// bare "27.4" on a line of its own — so the calendar gives the label its
+// own line under the volume, and the joins keep "ran 0.8 miles" whole
+// wherever it is set.
+func ranLabel(plan, ran string) string {
+	if i, j := strings.LastIndexByte(plan, ' '), strings.LastIndexByte(ran, ' '); i > 0 && j > 0 && plan[i:] == ran[j:] {
+		ran = ran[:j]
+	}
+	return "ran\u00a0" + strings.ReplaceAll(ran, " ", "\u00a0")
+}
+
 type calRow struct {
 	Week      *Week
 	Volume    string
+	Ran       string // "ran 27.4": the week's recorded running beside its prescribed volume, once the week has begun
 	Cells     []calCell
 	WeekGrade string
 	WeekNote  string
@@ -741,8 +792,12 @@ func (s *server) calendar(w http.ResponseWriter, r *http.Request) {
 			recorded = set
 		}
 	}
+	ran := s.recordedRunning(blk)
 	for wi, wk := range blk.Weeks {
 		row := calRow{Week: wk, Volume: wk.Volume().In(s.units())}
+		if ran != nil && !blk.DayOf(wi, 0).After(day) {
+			row.Ran = ranLabel(row.Volume, weekRan(ran, blk, wi).In(s.units()))
+		}
 		if g, ok := weekGrades[wk.StartISO()]; ok {
 			row.WeekGrade, row.WeekNote = g.Val, g.Note
 			row.WeekRange = bandOf[g.Val]
@@ -835,6 +890,7 @@ type weekData struct {
 	Week       *Week
 	MesoName   string
 	VolumeLong string
+	Ran        string // as calRow.Ran, against the long form
 	Archive    *archiveBanner
 	Days       []dayView
 	Prev       int
@@ -879,6 +935,9 @@ func (s *server) week(w http.ResponseWriter, r *http.Request) {
 		Headings:   []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}}
 	if m := wk.Mesocycle(); m != nil {
 		wd.MesoName = m.Name
+	}
+	if ran := s.recordedRunning(blk); ran != nil && !blk.DayOf(n-1, 0).After(day) {
+		wd.Ran = ranLabel(wd.VolumeLong, weekRan(ran, blk, n-1).InLong(s.units()))
 	}
 	for i, sess := range wk.Days {
 		sc := ctx.forSession(&sess)

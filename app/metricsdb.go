@@ -275,6 +275,33 @@ func (m *metricsDB) byDate(date string) ([]activityMetrics, error) {
 	return out, rows.Err()
 }
 
+// runDistanceByDate sums the recorded RUNNING distance per training day in
+// [from, to], in metres. Running only, because it is the other side of
+// Week.Volume: the plan's volume is its run kinds' distances, so what is
+// measured against it is the running the archive holds, on whatever day it
+// landed — a run displaced onto a bike day still counts, a ride on a run
+// day never does. A recording with no distance (a treadmill file with no
+// footpod) contributes nothing rather than poisoning the sum.
+func (m *metricsDB) runDistanceByDate(from, to string) (map[string]float64, error) {
+	rows, err := m.r.Query(`SELECT date, SUM(distance_m) FROM activities
+		WHERE sport = 'running' AND distance_m IS NOT NULL
+		  AND date >= ? AND date <= ? GROUP BY date`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]float64{}
+	for rows.Next() {
+		var d string
+		var m float64
+		if err := rows.Scan(&d, &m); err != nil {
+			return nil, err
+		}
+		out[d] = m
+	}
+	return out, rows.Err()
+}
+
 // datesWithActivity is the set of training days in [from, to] that carry a
 // recording — one query per calendar render rather than one per cell, which
 // is what keeps a 16-week grid at a single round trip.

@@ -1,7 +1,7 @@
 {{define "week.html"}}{{template "head" .}}
 {{template "archive" .Archive}}
 <h1 class="page">Week {{.Week.N}}</h1>
-<p class="page-sub">{{.Week.Dates}} · {{.MesoName}} · {{.VolumeLong}}</p>
+<p class="page-sub">{{.Week.Dates}} · {{.MesoName}} · {{.VolumeLong}}{{with .Ran}} · {{.}}{{end}}</p>
 {{range .Days}}
 <section class="card {{kindCls .Session.Kind}}">
   <div class="card-hd">
