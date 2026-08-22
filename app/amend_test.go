@@ -532,3 +532,68 @@ func TestTradingTwoStructuredDaysRotatesIdentity(t *testing.T) {
 		t.Errorf("identity did not return with the authored plan: %q", ir)
 	}
 }
+
+// The trigger draws only where the flow has a real offer: not on a graded
+// day, not on the last undone day of a week whose other days are done —
+// the button on a graded Saturday that opened a flow which could only
+// refuse (22 Aug 2026) — and yes on a coming day with somewhere to go.
+func TestReworkTriggerOnlyWhereTheFlowWouldOffer(t *testing.T) {
+	dir := t.TempDir()
+	shiftedBlock(t, dir) // week 1 past, week 2 in progress, week 3 ahead; UTC athlete
+	ts := fitTestMuxServer(t, dir)
+	today := ts.s.day(ts.s.ds())
+	iso := today.Format("2006-01-02")
+	blk := ts.s.ds().Blocks[0]
+	wk, di, ok := blk.Locate(today)
+	if !ok {
+		t.Fatal("today is not in the shifted block")
+	}
+	if wk.Days[di].Kind == KindRest {
+		t.Skip("today is a rest day in the fixture; the trigger never draws on one without an amendment")
+	}
+
+	// 1. A coming day with somewhere to go: week 3's quality Tuesday has
+	// Thursday's rest to move to.
+	tue := blk.DayOf(2, 1).Format("2006-01-02")
+	rec := get(ts.mux, "/week/3", nil)
+	if !strings.Contains(rec.Body.String(), `data-rework="`+tue+`"`) {
+		t.Errorf("week 3's Tuesday should draw the trigger: it can move to Thursday")
+	}
+
+	// 2. Today, undone, with later days still open: offered.
+	rec = get(ts.mux, "/", nil)
+	if !strings.Contains(rec.Body.String(), `data-rework="`+iso+`"`) {
+		t.Errorf("today, undone with the week open, should draw the trigger")
+	}
+
+	// 3. Every later day of this week done: nothing to move to, so the
+	// only offers are Drop it / Absorb it — no trigger, though the flow
+	// still answers can=true if asked.
+	for i := di + 1; i < 7; i++ {
+		d := blk.DayOf(wk.N-1, i).Format("2006-01-02")
+		if err := ts.s.store.Append(Entry{Date: d, Kind: "grade", Val: "B", Note: "done"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec = get(ts.mux, "/", nil)
+	if strings.Contains(rec.Body.String(), `data-rework="`+iso+`"`) {
+		t.Errorf("with the rest of the week done there is nothing to rework; the trigger still draws")
+	}
+	rec = get(ts.mux, "/api/rework?date="+iso, nil)
+	if !strings.Contains(rec.Body.String(), `"can":true`) || strings.Contains(rec.Body.String(), `"move"`) {
+		t.Errorf("the flow itself should still answer, with no move: %s", rec.Body.String())
+	}
+
+	// 4. Today graded: the record does not move; no trigger, can=false.
+	if err := ts.s.store.Append(Entry{Date: iso, Kind: "grade", Val: "B", Note: "long run done"}); err != nil {
+		t.Fatal(err)
+	}
+	rec = get(ts.mux, "/", nil)
+	if strings.Contains(rec.Body.String(), `data-rework="`+iso+`"`) {
+		t.Errorf("a graded day draws the trigger")
+	}
+	rec = get(ts.mux, "/api/rework?date="+iso, nil)
+	if !strings.Contains(rec.Body.String(), `"can":false`) || !strings.Contains(rec.Body.String(), "already graded") {
+		t.Errorf("graded day: %s", rec.Body.String())
+	}
+}

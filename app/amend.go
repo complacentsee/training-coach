@@ -572,40 +572,81 @@ type reworkCandidate struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// reworkOut is what /api/rework answers and what the pages ask before
+// drawing the trigger.
+type reworkOut struct {
+	Date       string            `json:"date"`
+	Day        string            `json:"day"`
+	Label      string            `json:"label"`
+	Amt        string            `json:"amt"`
+	Can        bool              `json:"can"`
+	Reason     string            `json:"reason,omitempty"`
+	Standing   string            `json:"standing,omitempty"`
+	SkipNote   string            `json:"skip_note,omitempty"`
+	Candidates []reworkCandidate `json:"candidates,omitempty"`
+}
+
+// offers reports whether the flow has something to do for the day that
+// the skip button does not already do: a standing amendment to put back,
+// or a real change — a move, a swap, a displace, running a test day
+// plain. "Drop it" and "Absorb it" alone are not a week to rework, so a
+// day whose only company is those draws no trigger: the last day of a
+// week whose other days are done, or a day already graded or recorded.
+// The app's rule for the regrade control, applied here (Adam, 22 Aug
+// 2026): offered only where the flow would accept it.
+func (o reworkOut) offers() bool {
+	if !o.Can {
+		return false
+	}
+	if o.Standing != "" {
+		return true
+	}
+	for _, c := range o.Candidates {
+		switch c.Op {
+		case "move", "swap", "displace", "plain":
+			return true
+		}
+	}
+	return false
+}
+
+// reworkOffered is the pages' question: should the day draw the trigger.
+func (s *server) reworkOffered(iso string) bool {
+	out, code := s.reworkPayload(iso)
+	return code == http.StatusOK && out.offers()
+}
+
 // getRework is GET /api/rework?date=: the deterministic candidate list, no
 // model anywhere. Every number and label is server-resolved; the client
 // renders strings.
 func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
-	iso := r.URL.Query().Get("date")
-	d := s.data.Load()
-	if d == nil {
-		http.Error(w, "no data loaded", http.StatusServiceUnavailable)
+	out, code := s.reworkPayload(r.URL.Query().Get("date"))
+	if code != http.StatusOK {
+		http.Error(w, out.Reason, code)
 		return
 	}
+	s.writeJSON(w, out)
+}
+
+// reworkPayload builds the answer; a non-200 code carries its text in
+// Reason.
+func (s *server) reworkPayload(iso string) (reworkOut, int) {
+	d := s.data.Load()
+	if d == nil {
+		return reworkOut{Reason: "no data loaded"}, http.StatusServiceUnavailable
+	}
 	e := s.effective()
-	out := struct {
-		Date       string            `json:"date"`
-		Day        string            `json:"day"`
-		Label      string            `json:"label"`
-		Amt        string            `json:"amt"`
-		Can        bool              `json:"can"`
-		Reason     string            `json:"reason,omitempty"`
-		Standing   string            `json:"standing,omitempty"`
-		SkipNote   string            `json:"skip_note,omitempty"`
-		Candidates []reworkCandidate `json:"candidates,omitempty"`
-	}{Date: iso, Day: amendDayName(iso, d.Loc)}
+	out := reworkOut{Date: iso, Day: amendDayName(iso, d.Loc)}
 
 	if info, standing := e.info[iso]; standing {
 		out.Standing = amendLine(info, d.Loc)
 		out.Can = true // the only offered action is revoke, client-side
-		s.writeJSON(w, out)
-		return
+		return out, http.StatusOK
 	}
 
 	bi, wk, di, ok := locateISO(d.Blocks, d.Loc, iso)
 	if !ok {
-		http.Error(w, "outside any block", http.StatusNotFound)
-		return
+		return reworkOut{Reason: "outside any block"}, http.StatusNotFound
 	}
 	src := wk.Days[di]
 	out.Label = src.Label
@@ -625,8 +666,7 @@ func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
 	}
 	if probe != "" {
 		out.Can, out.Reason = false, probe
-		s.writeJSON(w, out)
-		return
+		return out, http.StatusOK
 	}
 	out.Can = true
 
@@ -714,7 +754,7 @@ func (s *server) getRework(w http.ResponseWriter, r *http.Request) {
 		reworkCandidate{Op: "cancel", Title: "Drop it", Detail: cancelDetail},
 		reworkCandidate{Title: "Absorb it — change nothing",
 			Detail: "the plan stands; a skip already tells the story"})
-	s.writeJSON(w, out)
+	return out, http.StatusOK
 }
 
 func (s *server) writeJSON(w http.ResponseWriter, v any) {

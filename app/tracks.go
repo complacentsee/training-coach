@@ -183,7 +183,7 @@ func (s *server) missedWork(d *dataset, blk *Block, wk *Week, todayISO string) *
 		v.Items = append(v.Items, missedItem{
 			Date: iso, Day: day, Key: "session",
 			Label: stripEmph(sess.Label), Guide: sess.GuideID(),
-			Meta: "planned " + day, Rework: true,
+			Meta: "planned " + day, Rework: s.reworkOffered(iso),
 		})
 	}
 

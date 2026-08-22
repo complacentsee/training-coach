@@ -573,11 +573,13 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	// An agreed change the current data dissolved has to be said where the
 	// athlete looks, not only in a server log nobody tails.
 	td.Voided = eff.voided
-	// The rework trigger renders on any real session in the current block —
-	// and on a vacated day, where the only offer is putting it back. The
-	// flow itself explains a refusal (steps, the record, a tagged week): a
-	// control that quietly vanishes reads as a bug, not a rule.
-	td.CanRework = ok && (td.Session.Kind != KindRest || td.AmendLine != "")
+	// The rework trigger renders where the flow has a real offer — a move
+	// somewhere, a test day run plain, a standing amendment to put back —
+	// and not otherwise: not on a graded or recorded day, and not on the
+	// last day of a week whose other days are done. It used to render on
+	// any real session and let the flow explain its refusal; the button on
+	// a graded Saturday was the case that changed that (22 Aug 2026).
+	td.CanRework = ok && s.reworkOffered(iso)
 	if ok {
 		td.Missed = s.missedWork(d, blk, wk, iso)
 	}
@@ -1024,8 +1026,8 @@ func (s *server) week(w http.ResponseWriter, r *http.Request) {
 		// a day BEFORE it arrives, and the today card can only speak for
 		// today. Current block, today or later, and a real session — or an
 		// amended day, whose only offer is putting it back.
-		if d.IsCurrent(blk, day) && dv.Date.Format("2006-01-02") >= day.Format("2006-01-02") &&
-			(dv.Session.Kind != KindRest || dv.AmendLine != "") {
+		if dISO := dv.Date.Format("2006-01-02"); d.IsCurrent(blk, day) && dISO >= day.Format("2006-01-02") &&
+			s.reworkOffered(dISO) {
 			dv.CanRework = true
 		}
 		wd.Days = append(wd.Days, dv)
