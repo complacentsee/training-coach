@@ -652,3 +652,7 @@ td .rec::after{content:"";position:absolute;inset:-.3rem}
 .say textarea{width:100%;box-sizing:border-box;padding:.5rem .6rem;font:inherit;font-size:.92rem;border:1px solid var(--rule);border-radius:4px;background:var(--sunk);color:var(--ink);resize:vertical}
 .say-row{display:flex;align-items:center;gap:.8rem;margin-top:.4rem}
 .saybtn{padding:.35rem .9rem}
+
+/* The forecast line on the today card: quiet, one line, the LT gate under it. */
+.forecast{font:.72rem var(--mono);color:var(--ink-2);letter-spacing:.02em;margin:.15rem 0 .5rem;line-height:1.5}
+.forecast b{font-weight:700;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase;font-size:.62rem;margin-right:.2rem}

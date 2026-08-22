@@ -51,6 +51,9 @@ Works in Chrome/Edge over USB — no vendor software.
 - **Trends** — a block's benchmark days (FTP, decoupling, LT, time trial)
   measured from their recordings and charted against the goal, and every
   run's fastest mile and fastest 5 km stretch across the block.
+- **Forecast** — the next outdoor session's morning on the today card
+  (three hours of temperature and dew point, wind, rain), and the LT
+  test's heat gate evaluated on its day. Open-Meteo, cached an hour.
 - **Coach** — a chat over the plan, the log and the archive, answering
   from the same numbers the pages show. It reads; it changes nothing.
   Off unless `CHAT_MODE=on` is set beside the grader's configuration.

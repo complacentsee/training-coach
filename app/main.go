@@ -52,13 +52,17 @@ type server struct {
 	// eff is the amended view of data — the authored dataset with standing
 	// amend entries replayed over it (amend.go). Rebuilt when either the
 	// data Rev or the log sequence moves; effMu serialises the rebuild.
-	eff     atomic.Pointer[effectiveSet]
-	effMu   sync.Mutex
-	store   *Store
-	metrics *metricsDB
-	weather *weatherService
-	grader  *grader
-	coach   *coach
+	eff      atomic.Pointer[effectiveSet]
+	effMu    sync.Mutex
+	store    *Store
+	metrics  *metricsDB
+	weather  *weatherService
+	grader   *grader
+	coach    *coach
+	forecast *forecastService
+	// clock is the athlete-local time of day, for the few decisions that
+	// depend on the hour rather than the date; tests pin it.
+	clock   func() time.Time
 	tiles   *tileService
 	tpl     *template.Template
 	loc     *time.Location // fallback timezone from the flag
@@ -150,6 +154,9 @@ func main() {
 	// Weather is a lookup the grading stack makes and the recording stack
 	// does not; off unless asked for.
 	s.weather = newWeatherService(s.metrics)
+	// The forecast rides the same switch: a stack that looks up history is
+	// the one that wants tomorrow morning on the today card.
+	s.forecast = newForecastService(s.weather.enabled)
 	s.tiles = newTileService(*dataDir)
 	if s.weather.enabled {
 		log.Printf("weather:  lookups on (open-meteo, coarse position)")
@@ -361,6 +368,10 @@ type todayData struct {
 	Sport     string
 	Grade     string // the letter, when the day has been graded
 	GradeNote string // and the reasoning behind it
+	// Forecast is the morning's outlook for the next outdoor session — today
+	// until its run is in or the morning is over, then tomorrow — with the
+	// LT gate evaluated on an LT day. nil where there is nothing to say.
+	Forecast *forecastView
 	// AmendLine says what a standing amendment did to this day ("Moved to
 	// Sat 22 — work conflict"); CanRework offers the flow. The flow itself
 	// explains any refusal, so the trigger's own test stays simple. Voided
@@ -541,6 +552,13 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	}
 	td.HasActivity = s.anyRecorded(iso)
 	td.Sport = sportOf(td.Session.Kind)
+	if ok {
+		now := time.Now().In(d.Loc)
+		if s.clock != nil {
+			now = s.clock()
+		}
+		td.Forecast = s.forecastFor(d, blk, s.day(d), now, td.Recorded || td.HasActivity && td.Session.Kind.IsRun())
+	}
 
 	if info, amended := eff.info[iso]; amended {
 		td.AmendLine = amendLine(info, d.Loc)

@@ -57,6 +57,7 @@
   <h2>{{emph .Session.Label}} {{template "guidebtn" .GuideID}}{{if .FitURL}} <a class="fitbtn" href="{{.FitURL}}" download>FIT</a>{{end}}{{if .ZwoURL}} <a class="fitbtn" href="{{.ZwoURL}}" download>ZWO</a>{{end}}</h2>
   {{with .Detail}}<p class="detail">{{emph .}}</p>{{end}}
   {{template "targets" .Targets}}
+  {{with .Forecast}}<p class="forecast"><b>{{.Day}}</b> {{.Line}}{{with .Gate}}<br>{{.}}{{end}}</p>{{end}}
   {{/* The recording itself, behind one tap: laps, both clocks and the paces
        the watch measured. It sits between the prescription and the verdict,
        in the order the day happened — under the grade note it sat below a
