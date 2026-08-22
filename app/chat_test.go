@@ -177,6 +177,7 @@ func coachUnderTest(t *testing.T) (testServer, *coach, *fakeTurn) {
 	f := &fakeTurn{}
 	c.turn = f.turn
 	c.today = func() time.Time { return time.Date(2026, 1, 13, 0, 0, 0, 0, time.UTC) }
+	c.now = func() time.Time { return time.Date(2026, 1, 13, 21, 40, 0, 0, time.UTC) }
 	ts.s.coach = c
 	return ts, c, f
 }
@@ -229,8 +230,14 @@ func TestChatTurnRunsToolsAndRecordsTheReply(t *testing.T) {
 	// The model was sent the chat's own procedure with the derived
 	// context, never the grading procedure.
 	if len(f.systems) != 2 || !strings.Contains(f.systems[0], "You change nothing") ||
-		!strings.Contains(f.systems[0], "Today is Tue 13 Jan 2026") || strings.Contains(f.systems[0], gradingProcedure[:40]) {
+		!strings.Contains(f.systems[0], "Today is Tue 13 Jan 2026 and it is 9:40 pm") ||
+		!strings.Contains(f.systems[0], "The day is nearly over") || strings.Contains(f.systems[0], gradingProcedure[:40]) {
 		t.Errorf("system prompt: %q", f.systems[0][:200])
+	}
+	// At noon the evening line is absent; the hour is still stated.
+	c.now = func() time.Time { return time.Date(2026, 1, 13, 12, 5, 0, 0, time.UTC) }
+	if sp := c.systemPrompt("2026-01-13"); !strings.Contains(sp, "it is 12:05 pm") || strings.Contains(sp, "nearly over") {
+		t.Errorf("midday context: %q", sp[len(sp)-400:])
 	}
 	// The tool result it saw was get_week's JSON for the defaults block.
 	toolMsg := f.msgs[1][len(f.msgs[1])-1]

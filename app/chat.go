@@ -272,6 +272,9 @@ type coach struct {
 	turn  llmTurn
 	store *chatStore
 	today func() time.Time
+	// now is the athlete-local clock, injectable so a test can make it
+	// 9:40 pm: what is still doable today depends on the hour.
+	now func() time.Time
 	// One turn in flight per day's conversation; a second message while
 	// it runs is refused, never queued — the reply would answer a question
 	// the athlete had already moved past.
@@ -283,7 +286,8 @@ func newCoach(s *server, cfg chatConfig, store *chatStore) *coach {
 	c := &coach{s: s, cfg: cfg, store: store, busy: map[string]bool{},
 		llm: &llmClient{HTTP: &http.Client{}, BaseURL: cfg.BaseURL, Key: cfg.Key,
 			Model: cfg.Model, ReasoningEffort: cfg.Effort, MaxTokens: 4096},
-		today: func() time.Time { return s.day(s.ds()) }}
+		today: func() time.Time { return s.day(s.ds()) },
+		now:   func() time.Time { return time.Now().In(s.ds().Loc) }}
 	c.turn = c.llm.anthropicTurn
 	if cfg.Dialect == "openai" {
 		c.turn = c.llm.openaiTurn
@@ -385,6 +389,7 @@ How to work:
 - The athlete's policies, decided by them and not yours to relitigate: when days run out the survival order is quality, then long, then the decoupling test, then easy, then recovery; a missed decoupling test is dead until the next four-week cycle and the day becomes a plain easy run; graded or recorded days and down, taper and race weeks are not moved; a run may take an easy bike day's slot when it is worth more.
 - Be brief. This is read on a phone. Short paragraphs, one derivation per point, no headings, no bullet lists longer than four, no preamble about what you are about to do. Emphasis is *strong* and _em_ and nothing else; no other markup renders.
 - "Do nothing, absorb it" is a first-class answer and often the right one. A recommendation must earn its friction.
+- Advice about what to still do today must fit the hours left in it — the context says what time it is. Late in the evening a missed dose is missed; the question is tomorrow.
 - If a tool refuses or returns nothing, say so plainly and answer with what you have. Do not invent the missing number.`
 
 // systemPrompt is the procedure, the optional athlete-specific coaching
@@ -408,9 +413,19 @@ func (c *coach) systemPrompt(date string) string {
 func (c *coach) context(date string) string {
 	d := c.s.ds()
 	day := c.today()
+	now := c.now()
 	var b strings.Builder
-	fmt.Fprintf(&b, "- Today is %s (%s), the athlete's local date. This conversation is dated %s.\n",
-		day.Format("Mon 2 Jan 2006"), d.Loc, date)
+	// The hour, not just the date: on 21 Aug 2026 the coach told the
+	// athlete to still complete the day's strength work at 9:40 pm,
+	// because all it knew was the date.
+	fmt.Fprintf(&b, "- Today is %s and it is %s, the athlete's local date and time (%s). This conversation is dated %s.\n",
+		day.Format("Mon 2 Jan 2006"), now.Format("3:04 pm"), d.Loc, date)
+	switch h := now.Hour(); {
+	case h >= 20:
+		b.WriteString("- The day is nearly over: anything not yet done today is, realistically, not happening today. Advise about tomorrow and the week, not about fitting more into tonight.\n")
+	case h < 6:
+		b.WriteString("- It is the small hours: today's session has not happened yet.\n")
+	}
 	fmt.Fprintf(&b, "- Athlete: %s, units %s.\n", d.Athlete.Name, d.Athlete.Units)
 	blk := d.Current(day)
 	if blk == nil {
