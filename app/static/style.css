@@ -656,3 +656,16 @@ td .rec::after{content:"";position:absolute;inset:-.3rem}
 /* The forecast line on the today card: quiet, one line, the LT gate under it. */
 .forecast{font:.72rem var(--mono);color:var(--ink-2);letter-spacing:.02em;margin:.15rem 0 .5rem;line-height:1.5}
 .forecast b{font-weight:700;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase;font-size:.62rem;margin-right:.2rem}
+
+/* A proposal card in the coach: the candidate, its reason, and the two
+   answers. Apply is armed twice like every change, and turns --caution
+   while armed. */
+.chat .msg.proposal{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:4px;padding:.6rem .7rem;background:var(--sunk)}
+.chat .msg.proposal .pdetail,.chat .msg.proposal .preason{display:block;font-size:.85rem;color:var(--ink-2);margin-top:.2rem}
+.chat .msg.proposal .preason{font-style:italic}
+.chat .msg.proposal.applied{border-left-color:var(--easy)}
+.chat .msg.proposal.dismissed{opacity:.6}
+.pact{display:flex;gap:.5rem;margin-top:.5rem}
+.pact .skipbtn{padding:.3rem .8rem}
+.pact .papply.armed{border-color:var(--caution);color:var(--caution)}
+.pstate{font:700 .62rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin:.4rem 0 0}

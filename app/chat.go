@@ -3,10 +3,14 @@ package main
 // The coach chat: the judgment layer over the plan, the log and the
 // archive — "calf at 4, two missed doses, what gives this week?" — as a
 // conversation rather than a reading. Phase 2 of the rework design
-// (decided 20 Aug 2026, built 21 Aug), shipped DISCUSS-ONLY first: the
-// model can read everything the pages read and can change nothing. A
-// proposal that becomes an amendment is phase 2b, and it goes through the
-// same /api/amend gate the rework control uses, armed by the athlete.
+// (decided 20 Aug 2026, built 21 Aug) shipped DISCUSS-ONLY: the model
+// reads everything the pages read and changes nothing. Phase 2b (22 Aug)
+// lets it PROPOSE: one change per reply, drawn only from what the app's
+// own rework flow offers for that date, recorded in the transcript as a
+// card the athlete applies or dismisses. Applying goes through
+// /api/amend like the rework control — armed twice, by the athlete; the
+// model never writes the plan, and until the athlete acts nothing has
+// changed, which the procedure makes it say.
 //
 // Shape, all of it the house's own precedent:
 //
@@ -153,9 +157,33 @@ func chatConfigFromEnv() (chatConfig, error) {
 type chatLine struct {
 	TS   time.Time `json:"ts"`
 	Date string    `json:"date"`
-	Role string    `json:"role"`
+	Role string    `json:"role"` // user | assistant | error | proposal | decision
 	Text string    `json:"text"`
+	// Data is the structured half of a proposal (date, op, arg, title,
+	// detail) or a decision (the proposal's id and applied|dismissed).
+	Data json.RawMessage `json:"data,omitempty"`
 }
+
+// chatProposal is what propose_amendment records: exactly a rework
+// candidate, so applying it is exactly what the rework control would do.
+type chatProposal struct {
+	Date   string `json:"date"`
+	Op     string `json:"op"`
+	Arg    string `json:"arg,omitempty"`
+	Title  string `json:"title"`
+	Detail string `json:"detail,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// chatDecision is the athlete's answer to a proposal, keyed by the
+// proposal line's id (its timestamp).
+type chatDecision struct {
+	Proposal string `json:"proposal"`
+	Status   string `json:"status"` // applied | dismissed
+}
+
+// lineID names a transcript line for a decision to point at.
+func (l chatLine) lineID() string { return l.TS.UTC().Format(time.RFC3339Nano) }
 
 // chatStore is the transcripts, one append-only file per day under
 // <data>/chat, held in memory by day. Same discipline as the entries log
@@ -430,7 +458,7 @@ func (c *coach) run(date string) {
 	ctx, cancel := context.WithTimeout(context.Background(), chatTurnTimeout)
 	defer cancel()
 	start := time.Now()
-	reply, err := driveLLM(ctx, c.turn, c.systemPrompt(date), c.history(date), c.tools(), nil, "")
+	reply, err := driveLLM(ctx, c.turn, c.systemPrompt(date), c.history(date), c.tools(date), nil, "")
 	if err != nil {
 		log.Printf("coach %s: turn FAILED after %s: %v", date, time.Since(start).Round(time.Second), err)
 		_ = c.store.Append(chatLine{Date: date, Role: "error", Text: "That turn did not complete: " + err.Error()})
@@ -453,9 +481,26 @@ func (c *coach) history(date string) []llmMsg {
 		switch l.Role {
 		case "user", "assistant":
 			msgs = append(msgs, llmMsg{Role: l.Role, Text: l.Text})
+		case "proposal":
+			// Its own proposal, as the model sees it again next turn.
+			msgs = append(msgs, llmMsg{Role: "assistant", Text: "[proposed: " + l.Text + "]"})
+		case "decision":
+			var dec chatDecision
+			_ = json.Unmarshal(l.Data, &dec)
+			msgs = append(msgs, llmMsg{Role: "user", Text: "[the athlete " + dec.Status + " the proposal]"})
 		}
 	}
-	return msgs
+	// Anthropic's dialect wants alternation; two assistant texts in a row
+	// (a proposal and the reply after it) fold into one.
+	var folded []llmMsg
+	for _, m := range msgs {
+		if n := len(folded); n > 0 && folded[n-1].Role == m.Role {
+			folded[n-1].Text += "\n\n" + m.Text
+			continue
+		}
+		folded = append(folded, m)
+	}
+	return folded
 }
 
 /* ── what the model is told ────────────────────────────────────────────── */
@@ -469,7 +514,7 @@ How to work:
 - Every number you quote comes from a tool. The prescription, the week, the history, the measured metrics, the log, the rework candidates, the issue ledger and the benchmark timeline are all there, already resolved against the athlete's anchors and units. Never retype a pace, a distance or a heart-rate number from memory, and never estimate one a tool can give you.
 - Read before you speak. A question about "this week" needs get_week; about a session, get_prescription and, if it was recorded, get_metrics; about a pattern, session_history; about how the body is doing, get_recent_entries and get_issue_adherence; about progress toward the goal, get_trends. A few calls, then an answer.
 - Derive, then judge. Say what the session was for in this phase, what the numbers say it delivered, what the absence of one costs, and what the declared bands currently permit. State the reasoning in the numbers and let the athlete disagree with it.
-- You change nothing. You cannot edit the plan, post a grade, log an entry or move a session. When a change is the right answer, say which one and why, and point at the control that does it: the "Rework the week" button on the day's card offers the deterministic candidates get_rework lists, and the athlete applies one. Never describe a change as made, scheduled or done.
+- You change nothing yourself. You cannot edit the plan, post a grade or log an entry. What you can do is PROPOSE one change per reply with propose_amendment — and only a change that get_rework offers for that date, which you must have called first. A proposal becomes a card in the conversation that the athlete applies or dismisses; until they act, nothing has changed. Say "I propose" or "proposed", never "done", "moved" or "scheduled". Do not propose when the right answer is to absorb the miss, and do not propose twice in one reply.
 - The athlete's policies, decided by them and not yours to relitigate: when days run out the survival order is quality, then long, then the decoupling test, then easy, then recovery; a missed decoupling test is dead until the next four-week cycle and the day becomes a plain easy run; graded or recorded days and down, taper and race weeks are not moved; a run may take an easy bike day's slot when it is worth more.
 - Be brief. This is read on a phone. Short paragraphs, one derivation per point, no headings, no bullet lists longer than four, no preamble about what you are about to do. Emphasis is *strong* and _em_ and nothing else; no other markup renders.
 - "Do nothing, absorb it" is a first-class answer and often the right one. A recommendation must earn its friction.
@@ -595,7 +640,125 @@ func (m *memResponse) Header() http.Header         { return m.hdr }
 func (m *memResponse) Write(b []byte) (int, error) { return m.body.Write(b) }
 func (m *memResponse) WriteHeader(code int)        { m.code = code }
 
-func (c *coach) tools() []llmTool {
+// tools is the read set plus, for this turn, propose_amendment: one
+// proposal per reply, latched.
+func (c *coach) tools(date string) []llmTool {
+	proposed := false
+	out := c.readTools()
+	obj := func(props string) json.RawMessage {
+		return json.RawMessage(`{"type":"object","properties":{` + props + `},"additionalProperties":false}`)
+	}
+	out = append(out, llmTool{
+		Name:        "propose_amendment",
+		Description: "Propose ONE change to the plan for the athlete to apply or dismiss: exactly one of the candidates get_rework lists for that date (same op and arg). Records a card in the conversation; changes nothing until the athlete acts. Once per reply.",
+		Schema: obj(`"date":{"type":"string","description":"YYYY-MM-DD, the day being changed"},` +
+			`"op":{"type":"string","description":"move | swap | displace | cancel | plain — as get_rework offered"},` +
+			`"arg":{"type":"string","description":"the destination date for move/swap/displace; empty otherwise"},` +
+			`"reason":{"type":"string","description":"one sentence: why, in the numbers"}`),
+		Run: func(_ context.Context, args json.RawMessage) (string, error) {
+			var in struct{ Date, Op, Arg, Reason string }
+			if err := json.Unmarshal(args, &in); err != nil {
+				return "", err
+			}
+			if proposed {
+				return "", errors.New("one proposal per reply; this reply already carries one")
+			}
+			if !isoDatePattern.MatchString(in.Date) {
+				return "", errors.New("date must be YYYY-MM-DD")
+			}
+			offer, code := c.s.reworkPayload(in.Date)
+			if code != http.StatusOK {
+				return "", errors.New(offer.Reason)
+			}
+			if !offer.Can {
+				return "", errors.New("the flow refuses this day: " + offer.Reason)
+			}
+			var match *reworkCandidate
+			var offered []string
+			for i := range offer.Candidates {
+				cand := offer.Candidates[i]
+				if cand.Op == "" {
+					continue
+				}
+				offered = append(offered, cand.Op+" "+cand.Arg)
+				if cand.Op == in.Op && cand.Arg == in.Arg {
+					match = &offer.Candidates[i]
+				}
+			}
+			if match == nil {
+				return "", fmt.Errorf("not one of the candidates get_rework offers for %s (%s)", in.Date, strings.Join(offered, ", "))
+			}
+			if len(in.Reason) > amendNoteMax {
+				in.Reason = in.Reason[:amendNoteMax]
+			}
+			p := chatProposal{Date: in.Date, Op: match.Op, Arg: match.Arg, Title: match.Title, Detail: match.Detail, Reason: strings.TrimSpace(in.Reason)}
+			data, _ := json.Marshal(p)
+			text := p.Title
+			if p.Detail != "" {
+				text += " — " + p.Detail
+			}
+			if err := c.store.Append(chatLine{Date: date, Role: "proposal", Text: text, Data: data}); err != nil {
+				return "", fmt.Errorf("the proposal could not be recorded, so it was not made: %v", err)
+			}
+			proposed = true
+			return "Proposed and shown to the athlete as a card: " + text + ". It is not applied; say so, and leave the decision to them.", nil
+		},
+	})
+	return out
+}
+
+// decide is POST /api/chat/decide {date, proposal, status}: the athlete's
+// answer to a proposal card. Applying the change itself is the page's
+// POST to /api/amend, the rework control's own call; this records what
+// happened to the card so the conversation shows it and the model knows.
+func (s *server) postChatDecide(w http.ResponseWriter, r *http.Request) {
+	if s.coach == nil {
+		http.Error(w, "the coach is switched off", http.StatusServiceUnavailable)
+		return
+	}
+	var in struct {
+		Date     string `json:"date"`
+		Proposal string `json:"proposal"`
+		Status   string `json:"status"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.Status != "applied" && in.Status != "dismissed" {
+		http.Error(w, `status must be "applied" or "dismissed"`, http.StatusBadRequest)
+		return
+	}
+	if !isoDatePattern.MatchString(in.Date) {
+		http.Error(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	found := false
+	for _, l := range s.coach.store.Day(in.Date) {
+		if l.Role == "proposal" && l.lineID() == in.Proposal {
+			found = true
+		}
+		if l.Role == "decision" {
+			var dec chatDecision
+			if json.Unmarshal(l.Data, &dec) == nil && dec.Proposal == in.Proposal {
+				http.Error(w, "that proposal was already "+dec.Status, http.StatusConflict)
+				return
+			}
+		}
+	}
+	if !found {
+		http.Error(w, "no such proposal on that day", http.StatusNotFound)
+		return
+	}
+	data, _ := json.Marshal(chatDecision{Proposal: in.Proposal, Status: in.Status})
+	if err := s.coach.store.Append(chatLine{Date: in.Date, Role: "decision", Text: in.Status, Data: data}); err != nil {
+		http.Error(w, "could not record that: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w)
+}
+
+func (c *coach) readTools() []llmTool {
 	obj := func(props string) json.RawMessage {
 		return json.RawMessage(`{"type":"object","properties":{` + props + `},"additionalProperties":false}`)
 	}
@@ -910,9 +1073,11 @@ func (s *server) getChat(w http.ResponseWriter, r *http.Request) {
 	busy := s.coach.busy[date]
 	s.coach.mu.Unlock()
 	type msg struct {
-		TS   string `json:"ts"`
-		Role string `json:"role"`
-		Text string `json:"text"`
+		TS   string          `json:"ts"`
+		ID   string          `json:"id"`
+		Role string          `json:"role"`
+		Text string          `json:"text"`
+		Data json.RawMessage `json:"data,omitempty"`
 	}
 	out := struct {
 		Date     string   `json:"date"`
@@ -925,7 +1090,7 @@ func (s *server) getChat(w http.ResponseWriter, r *http.Request) {
 	}{Date: date, Today: s.coach.today().Format("2006-01-02"), Busy: busy,
 		Turns: s.coach.store.Turns(date), Cap: s.coach.cfg.TurnsPerDay, Messages: []msg{}, Days: s.coach.store.Dates()}
 	for _, l := range s.coach.store.Day(date) {
-		out.Messages = append(out.Messages, msg{l.TS.UTC().Format(time.RFC3339), l.Role, l.Text})
+		out.Messages = append(out.Messages, msg{l.TS.UTC().Format(time.RFC3339), l.lineID(), l.Role, l.Text, l.Data})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	s.writeJSON(w, out)

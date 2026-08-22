@@ -19,9 +19,36 @@
   function esc(s) { return window.AppModal ? window.AppModal.esc(s) : String(s); }
   function emph(s) { return window.AppModal ? window.AppModal.emph(s) : esc(s); }
 
+  /* A proposal is a card: the rework candidate the model chose, with
+     Apply (armed twice, like every change here) and Dismiss. Apply is the
+     rework control's own POST to /api/amend; the decision is then recorded
+     on the conversation. A decided card shows what happened to it. */
+  var decided = {};
+  function proposalCard(m) {
+    var p = m.data || {};
+    var state = decided[m.id];
+    var h = '<li class="msg proposal' + (state ? " " + esc(state) : "") + '" data-id="' + esc(m.id) + '">' +
+      '<span class="who">Proposed</span><div class="text"><b>' + esc(p.title || m.text) + "</b>" +
+      (p.detail ? '<span class="pdetail">' + esc(p.detail) + "</span>" : "") +
+      (p.reason ? '<span class="preason">' + emph(p.reason) + "</span>" : "") + "</div>";
+    if (state) {
+      h += '<p class="pstate">' + (state === "applied" ? "Applied — the week shows it" : "Dismissed") + "</p>";
+    } else if (isToday) {
+      h += '<div class="pact"><button type="button" class="skipbtn papply" data-date="' + esc(p.date) + '" data-op="' + esc(p.op) + '" data-arg="' + esc(p.arg || "") + '" data-note="' + esc(p.reason || "") + '">Apply</button>' +
+        '<button type="button" class="skipbtn pdismiss">Dismiss</button></div>';
+    }
+    return h + "</li>";
+  }
+
   function render(d) {
     var h = "";
+    decided = {};
     d.messages.forEach(function (m) {
+      if (m.role === "decision" && m.data) decided[m.data.proposal] = m.data.status;
+    });
+    d.messages.forEach(function (m) {
+      if (m.role === "decision") return;
+      if (m.role === "proposal") { h += proposalCard(m); return; }
       var who = m.role === "user" ? "You" : m.role === "assistant" ? "Coach" : "";
       h += '<li class="msg ' + esc(m.role) + '">' +
         (who ? '<span class="who">' + who + "</span>" : "") +
@@ -47,7 +74,48 @@
       }).join(" · ") : "";
     }
     if (d.busy) schedule(); else { tries = 0; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } }
+    wireProposals();
     window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  function decide(card, status) {
+    return fetch("/api/chat/decide", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date: date, proposal: card.dataset.id, status: status }) })
+      .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); }); });
+  }
+
+  function wireProposals() {
+    Array.prototype.forEach.call(list.querySelectorAll(".msg.proposal"), function (card) {
+      var apply = card.querySelector(".papply"), dismiss = card.querySelector(".pdismiss");
+      if (!apply) return;
+      var timer;
+      apply.addEventListener("click", function () {
+        if (!apply.classList.contains("armed")) {
+          apply.classList.add("armed"); apply.textContent = "Apply — sure?";
+          clearTimeout(timer);
+          timer = setTimeout(function () { apply.classList.remove("armed"); apply.textContent = "Apply"; }, 8000);
+          return;
+        }
+        apply.disabled = dismiss.disabled = true;
+        fetch("/api/amend", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date: apply.dataset.date, op: apply.dataset.op, arg: apply.dataset.arg, note: apply.dataset.note }) })
+          .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error((t || ("HTTP " + r.status)).trim()); }); })
+          .then(function () { return decide(card, "applied"); })
+          .then(load)
+          .catch(function (err) {
+            apply.disabled = dismiss.disabled = false;
+            apply.classList.remove("armed"); apply.textContent = "Apply";
+            state.textContent = "Not applied: " + err.message; state.hidden = false;
+          });
+      });
+      dismiss.addEventListener("click", function () {
+        apply.disabled = dismiss.disabled = true;
+        decide(card, "dismissed").then(load).catch(function (err) {
+          apply.disabled = dismiss.disabled = false;
+          state.textContent = err.message; state.hidden = false;
+        });
+      });
+    });
   }
 
   function load() {

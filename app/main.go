@@ -226,6 +226,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /coach", s.coachPage)
 	mux.HandleFunc("GET /api/chat", s.getChat)
 	mux.HandleFunc("POST /api/chat", s.postChat)
+	mux.HandleFunc("POST /api/chat/decide", s.postChatDecide)
 	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("POST /api/entry", s.postEntry)

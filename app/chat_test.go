@@ -223,7 +223,9 @@ func (f *fakeTurn) turn(_ context.Context, system string, msgs []llmMsg, tools [
 	if last.Role == "tool" {
 		return llmMsg{Role: "assistant", Text: "The week holds " + last.Results[0].Content[:20] + "… so *absorb it*."}, "end_turn", nil
 	}
-	if strings.Contains(last.Text, "fail") {
+	// Folded history joins consecutive user turns, so key on the latest
+	// line rather than any substring.
+	if lines := strings.Split(strings.TrimSpace(last.Text), "\n"); strings.HasSuffix(lines[len(lines)-1], "fail") {
 		return llmMsg{}, "", context.DeadlineExceeded
 	}
 	return llmMsg{Role: "assistant", Calls: []llmToolCall{{ID: "c1", Name: "get_week",
@@ -415,7 +417,7 @@ func TestChatOffIsVisiblyOff(t *testing.T) {
 func TestChatToolsAreReadsOfTheAppsOwnPayloads(t *testing.T) {
 	ts, c, _ := coachUnderTest(t)
 	tools := map[string]llmTool{}
-	for _, tl := range c.tools() {
+	for _, tl := range c.tools("2026-01-13") {
 		tools[tl.Name] = tl
 	}
 	for _, name := range []string{"get_prescription", "get_week", "session_history", "get_metrics", "get_recent_entries", "get_rework", "get_issue_adherence", "get_trends"} {
@@ -472,5 +474,113 @@ func TestChatToolsAreReadsOfTheAppsOwnPayloads(t *testing.T) {
 	}
 	if sp := c.systemPrompt("2026-01-13"); !strings.Contains(sp, "Never suggest doubles") || !strings.Contains(sp, "Messages used today: 0 of 3") {
 		t.Errorf("system prompt lacks the notes or the context:\n%s", sp)
+	}
+}
+
+// Phase 2b. The model may propose exactly what the rework flow offers for
+// a date, once per reply; the proposal is a card in the transcript; the
+// athlete's decision is recorded against it; nothing in the plan moves
+// until /api/amend is called by the page.
+func TestProposeAmendmentIsBoundedByTheReworkFlow(t *testing.T) {
+	dir := t.TempDir()
+	start := shiftedBlock(t, dir) // week 3 is ahead: Tuesday quality, Thursday rest
+	ts := fitTestMuxServer(t, dir)
+	cs, err := openChatStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newCoach(ts.s, chatConfig{Mode: "on", Provider: "anthropic", Dialect: "anthropic", Model: "m",
+		BaseURL: "http://unused.invalid", TurnsPerDay: 10}, cs)
+	ts.s.coach = c
+	today := ts.s.day(ts.s.ds()).Format("2006-01-02")
+	c.today = func() time.Time { return ts.s.day(ts.s.ds()) }
+	tools := map[string]llmTool{}
+	for _, tl := range c.tools(today) {
+		tools[tl.Name] = tl
+	}
+	propose := tools["propose_amendment"]
+	if propose.Run == nil {
+		t.Fatal("no propose_amendment tool")
+	}
+	tue := start.AddDate(0, 0, 15).Format("2006-01-02") // week 3 Tuesday
+	thu := start.AddDate(0, 0, 17).Format("2006-01-02")
+	ctx := context.Background()
+
+	// Not a candidate: a move onto Wednesday's easy run.
+	wed := start.AddDate(0, 0, 16).Format("2006-01-02")
+	if _, err := propose.Run(ctx, json.RawMessage(`{"date":"`+tue+`","op":"move","arg":"`+wed+`","reason":"x"}`)); err == nil || !strings.Contains(err.Error(), "not one of the candidates") {
+		t.Errorf("a move the flow does not offer was accepted: %v", err)
+	}
+	// The candidate the flow offers: Tuesday's quality to Thursday's rest.
+	out, err := propose.Run(ctx, json.RawMessage(`{"date":"`+tue+`","op":"move","arg":"`+thu+`","reason":"the calf wants two more days"}`))
+	if err != nil || !strings.Contains(out, "Proposed") || !strings.Contains(out, "not applied") {
+		t.Fatalf("proposing the offered move: %v %q", err, out)
+	}
+	// Once per reply.
+	if _, err := propose.Run(ctx, json.RawMessage(`{"date":"`+tue+`","op":"cancel","reason":"y"}`)); err == nil || !strings.Contains(err.Error(), "one proposal per reply") {
+		t.Errorf("a second proposal in one reply was accepted: %v", err)
+	}
+	// The card is in the transcript with its structured half.
+	day := cs.Day(today)
+	if len(day) != 1 || day[0].Role != "proposal" {
+		t.Fatalf("transcript: %+v", day)
+	}
+	var p chatProposal
+	if err := json.Unmarshal(day[0].Data, &p); err != nil || p.Date != tue || p.Op != "move" || p.Arg != thu || p.Reason != "the calf wants two more days" || !strings.HasPrefix(p.Title, "Move to ") {
+		t.Errorf("proposal data: %+v %v", p, err)
+	}
+	// Nothing moved.
+	if e := ts.s.effective(); e.applied != 0 {
+		t.Errorf("a proposal applied an amendment by itself: %d standing", e.applied)
+	}
+	// A graded day cannot be proposed against at all.
+	if err := ts.s.store.Append(Entry{Date: tue, Kind: "grade", Val: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range c.tools(today) {
+		if tl.Name == "propose_amendment" {
+			if _, err := tl.Run(ctx, json.RawMessage(`{"date":"`+tue+`","op":"move","arg":"`+thu+`"}`)); err == nil || !strings.Contains(err.Error(), "refuses") {
+				t.Errorf("a graded day was proposable: %v", err)
+			}
+		}
+	}
+
+	// The page: GET carries the proposal with its id and data; a decision
+	// records against it once; a second is a 409; an unknown id a 404.
+	rec := httptest.NewRecorder()
+	ts.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/chat", nil))
+	var got struct {
+		Messages []struct {
+			ID   string          `json:"id"`
+			Role string          `json:"role"`
+			Data json.RawMessage `json:"data"`
+		}
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Messages) != 1 || got.Messages[0].Role != "proposal" || got.Messages[0].ID == "" || len(got.Messages[0].Data) == 0 {
+		t.Fatalf("GET /api/chat: %v %s", err, rec.Body.String())
+	}
+	id := got.Messages[0].ID
+	post := func(body string) int {
+		rec := httptest.NewRecorder()
+		ts.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/chat/decide", strings.NewReader(body)))
+		return rec.Code
+	}
+	if code := post(`{"date":"` + today + `","proposal":"nope","status":"applied"}`); code != http.StatusNotFound {
+		t.Errorf("unknown proposal: %d", code)
+	}
+	if code := post(`{"date":"` + today + `","proposal":"` + id + `","status":"maybe"}`); code != http.StatusBadRequest {
+		t.Errorf("bad status: %d", code)
+	}
+	if code := post(`{"date":"` + today + `","proposal":"` + id + `","status":"dismissed"}`); code != http.StatusOK {
+		t.Errorf("dismiss: %d", code)
+	}
+	if code := post(`{"date":"` + today + `","proposal":"` + id + `","status":"applied"}`); code != http.StatusConflict {
+		t.Errorf("a second decision: %d, want 409", code)
+	}
+	// The model sees its proposal and the athlete's answer next turn, as
+	// alternating turns.
+	h := c.history(today)
+	if len(h) != 2 || h[0].Role != "assistant" || !strings.Contains(h[0].Text, "[proposed: Move to ") || h[1].Role != "user" || !strings.Contains(h[1].Text, "dismissed") {
+		t.Errorf("history: %+v", h)
 	}
 }
