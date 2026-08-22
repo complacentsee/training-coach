@@ -422,7 +422,7 @@ func (c *coach) context(date string) string {
 		day.Format("Mon 2 Jan 2006"), now.Format("3:04 pm"), d.Loc, date)
 	switch h := now.Hour(); {
 	case h >= 20:
-		b.WriteString("- The day is nearly over: anything not yet done today is, realistically, not happening today. Advise about tomorrow and the week, not about fitting more into tonight.\n")
+		b.WriteString("- The day is nearly over: treat today's unlogged work as missed, not as still to do. Advise about tomorrow and the week, never about fitting more into tonight.\n")
 	case h < 6:
 		b.WriteString("- It is the small hours: today's session has not happened yet.\n")
 	}
