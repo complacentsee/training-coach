@@ -597,3 +597,29 @@ func TestReworkTriggerOnlyWhereTheFlowWouldOffer(t *testing.T) {
 		t.Errorf("graded day: %s", rec.Body.String())
 	}
 }
+
+// The week page renders a skipped day as skipped — struck through, with
+// the reason — the one page where a not-done session was invisible
+// until 22 Aug 2026.
+func TestWeekPageRendersSkips(t *testing.T) {
+	dir := t.TempDir()
+	start := shiftedBlock(t, dir)
+	ts := fitTestMuxServer(t, dir)
+	tue := start.AddDate(0, 0, 1).Format("2006-01-02") // week 1's quality day, past
+	if err := ts.s.store.Append(Entry{Date: tue, Kind: kindSkip, Val: "skipped", Note: "flew out early"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := get(ts.mux, "/week/1", nil)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, `class="card k-quality skipped"`) ||
+		!strings.Contains(body, "Not done — flew out early") {
+		t.Errorf("week page does not render the skip: %d\n%s", rec.Code, body[:min(len(body), 300)])
+	}
+	// Unskipped: gone.
+	if err := ts.s.store.Append(Entry{Date: tue, Kind: kindSkip, Val: "unskipped"}); err != nil {
+		t.Fatal(err)
+	}
+	if body := get(ts.mux, "/week/1", nil).Body.String(); strings.Contains(body, "Not done") || strings.Contains(body, " skipped\"") {
+		t.Error("an unskipped day still renders as skipped")
+	}
+}

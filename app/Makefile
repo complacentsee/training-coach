@@ -442,11 +442,13 @@ verify-dev:     ## confirm the dev stack serves this exact build
 #
 # entries.jsonl and grading-notes.md are MEANT to be replaced -- dev's log is
 # disposable by design -- but the container writes them, so they are root-owned
-# and the ssh user cannot overwrite them. That copy used to end in `|| true`,
-# so it failed silently every time and dev's log drifted from live's for weeks
-# (356 entries against 428, measured 17 Aug 2026). It is now the target's exit
-# status, checked LAST: the seed still does everything it can, and then says
-# plainly what it could not do.
+# and a plain cp as the ssh user fails. That copy used to end in `|| true`, so it
+# failed silently every time and dev's log drifted from live's for weeks (356
+# entries against 428, measured 17 Aug 2026); from 17 Aug it failed loudly
+# instead. Since 22 Aug 2026 it goes through the container -- docker cp writes
+# a root-owned file through the bind mount, the rehearsed restore's own step --
+# and dev is restarted after, because the app reads the log once at startup.
+# The count it then serves is printed, so a seed that did not take is visible.
 seed-dev:       ## populate the dev stack's data from live (partial activities)
 	@set -e; \
 	CURATED=""; \
@@ -464,7 +466,7 @@ seed-dev:       ## populate the dev stack's data from live (partial activities)
 	  UNRESET=""; \
 	  for f in entries.jsonl grading-notes.md; do \
 	    [ -f \$$SRC/\$$f ] || continue; \
-	    cp \$$SRC/\$$f \$$DST/\$$f 2>/dev/null || UNRESET=\$$UNRESET,\$$f; \
+	    docker cp \$$SRC/\$$f running-coach-dev:/data/\$$f 2>/dev/null || UNRESET=\$$UNRESET,\$$f; \
 	  done; \
 	  CUT=\$$(date -d '$(SEED_DAYS) days ago' +%Y-%m-%d); \
 	  LISTING=\$$(curl -s -m 30 --fail http://localhost:$(PORT)/api/activities) \
@@ -489,13 +491,17 @@ seed-dev:       ## populate the dev stack's data from live (partial activities)
 	curl -s -m 10 --fail -X POST http://$(HOST):$(DEVPORT)/api/reload >/dev/null \
 	  || { echo "FAILED: dev /api/reload rejected the seeded plan" >&2; exit 1; }; \
 	echo "seed          done — dev serving the seeded plan"; \
-	BAD=$$($(SSH) $(REMOTE) 'for f in entries.jsonl grading-notes.md; do [ -f $(DEST)/data/$$f ] || continue; cp $(DEST)/data/$$f $(DEVDEST)/data/$$f 2>/dev/null || printf "%s " $$f; done'); \
+	BAD=$$($(SSH) $(REMOTE) 'for f in entries.jsonl grading-notes.md; do [ -f $(DEST)/data/$$f ] || continue; docker cp $(DEST)/data/$$f running-coach-dev:/data/$$f 2>/dev/null || printf "%s " $$f; done'); \
 	[ -z "$$BAD" ] || { \
 	  echo "FAILED: could not replace dev's $$BAD- the seed is otherwise complete" >&2; \
-	  echo "        the container wrote those files, so they are root-owned and the ssh" >&2; \
-	  echo "        user cannot overwrite them. Everything else above DID seed; those" >&2; \
-	  echo "        files still hold whatever dev had, and this used to fail silently." >&2; \
-	  exit 1; }
+	  echo "        docker cp into the dev container is how a root-owned file is" >&2; \
+	  echo "        replaced (the rehearsed restore's own step); check the container" >&2; \
+	  echo "        name and that the ssh user can read live's copy." >&2; \
+	  exit 1; }; \
+	$(SSH) $(REMOTE) 'docker restart running-coach-dev >/dev/null'; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do curl -s -m 5 --fail http://$(HOST):$(DEVPORT)/healthz >/dev/null 2>&1 && break; sleep 2; done; \
+	N=$$(curl -s -m 10 http://$(HOST):$(DEVPORT)/api/entries | grep -o '"ts"' | wc -l | tr -d ' '); \
+	echo "log           dev restarted on live's copy: $$N entries"
 
 logs-dev:       ## tail the dev container log
 	$(SSH) $(REMOTE) 'docker logs -f running-coach-dev'

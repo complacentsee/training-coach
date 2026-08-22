@@ -956,7 +956,11 @@ type dayView struct {
 	FitURL    string // set only when the session carries steps
 	ZwoURL    string // bike steps days only
 	AmendLine string // what a standing amendment did to this day
-	CanRework bool   // the trigger for reworking a coming day from the week view
+	// Skipped is a session the athlete marked not done, with the reason
+	// given; the one state the week page did not render until 22 Aug 2026.
+	Skipped   bool
+	SkipNote  string
+	CanRework bool // the trigger for reworking a coming day from the week view
 }
 
 func (s *server) week(w http.ResponseWriter, r *http.Request) {
@@ -984,6 +988,7 @@ func (s *server) week(w http.ResponseWriter, r *http.Request) {
 	if m := wk.Mesocycle(); m != nil {
 		wd.MesoName = m.Name
 	}
+	skips := s.store.Skips()
 	if ran := s.recordedRunning(blk); ran != nil && !blk.DayOf(n-1, 0).After(day) {
 		wd.Ran = ranLabel(wd.VolumeLong, weekRan(ran, blk, n-1).InLong(s.units()))
 	}
@@ -1021,6 +1026,9 @@ func (s *server) week(w http.ResponseWriter, r *http.Request) {
 		}
 		if info, amended := eff.info[dv.Date.Format("2006-01-02")]; amended {
 			dv.AmendLine = amendLine(info, d.Loc)
+		}
+		if sk, ok := skips[dv.Date.Format("2006-01-02")]; ok {
+			dv.Skipped, dv.SkipNote = true, sk.Note
 		}
 		// The rework trigger lives here too: the central case is reworking
 		// a day BEFORE it arrives, and the today card can only speak for
